@@ -8,7 +8,7 @@
   "pointerBytes": @CMAKE_SIZEOF_VOID_P@,
   "configuration": "$<CONFIG>",
   "runtime": "@MINVEX_SDK_RUNTIME@",
-  "sceneVersion": 12,
+  "sceneVersion": 13,
   "poseVersion": 1,
   "qualityVersion": 2,
   "uiVersion": 2,

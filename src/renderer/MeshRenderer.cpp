@@ -2,6 +2,8 @@
 
 #include "mesh.glsl.h"
 #include "DebugResources.h"
+#include "optimization/IndexPacking.h"
+#include "LightMath.h"
 
 #include <cstddef>
 #include <algorithm>
@@ -20,7 +22,7 @@ MeshRenderer::~MeshRenderer() {
     Shutdown();
 }
 
-void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinned, int samples,sg_pixel_format colorFormat,bool shadow,std::span<const MeshLod> lods,std::span<const MorphTarget> morphs,[[maybe_unused]] const MeshPrimitive* source) {
+void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinned, int samples,sg_pixel_format colorFormat,bool shadow,std::span<const MeshLod> lods,std::span<const MorphTarget> morphs,[[maybe_unused]] const MeshPrimitive* source,bool extendedLighting) {
     if (vertices_.id || indices_.id || shader_.id || pipelines_[0].id) {
         throw std::logic_error("MeshRenderer is already initialized.");
     }
@@ -28,7 +30,10 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
         throw std::logic_error("Initialize Sokol GFX before creating the mesh renderer.");
     }
     ValidateMesh(mesh);
+    extendedLighting_=extendedLighting;
     const auto optimized=OptimizeMesh(mesh,lods);const auto& data=optimized.Geometry;
+    vertexRemap_=optimized.VertexRemap;
+    const auto indexType=IndexElementBytes(mesh.Vertices.size())==2 ? SG_INDEXTYPE_UINT16:SG_INDEXTYPE_UINT32;
 
     sg_buffer_desc vertexDesc{};
     vertexDesc.data = {data.Vertices.data(), data.Vertices.size() * sizeof(Vertex)};
@@ -37,10 +42,10 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
 
     sg_buffer_desc indexDesc{};
     indexDesc.usage.index_buffer = true;
-    indexDesc.data = {data.Indices.data(), data.Indices.size() * sizeof(std::uint32_t)};
     indexDesc.label = "minvex-mesh-indices";
-    indices_ = sg_make_buffer(indexDesc);
-    for (const auto& level:optimized.Lods) {indexDesc.data={level.Indices.data(),level.Indices.size()*sizeof(std::uint32_t)};indexDesc.label="mesh-lod-indices";const auto buffer=sg_make_buffer(indexDesc);lodBuffers_.push_back(buffer);lodCounts_.push_back(static_cast<int>(level.Indices.size()));if (sg_query_buffer_state(buffer) != SG_RESOURCESTATE_VALID) {Shutdown();throw std::runtime_error("Cannot create LOD index buffer.");}}
+    const auto uploadIndices=[&](std::span<const std::uint32_t> indices) {const auto packed=indexType==SG_INDEXTYPE_UINT16 ? PackIndices16(indices):std::vector<std::uint16_t>{};indexDesc.data=indexType==SG_INDEXTYPE_UINT16 ? sg_range{packed.data(),packed.size()*sizeof(std::uint16_t)}:sg_range{indices.data(),indices.size()*sizeof(std::uint32_t)};return sg_make_buffer(indexDesc);};
+    indices_ = uploadIndices(data.Indices);
+    for (const auto& level:optimized.Lods) {indexDesc.label="mesh-lod-indices";const auto buffer=uploadIndices(level.Indices);lodBuffers_.push_back(buffer);lodCounts_.push_back(static_cast<int>(level.Indices.size()));if (sg_query_buffer_state(buffer) != SG_RESOURCESTATE_VALID) {Shutdown();throw std::runtime_error("Cannot create LOD index buffer.");}}
     morphCount_=morphs.size();morphVertices_=mesh.Vertices.size();
     if (morphCount_>MaxMorphTargets || (morphCount_ && (morphVertices_>16777216 || !lods.empty()))) {Shutdown();throw std::length_error("Morph GPU limit exceeded or incompatible reduced LOD.");}
 #if defined(__EMSCRIPTEN__)
@@ -58,9 +63,9 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
     skinned_ = skinned;
     doubleSided_=doubleSided;
 #if defined(__EMSCRIPTEN__)
-    shader_=sg_make_shader(skinned ? skin_shader_desc(sg_query_backend()):mesh_shader_desc(sg_query_backend()));
+    shader_=sg_make_shader(extendedLighting_ ? (skinned ? lit_skin_shader_desc(sg_query_backend()):lit_mesh_shader_desc(sg_query_backend())):(skinned ? skin_shader_desc(sg_query_backend()):mesh_shader_desc(sg_query_backend())));
 #else
-    shader_ = sg_make_shader(morphCount_ ? (skinned ? morph_skin_shader_desc(sg_query_backend()):morph_mesh_shader_desc(sg_query_backend())):(skinned ? skin_shader_desc(sg_query_backend()):mesh_shader_desc(sg_query_backend())));
+    shader_ = sg_make_shader(extendedLighting_ ? (morphCount_ ? (skinned ? lit_morph_skin_shader_desc(sg_query_backend()):lit_morph_mesh_shader_desc(sg_query_backend())):(skinned ? lit_skin_shader_desc(sg_query_backend()):lit_mesh_shader_desc(sg_query_backend()))):(morphCount_ ? (skinned ? morph_skin_shader_desc(sg_query_backend()):morph_mesh_shader_desc(sg_query_backend())):(skinned ? skin_shader_desc(sg_query_backend()):mesh_shader_desc(sg_query_backend()))));
 #endif
 
     if (sg_query_buffer_state(vertices_) != SG_RESOURCESTATE_VALID ||
@@ -91,7 +96,7 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
         pipelineDesc.layout.attrs[ATTR_skin_joint_weights].format = SG_VERTEXFORMAT_FLOAT4;
         pipelineDesc.layout.attrs[ATTR_skin_joint_weights].offset = offsetof(Vertex,Weights);
     }
-    pipelineDesc.index_type = SG_INDEXTYPE_UINT32;
+    pipelineDesc.index_type = indexType;
     pipelineDesc.cull_mode = skinned ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
     pipelineDesc.depth.write_enabled = true;
     pipelineDesc.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
@@ -111,7 +116,7 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
 #else
         shadowShader_=sg_make_shader(morphCount_ ? (skinned ? morph_shadow_skin_shader_desc(sg_query_backend()):morph_shadow_mesh_shader_desc(sg_query_backend())):(skinned ? shadow_skin_shader_desc(sg_query_backend()):shadow_mesh_shader_desc(sg_query_backend())));
 #endif
-        sg_pipeline_desc d{};d.shader=shadowShader_;d.sample_count=1;d.colors[0].pixel_format=SG_PIXELFORMAT_R32F;d.depth.pixel_format=SG_PIXELFORMAT_DEPTH;d.depth.compare=SG_COMPAREFUNC_LESS_EQUAL;d.depth.write_enabled=true;d.index_type=SG_INDEXTYPE_UINT32;d.cull_mode=doubleSided || skinned ? SG_CULLMODE_NONE:SG_CULLMODE_BACK;d.layout.buffers[0].stride=sizeof(Vertex);
+        sg_pipeline_desc d{};d.shader=shadowShader_;d.sample_count=1;d.colors[0].pixel_format=SG_PIXELFORMAT_R32F;d.depth.pixel_format=SG_PIXELFORMAT_DEPTH;d.depth.compare=SG_COMPAREFUNC_LESS_EQUAL;d.depth.write_enabled=true;d.index_type=indexType;d.cull_mode=doubleSided || skinned ? SG_CULLMODE_NONE:SG_CULLMODE_BACK;d.layout.buffers[0].stride=sizeof(Vertex);
         const auto attr=[&](int index,sg_vertex_format format,int offset) {d.layout.attrs[index].format=format;d.layout.attrs[index].offset=offset;};
         if (skinned) {attr(ATTR_shadow_skin_position,SG_VERTEXFORMAT_FLOAT3,offsetof(Vertex,Position));attr(ATTR_shadow_skin_color0,SG_VERTEXFORMAT_FLOAT4,offsetof(Vertex,Color));attr(ATTR_shadow_skin_texcoord0,SG_VERTEXFORMAT_FLOAT2,offsetof(Vertex,TexCoord));attr(ATTR_shadow_skin_joint_indices,SG_VERTEXFORMAT_USHORT4,offsetof(Vertex,Joints));attr(ATTR_shadow_skin_joint_weights,SG_VERTEXFORMAT_FLOAT4,offsetof(Vertex,Weights));}
         else {attr(ATTR_shadow_mesh_position,SG_VERTEXFORMAT_FLOAT3,offsetof(Vertex,Position));attr(ATTR_shadow_mesh_color0,SG_VERTEXFORMAT_FLOAT4,offsetof(Vertex,Color));attr(ATTR_shadow_mesh_texcoord0,SG_VERTEXFORMAT_FLOAT2,offsetof(Vertex,TexCoord));}
@@ -159,6 +164,7 @@ void MeshRenderer::Draw(const Mat4& model, const Mat4& viewProjection, const Dir
     fragment.base_color = {material.BaseColor[0], material.BaseColor[1], material.BaseColor[2], material.BaseColor[3]};
     fragment.light_direction = {static_cast<float>(-light.Direction.X/length), static_cast<float>(-light.Direction.Y/length), static_cast<float>(-light.Direction.Z/length), light.Intensity};
     fragment.light_color = {light.Color.X, light.Color.Y, light.Color.Z, light.Ambient};
+    fragment.ambient_color={light.Ambient+lighting.Ambient.Color.X*lighting.Ambient.Intensity,light.Ambient+lighting.Ambient.Color.Y*lighting.Ambient.Intensity,light.Ambient+lighting.Ambient.Color.Z*lighting.Ambient.Intensity,0};
     fragment.options = {material.AlphaCutoff, material.Unlit || material.Shading == ShadingModel::Unlit || forceUnlit ? 1.0f : 0.0f, 0,lighting.Advanced ? 1.0f:0.0f};
     fragment.pbr_options={material.MetallicFactor,material.RoughnessFactor,lighting.Pbr && material.Shading == ShadingModel::Pbr ? 1.0f:0.0f,0};
     fragment.eye_position={lighting.Eye.X,lighting.Eye.Y,lighting.Eye.Z,0};fragment.view_direction={lighting.ViewDirection.X,lighting.ViewDirection.Y,lighting.ViewDirection.Z,0};
@@ -175,6 +181,13 @@ void MeshRenderer::Draw(const Mat4& model, const Mat4& viewProjection, const Dir
     for (const auto& l:lighting.Points) {if (local >= MaxLocalLights) {throw std::invalid_argument("Local light limit exceeded.");}point(l.Position,l.Color,l.Intensity,l.Range);++local;}
     for (const auto& l:lighting.Spots) {if (local >= MaxLocalLights) {throw std::invalid_argument("Local light limit exceeded.");}point(l.Position,l.Color,l.Intensity,l.Range);const auto n=std::hypot(double(l.Direction.X),double(l.Direction.Y),double(l.Direction.Z));fragment.local_directions[local]={static_cast<float>(l.Direction.X/n),static_cast<float>(l.Direction.Y/n),static_cast<float>(l.Direction.Z/n),std::cos(l.OuterConeRadians)};fragment.local_cones[local]={std::cos(l.InnerConeRadians),1,0,0};++local;}
     fragment.options.Z=static_cast<float>(local);
+    if (lighting.Advanced) {
+        fragment.rect_meta.X=static_cast<float>(lighting.Rects.size());
+        for (std::size_t i=0;i<lighting.Rects.size();++i) {const auto& l=lighting.Rects[i];const auto axes=RectAxes(l);fragment.rect_positions[i]={l.Position.X,l.Position.Y,l.Position.Z,l.Range};fragment.rect_right[i]={axes[0].X*l.Width*.5f,axes[0].Y*l.Width*.5f,axes[0].Z*l.Width*.5f,0};fragment.rect_up[i]={axes[1].X*l.Height*.5f,axes[1].Y*l.Height*.5f,axes[1].Z*l.Height*.5f,0};fragment.rect_colors[i]={l.Color.X,l.Color.Y,l.Color.Z,l.Intensity};fragment.rect_options[i]={l.TwoSided ? 1.0f:0.0f,0,0,0};}
+        if (lighting.Shadow&&lighting.Shadow->Local) {const auto& atlas=*lighting.Shadow->Local;fragment.local_atlas={static_cast<float>(atlas.Columns),static_cast<float>(atlas.Rows),1.0f/atlas.Resolution,1.0f/atlas.Columns};for(std::size_t i=0;i<atlas.Matrices.size();++i){fragment.local_shadow_matrices[i]=atlas.Matrices[i];}
+            std::size_t index=0;const auto add=[&](const auto& l) {fragment.local_shadow_params[index]={static_cast<float>(atlas.FirstFace[index]),l.Shadow.Filter==LocalShadowFilter::Pcf ? 1.0f:0.0f,l.Shadow.DepthBias/l.Range,l.Shadow.SlopeBias/l.Range};++index;};for(const auto& l:lighting.Points){add(l);}for(const auto& l:lighting.Spots){add(l);}
+        }
+    }
     sg_bindings bindings{};
     bindings.vertex_buffers[0] = vertices_;
     bindings.index_buffer = lighting.Lod && lighting.Lod<=lodBuffers_.size() ? lodBuffers_[lighting.Lod-1]:indices_;
@@ -183,6 +196,12 @@ void MeshRenderer::Draw(const Mat4& model, const Mat4& viewProjection, const Dir
     bindings.views[VIEW_normal_texture]=lighting.NormalTexture.id ? lighting.NormalTexture:whiteView_;bindings.samplers[SMP_normal_sampler]=lighting.NormalSampler.id ? lighting.NormalSampler:whiteSampler_;
     bindings.views[VIEW_shadow_texture]=lighting.Shadow && lighting.Shadow->Texture.id ? lighting.Shadow->Texture:whiteView_;bindings.samplers[SMP_shadow_sampler]=lighting.Shadow && lighting.Shadow->Sampler.id ? lighting.Shadow->Sampler:nearestSampler_;
     bindings.views[VIEW_metallic_roughness_texture]=lighting.MetallicRoughnessTexture.id ? lighting.MetallicRoughnessTexture:whiteView_;bindings.samplers[SMP_metallic_roughness_sampler]=lighting.MetallicRoughnessSampler.id ? lighting.MetallicRoughnessSampler:whiteSampler_;
+    const auto* atlas=lighting.Shadow ? lighting.Shadow->Local:nullptr;
+    if (extendedLighting_) {
+        bindings.views[VIEW_local_shadow_texture]=atlas ? atlas->Texture:whiteView_;bindings.samplers[SMP_local_shadow_sampler]=atlas ? atlas->Sampler:nearestSampler_;
+        bindings.views[VIEW_ltc_matrix_texture]=lighting.LtcMatrix.id ? lighting.LtcMatrix:whiteView_;bindings.samplers[SMP_ltc_matrix_sampler]=lighting.LtcSampler.id ? lighting.LtcSampler:whiteSampler_;
+        bindings.views[VIEW_ltc_amplitude_texture]=lighting.LtcAmplitude.id ? lighting.LtcAmplitude:whiteView_;bindings.samplers[SMP_ltc_amplitude_sampler]=lighting.LtcSampler.id ? lighting.LtcSampler:whiteSampler_;
+    }
 #if defined(__EMSCRIPTEN__)
     if (morphCount_) {bindings.vertex_buffers[0]=WebMorph(lighting);}
 #else
@@ -194,7 +213,8 @@ void MeshRenderer::Draw(const Mat4& model, const Mat4& viewProjection, const Dir
     sg_apply_pipeline(instanced ? instancePipelines_[lighting.Mirrored ? 1:0]:wire ? wirePipelines_[model.LinearDeterminant() < 0 ? 1:0]:(material.DoubleSided ? doubleSidedPipelines_:pipelines_)[model.LinearDeterminant() < 0 ? 1 : 0]);
     sg_apply_bindings(bindings);
     sg_apply_uniforms(UB_mesh_params, SG_RANGE(uniforms));
-    sg_apply_uniforms(UB_material_params, SG_RANGE(fragment));
+    static_assert(offsetof(material_params_t,rect_meta)==sizeof(basic_material_params_t));
+    sg_apply_uniforms(extendedLighting_ ? UB_material_params:UB_basic_material_params,{&fragment,extendedLighting_ ? sizeof(fragment):sizeof(basic_material_params_t)});
 #if !defined(__EMSCRIPTEN__)
     if (morphCount_) {ApplyMorph(lighting.MorphWeights);}
 #endif
@@ -223,7 +243,7 @@ void MeshRenderer::PrepareDoubleSided() {
 }
 void MeshRenderer::PrepareInstances() {
     if (morphCount_) {throw std::logic_error("Morph meshes use independent draws.");}
-    if (instanceShader_.id) {return;}instanceShader_=sg_make_shader(mesh_instances_shader_desc(sg_query_backend()));
+    if (instanceShader_.id) {return;}instanceShader_=sg_make_shader(extendedLighting_ ? lit_mesh_instances_shader_desc(sg_query_backend()):mesh_instances_shader_desc(sg_query_backend()));
     for (int i=0;i<2;++i) {auto p=sg_query_pipeline_desc(doubleSided_ ? doubleSidedPipelines_[i]:pipelines_[i]);p.shader=instanceShader_;p.layout.buffers[1].stride=sizeof(Mat4);p.layout.buffers[1].step_func=SG_VERTEXSTEP_PER_INSTANCE;
         for (int c=0;c<4;++c) {auto& a=p.layout.attrs[ATTR_mesh_instances_instance0+c];a.buffer_index=1;a.format=SG_VERTEXFORMAT_FLOAT4;a.offset=c*16;}p.label="static-instancing-pipeline";instancePipelines_[i]=sg_make_pipeline(p);}
     if (sg_query_shader_state(instanceShader_) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(instancePipelines_[0]) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(instancePipelines_[1]) != SG_RESOURCESTATE_VALID) {for (auto& p:instancePipelines_) {if (p.id) {sg_destroy_pipeline(p);}p={};}if (instanceShader_.id) {sg_destroy_shader(instanceShader_);}instanceShader_={};throw std::runtime_error("Cannot create static instancing shader/pipelines.");}
@@ -234,10 +254,10 @@ void MeshRenderer::PrepareWireframe(const MeshData& mesh) {
     if (edges_.id) {return;}
     if (mesh.Indices.size() > static_cast<std::size_t>(INT_MAX)/2) {throw std::length_error("Wireframe index limit exceeded.");}
     std::vector<std::uint32_t> edges;edges.reserve(mesh.Indices.size()*2);
-    const auto optimized=OptimizeMesh(mesh);for (std::size_t i=0;i<optimized.Geometry.Indices.size();i+=3) {const auto a=optimized.Geometry.Indices[i],b=optimized.Geometry.Indices[i+1],c=optimized.Geometry.Indices[i+2];edges.insert(edges.end(),{a,b,b,c,c,a});}
+    for (std::size_t i=0;i<mesh.Indices.size();i+=3) {const auto a=vertexRemap_.at(mesh.Indices[i]),b=vertexRemap_.at(mesh.Indices[i+1]),c=vertexRemap_.at(mesh.Indices[i+2]);edges.insert(edges.end(),{a,b,b,c,c,a});}
     sg_buffer_desc b{};b.usage.index_buffer=true;b.data={edges.data(),edges.size()*sizeof(std::uint32_t)};b.label="debug-wireframe-indices";
     sg_buffer buffer=sg_make_buffer(b);sg_pipeline pipelines[2]{};
-    for (int i=0;i<2;++i) {auto d=sg_query_pipeline_desc(pipelines_[i]);d.primitive_type=SG_PRIMITIVETYPE_LINES;d.cull_mode=SG_CULLMODE_NONE;d.label="debug-wireframe-pipeline";pipelines[i]=sg_make_pipeline(d);}
+    for (int i=0;i<2;++i) {auto d=sg_query_pipeline_desc(pipelines_[i]);d.primitive_type=SG_PRIMITIVETYPE_LINES;d.index_type=SG_INDEXTYPE_UINT32;d.cull_mode=SG_CULLMODE_NONE;d.label="debug-wireframe-pipeline";pipelines[i]=sg_make_pipeline(d);}
     if (sg_query_buffer_state(buffer) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(pipelines[0]) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(pipelines[1]) != SG_RESOURCESTATE_VALID) {for (auto p:pipelines) {if (p.id) {sg_destroy_pipeline(p);}}if (buffer.id) {sg_destroy_buffer(buffer);}throw std::runtime_error("Cannot create debug wireframe resources.");}
     edges_=buffer;wirePipelines_[0]=pipelines[0];wirePipelines_[1]=pipelines[1];edgeIndexCount_=static_cast<int>(edges.size());
 }
@@ -250,10 +270,10 @@ void MeshRenderer::Inspect(std::vector<DebugResource>& r) const {
     for (auto p:doubleSidedPipelines_) {InspectPipeline(r,p,"Double-sided mesh pipeline");}for (auto p:doubleSidedShadowPipelines_) {InspectPipeline(r,p,"Double-sided shadow pipeline");}for (auto p:pipelines_) {InspectPipeline(r,p,"Mesh winding pipeline");}for (auto p:wirePipelines_) {InspectPipeline(r,p,"Wireframe winding pipeline");}for (auto p:shadowPipelines_) {InspectPipeline(r,p,"Shadow winding pipeline");}
 }
 
-void MeshRenderer::DrawShadow(const Mat4& model,const Mat4& lightViewProjection,const MaterialAsset& material,sg_view texture,sg_sampler sampler,std::span<const Mat4> palette,const MeshLighting& instances) const {
+void MeshRenderer::DrawShadow(const Mat4& model,const Mat4& lightViewProjection,const MaterialAsset& material,sg_view texture,sg_sampler sampler,std::span<const Mat4> palette,const MeshLighting& instances,ShaderVec4 radial) const {
     if (!shadowShader_.id) {throw std::logic_error("Shadow pipeline was not prepared.");}
     sg_bindings b{};b.vertex_buffers[0]=vertices_;b.index_buffer=indices_;b.views[VIEW_mask_texture]=texture.id ? texture:whiteView_;b.samplers[SMP_mask_sampler]=sampler.id ? sampler:whiteSampler_;
-    shadow_params_t params{};params.light_mvp=lightViewProjection*model;shadow_material_t mask{};mask.shadow_mask={material.AlphaCutoff,material.BaseColor[3],0,0};
+    shadow_params_t params{};params.light_mvp=lightViewProjection*model;params.shadow_world=model;shadow_material_t mask{};mask.shadow_mask={material.AlphaCutoff,material.BaseColor[3],0,0};mask.shadow_origin_range=radial;
 #if !defined(__EMSCRIPTEN__)
     if (morphCount_) {b.views[VIEW_morph_data]=morphView_;}
 #endif
@@ -265,6 +285,7 @@ void MeshRenderer::DrawShadow(const Mat4& model,const Mat4& lightViewProjection,
     sg_draw(0,indexCount_,instanced ? instances.InstanceCount:1);
 }
 void MeshRenderer::Shutdown() noexcept {
+    vertexRemap_.clear();
     if (sg_isvalid()) {
 #if defined(__EMSCRIPTEN__)
         for (const auto& [key,stream]:webStreams_) {(void)key;if (stream.Buffer.id) {sg_destroy_buffer(stream.Buffer);}}

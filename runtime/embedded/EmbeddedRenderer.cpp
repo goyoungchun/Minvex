@@ -71,8 +71,8 @@ struct EmbeddedRenderer::Impl {
     char Diagnostics[1024]{};
     static void Log(const char* tag,std::uint32_t level,std::uint32_t item,const char* text,std::uint32_t,const char*,void* user) noexcept {
         auto& p=*static_cast<Impl*>(user);
-        if (level <= 1) {std::snprintf(p.Diagnostics,sizeof(p.Diagnostics),"%s %u: %s",tag,item,text ? text:"Graphics resource failure");}
-        if (level == 0) {std::fprintf(stderr,"%s\n",p.Diagnostics);std::abort();} // Native PANIC cannot be recovered.
+        if (level == 0) {std::fprintf(stderr,"%s\n%s %u: %s\n",p.Diagnostics,tag,item,text ? text:"Graphics panic");std::abort();} // Preserve the preceding validation error; native PANIC cannot be recovered.
+        if (level == 1) {std::snprintf(p.Diagnostics,sizeof(p.Diagnostics),"%s %u: %s",tag,item,text ? text:"Graphics resource failure");}
     }
 #endif
     Result<void> Ready(bool initialized=true) const {

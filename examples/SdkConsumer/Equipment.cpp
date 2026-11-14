@@ -18,6 +18,6 @@ int main(int argc, char** argv) {
         auto loaded = lv::LoadScene(argv[2], assets); if (!loaded) { return 1; }
         const auto ids = loaded.Value().World.ObjectIds();
         if (loaded.Value().World.GetObject(ids[1]).LeaderPose != ids[0] || loaded.Value().World.GetObject(ids[2]).AttachmentSocket != "Equipment") { return 1; }
-        std::puts("Installed Minvex SDK: Shared Skeleton, Leader Pose, sockets and Scene v12 passed."); return 0;
+        std::puts("Installed Minvex SDK: Shared Skeleton, Leader Pose, sockets and Scene archive passed."); return 0;
     } catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }
 }

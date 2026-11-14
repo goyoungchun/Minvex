@@ -19,6 +19,7 @@ struct SceneRenderStats {
     std::uint64_t ResidentAssetSignature = 0;
     int MaxResidentTextureSize = 0;
     std::uint64_t LastShadowDrawCalls=0,LastShadowTriangles=0;
+    std::uint64_t LastLocalShadowDrawCalls=0,LastLocalShadowTriangles=0;
     std::uint64_t LastWireLines=0;
     OptimizationStatistics Optimization;
 };
@@ -34,7 +35,10 @@ public:
 
     void Prepare(const Scene& scene);
     void Draw(const Scene& scene, float aspect,const ShadowSampling& shadow={});
-    void DrawShadow(const Scene& scene,const Mat4& lightViewProjection);
+    void DrawShadow(const Scene& scene,const Mat4& lightViewProjection,ShaderVec4 radial={},bool append=false);
+    void ResetShadowStatistics() noexcept {stats_.LastShadowDrawCalls=stats_.LastShadowTriangles=stats_.LastLocalShadowDrawCalls=stats_.LastLocalShadowTriangles=0;}
+    void SetLocalShadowStatistics(std::uint64_t calls,std::uint64_t triangles) noexcept {stats_.LastLocalShadowDrawCalls=calls;stats_.LastLocalShadowTriangles=triangles;}
+    void RecordShadowClear() noexcept {++stats_.LastShadowDrawCalls;++stats_.LastShadowTriangles;}
     Mat4 ShadowViewProjection(const Scene& scene, Vec3* extent=nullptr) const;
     SceneRenderStats GetStats() const noexcept { return stats_; }
     void Clear() noexcept;
@@ -45,6 +49,10 @@ public:
 
 private:
     struct GpuModel;
+    struct AreaLookup;
+    std::unique_ptr<AreaLookup> area_;
+    std::vector<RenderItem> items_; // One pose/world snapshot shared by every pass of this frame.
+    bool extendedLighting_=false;
     std::unordered_map<const ModelAsset*, std::unique_ptr<GpuModel>> models_;
     SceneRenderStats stats_;
     RenderSettings settings_;
@@ -56,7 +64,7 @@ private:
     float aspect_=1;int height_=720;bool viewportKnown_=false;
     void PrepareBatches(const Scene& scene);
     unsigned Lod(const Scene& scene,const Bounds& bounds,const Mat4& world,std::size_t levels) const;
-    void DrawImpl(const Scene& scene,const Mat4& viewProjection,bool shadowPass,const ShadowSampling& shadow);
+    void DrawImpl(const Scene& scene,const Mat4& viewProjection,bool shadowPass,const ShadowSampling& shadow,ShaderVec4 radial={});
 };
 
 } // namespace lv::detail

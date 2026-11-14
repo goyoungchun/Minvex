@@ -22,16 +22,26 @@ inline constexpr std::size_t ShaderSkinJoints=MaxSkinJoints;
 #endif
 
 struct alignas(16) ShaderVec4 { float X, Y, Z, W; };
+struct LocalShadowSampling {
+    std::array<Mat4,24> Matrices{};
+    std::array<unsigned,8> FirstFace{}; // One based; zero = unshadowed.
+    sg_view Texture{};sg_sampler Sampler{};
+    int Columns=0,Rows=0,Resolution=0;
+};
 struct ShadowSampling {
     Mat4 ViewProjection=Mat4::Identity();
     sg_view Texture{};sg_sampler Sampler{};
     RenderSettings Settings;
     Vec3 Extent{1,1,1}; // Orthographic width, height and linear depth range, in world units.
+    const LocalShadowSampling* Local=nullptr;
 };
 struct MeshLighting {
     sg_view NormalTexture{};sg_sampler NormalSampler{};
     std::span<const PointLight> Points;
     std::span<const SpotLight> Spots;
+    std::span<const RectLight> Rects;
+    AmbientLight Ambient;
+    sg_view LtcMatrix{},LtcAmplitude{};sg_sampler LtcSampler{};
     const ShadowSampling* Shadow=nullptr;
     bool Advanced=false;
     DebugOptions Debug;
@@ -54,14 +64,14 @@ public:
     MeshRenderer(const MeshRenderer&) = delete;
     MeshRenderer& operator=(const MeshRenderer&) = delete;
 
-    void Initialize(const MeshData& mesh, bool doubleSided = false, bool skinned = false, int samples = 1, sg_pixel_format colorFormat=SG_PIXELFORMAT_NONE, bool shadow=false,std::span<const MeshLod> lods={},std::span<const MorphTarget> morphs={},const MeshPrimitive* source=nullptr);
+    void Initialize(const MeshData& mesh, bool doubleSided = false, bool skinned = false, int samples = 1, sg_pixel_format colorFormat=SG_PIXELFORMAT_NONE, bool shadow=false,std::span<const MeshLod> lods={},std::span<const MorphTarget> morphs={},const MeshPrimitive* source=nullptr,bool extendedLighting=false);
 #if defined(__EMSCRIPTEN__)
     void PruneWebMorph(std::span<const ObjectId> live);
     std::uint64_t WebMorphBytes() const noexcept;
 #endif
     void Draw(const Mat4& model, const Mat4& viewProjection, const DirectionalLight& light = {},
               const MaterialAsset& material = {}, sg_view texture = {}, sg_sampler sampler = {}, std::span<const Mat4> palette = {}, bool forceUnlit = false, const MeshLighting& lighting={}) const;
-    void DrawShadow(const Mat4& model,const Mat4& lightViewProjection,const MaterialAsset& material,sg_view texture,sg_sampler sampler,std::span<const Mat4> palette,const MeshLighting& instances={}) const;
+    void DrawShadow(const Mat4& model,const Mat4& lightViewProjection,const MaterialAsset& material,sg_view texture,sg_sampler sampler,std::span<const Mat4> palette,const MeshLighting& instances={},ShaderVec4 radial={}) const;
     void Shutdown() noexcept;
     void PrepareWireframe(const MeshData& mesh);
     void Inspect(std::vector<DebugResource>& resources) const;
@@ -72,6 +82,8 @@ public:
 private:
     sg_buffer vertices_{};
     sg_buffer indices_{};
+    std::vector<std::uint32_t> vertexRemap_;
+    bool extendedLighting_=false;
     sg_shader shader_{};
     sg_pipeline pipelines_[2]{};
     sg_pipeline doubleSidedPipelines_[2]{},doubleSidedShadowPipelines_[2]{};

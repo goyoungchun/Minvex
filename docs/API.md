@@ -1,6 +1,6 @@
 # Minvex API
 
-**C++20 Graphics SDK · Version 1.20.0 · Namespace `lv`**
+**C++20 Graphics SDK · Version 1.0.0 · Namespace `lv`**
 
 모듈별 주요 타입과 API를 정리한 사용 안내임. 전체 선언은 연결된 공개 헤더에서 확인할 수 있음.
 
@@ -9,7 +9,7 @@
 ## SDK 연결
 
 ```cmake
-find_package(Minvex 1.20 CONFIG REQUIRED COMPONENTS viewer graphics)
+find_package(Minvex 1.0 CONFIG REQUIRED COMPONENTS viewer graphics)
 add_executable(my_viewer main.cpp)
 target_link_libraries(my_viewer PRIVATE minvex::viewer)
 ```
@@ -57,12 +57,20 @@ run.OnFrame = [](lv::Viewer& v, const lv::ViewerFrameInfo&) {
 | `Clip / Visible / Enabled / BlocksInput` | clip은 viewport logical rectangle이며 글자·도형·그림자·hit test에 적용함. disabled 버튼은 입력을 차단하지만 활성화하지 않음. BlocksInput=false인 요소는 입력을 통과시킴 |
 | `ProcessInput / PollActivations` | 계층 paint 순서·ancestor clip·동일 affine transform으로 rounded hit-test. 같은 버튼에서 down/release해야 활성화함. Cancel/삭제/상위 비활성화는 capture를 해제함. Tab/Shift+Tab은 표시/활성 상태의 생성 순서, Enter/Space는 focus 활성화. ScrollX/Y는 logical pixel delta(오른쪽/아래 양수)이며 가장 안쪽 scroll ancestor부터 처리함 |
 | `SetFontDirectory / FontDirectory / Fonts / RefreshFonts` | Font 폴더는 기본 CWD/Font이며 create=true로 생성 가능. `Fonts()`는 OS와 폴더의 TTF/OTF/TTC family를 조회하고 `Fonts(false)`는 폴더만 조회함. FontFile은 폴더 상대 경로이며 경로 탈출을 거부함. 파일을 바꾼 뒤 RefreshFonts를 명시적으로 호출함 |
-| `Save / Load` | `Minvex.UI` writer v2 / reader v1~v2, 권장 `.mvxui.json`, atomic 저장. 계층·배치·rich run과 상대 FontDirectory를 저장하고 font bytes·history·scroll은 내장하지 않음. Load는 전체 검증 후 ID/parent를 재매핑하고 입력을 초기화함. 성공한 Save/Load는 현재 상태를 clean으로 표시함. Load 자체도 Undo 가능함. Scene v12에는 UI를 저장하지 않음 |
+| `Save / Load` | `Minvex.UI` writer v2 / reader v1~v2, 권장 `.mvxui.json`, atomic 저장. 계층·배치·rich run과 상대 FontDirectory를 저장하고 font bytes·history·scroll은 내장하지 않음. Load는 전체 검증 후 ID/parent를 재매핑하고 입력을 초기화함. 성공한 Save/Load는 현재 상태를 clean으로 표시함. Load 자체도 Undo 가능함. Scene v13에는 UI를 저장하지 않음 |
 | `BeginEdit / CommitEdit / CancelEdit` | 여러 속성/요소 변경을 하나의 Undo로 묶거나 시작 상태로 취소함. 중첩 편집을 지원하지 않으며 활성 편집 중 Save/Load/Undo/Redo/ClearHistory는 InvalidState임. 빈 묶음은 이력을 추가하지 않음 |
 | `Undo / Redo / History / ClearHistory` | UI 전용 content snapshot과 dirty/saved 상태를 복원함. History는 CanUndo/CanRedo/Editing/Dirty와 이력 수를 반환함. no-op·검증 실패는 redo를 지우지 않으며 새 성공 편집은 redo를 지움. ClearHistory는 content·dirty를 유지함 |
 | `Rasterize` | native shaping, top-left origin의 premultiplied sRGB RGBA8 복사본. UI 변경·DPI·resize 때만 viewer bitmap을 갱신하고 Scene 품질 축소 뒤의 full-resolution pass에서 합성함. UI 합성 자원은 telemetry와 render debugger에 포함함 |
 
 모든 canvas 수정·조회·저장·로드·입력·raster는 생성 스레드에서 호출함. `Revision / Focused / Empty`는 owner thread 전용의 unchecked query임. GetUi는 소유자의 수명 동안만 유효한 참조이며 Viewer/Embedded의 thread-safe 예외에 포함하지 않음. 독립 `UiCanvas`는 GPU 없이 Windows/macOS native text를 생성할 수 있음. 다른 플랫폼의 native font/text는 `UnsupportedFeature`임.
+
+UI는 이전 CPU bitmap을 보관하고 요소·상태·변환·상위 clip의 변경 영역을 갱신함. 이동·삭제 전의 영역도 지운 뒤 겹치는 요소를 paint 순서대로 다시 그리며, 정적 UI는 bitmap을 재사용함. 첫 raster·DPI/viewport 변경·Font 폴더 변경·`RefreshFonts()`는 전체를 다시 그림. 실패한 raster는 보관된 이미지를 부분 갱신하지 않으며 반환한 pixel 배열은 독립 복사본임.
+
+canvas별 bitmap과 변경 판정 데이터의 추정 보관량은 32 MiB로 제한함. 이 예산을 넘는 화면은 전체 raster로 처리하고 캐시를 보관하지 않음. 작업 중 복사본·native text·GPU 자원은 이 예산에 포함하지 않음. 여러 요소가 함께 바뀌거나 스크롤·재배치로 변경 영역이 커지면 비용도 커질 수 있음. 갱신 빈도와 요소 수는 대상 기기에서 측정해 정하며, 요소 수 한도는 프레임 성능을 보장하는 한도가 아님.
+
+Windows canvas는 시스템 DirectWrite collection·기본 UI font family와 WIC/Direct2D text surface를 재사용함. surface는 최대 4개·추정 pixel 저장량 16 MiB까지 보관하며 큰 surface는 임시로 사용함. 이는 위 CPU bitmap 예산과 별도이며 driver/native 내부 할당의 상한은 아님. `RefreshFonts()`와 Font directory 변경은 이 문맥도 갱신하므로 시스템 폰트·기본 UI family 변경 후 호출함. 사용자 font 파일 collection은 호출 간 보관하지 않음. 기존 Host COM apartment를 존중하며 canvas는 owner thread에서 파괴해야 함.
+
+GPU 합성은 같은 크기의 overlay texture와 staging buffer를 재사용하고 변경된 bitmap을 전송함. 전송은 현재 전체 bitmap 단위이며 row alignment에 따른 padding을 포함함. GPU 논리 buffer 비용·render debugger에는 UI upload staging이 포함됨.
 
 한도는 canvas당 512 요소, 요소당 UTF-8 텍스트 16,384 bytes, 이름/family 256 bytes, activation 1,024개, UI JSON 8 MiB, Font 폴더 검색 128개 파일·파일당 64 MiB임. 요소 크기는 축당 1..2048 logical pixels, scale .01..16, font size 1..256, line height .5..4, letter spacing -32..128, shadow blur 0..128, border 0..1024임. Padding은 글자 content 영역을 남겨야 함. raster/output UI 크기는 축당 1..4096 framebuffer pixels, DPI scale .25..4이며 element text bitmap도 축당 4096 이하임. 색상/opacity/anchor/pivot은 0..1이고 비유한 값은 거부함.
 
@@ -122,7 +130,7 @@ Font/raster 실패는 UI 미리보기 오류로 표시하고 Scene 표시를 유
 | **ui** · [Ui.h](../include/minvex/Ui.h) | `UiCanvas`, `UiElement`, `UiLayout/UiContainer/UiLayoutBox`, `UiStyle`, `UiTextStyle/UiTextRun`, `UiHistoryState`, `UiInput`, `UiFont`. `Add/Set/Get`, `ResolveLayout/SetScroll`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo/History`, `ProcessInput/PollActivations`, `Fonts`, `SetFontDirectory`, `Save/Load`, `Rasterize` |
 | **core** · [Math.h](../include/minvex/Math.h), [Mesh.h](../include/minvex/Mesh.h) | `Vec3`, `Quaternion`, `Mat4`, `Transform`, `Bounds`, `MeshData`, `MakeCube()`, `DecomposeTRS()`. 생성 헤더 `Version.h`의 `Version`, `BuildInfo`, `GetBuildInfo()` |
 | **assets** · [Asset.h](../include/minvex/Asset.h), [AssetLoading.h](../include/minvex/AssetLoading.h) | `ModelHandle`, `MorphTarget`, `MaterialAsset`, `ShadingModel`, `ImportSettings`, `ImporterRegistry`, `AssetRegistry::LoadModel/PrepareModel/ReimportModel`, `InspectModel()`, `ValidateModel()`, `CopyModelToProject()`, `AssetLoader`, `AssetHotReload` |
-| **scene** · [Scene.h](../include/minvex/Scene.h) | `Scene`, `ObjectId`, `Camera`, `DirectionalLight`, `PointLight`, `SpotLight`. `AddModel()`, `CreateObject()`, `SetParent()`, `SetTransform()`, `SetModel()`, `GetMaterial/SetMaterial/ResetMaterial`, `GetAnimation()`, `UpdateAnimations()`, `SceneAnimationEvent`, `PollAnimationEvents/DispatchAnimationEvents()` |
+| **scene** · [Scene.h](../include/minvex/Scene.h) | `Scene`, `ObjectId`, `Camera`, `AmbientLight`, `DirectionalLight`, `PointLight`, `SpotLight`, `RectLight`, `LocalShadowSettings`. `AddModel()`, `CreateObject()`, `SetParent()`, `SetTransform()`, `SetModel()`, `GetMaterial/SetMaterial/ResetMaterial`, `GetAnimation()`, `UpdateAnimations()`, `SceneAnimationEvent`, `PollAnimationEvents/DispatchAnimationEvents()` |
 | **animation** · [Animation.h](../include/minvex/Animation.h) | `SkeletonAsset`, `SkinAsset`, `PoseAsset`, `PoseBuffer`, `PoseChannels`, `AdditivePose/AdditiveAnimationState`, `AnimationClip`, `AnimationEvent/AnimationEventTrack/AnimationEventOccurrence`, `AnimationBlendState`, `BlendTreeDesc/BlendTreeAsset/BlendTreeState`, `MorphTrack`, `MorphPose`, `AnimationPlayer`. `EvaluateAnimation()`, `BlendPoses()`, `ComposePose()`, `CreateBlendTree()`, `EvaluateBlendWeights/EvaluateBlendTree()`, `Play/PlayBlendTree()`, `CrossFade()`, `SetBlendParameter()`, `Seek/SeekBlendTree()`, `EvaluatePose/Evaluate()`, `SetAdditiveAnimation()`, `MakeAdditivePose/ApplyAdditivePose()`, `CapturePose()` |
 | **scene_io** · [SceneIO.h](../include/minvex/SceneIO.h), [PoseIO.h](../include/minvex/PoseIO.h) | `SceneArchive`, `SaveScene(scene, path, library={})`, `LoadScene(path, registry)`, `SavePose(pose, skeleton, path)`, `LoadPose(path, skeleton)` |
 | **viewer** · [Viewer.h](../include/minvex/Viewer.h) | `ViewerOptions`, `ModelOptions`, `ViewerRunOptions`, `Viewer`. `AddModel()`, `AddModelAsync()`, `GetAssetLoad()`, `CommitModelLoad()`, `SetHotReload()`, `SetCamera()`, `SetMaterial/ResetMaterial`, `SetQuality()`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `GetScene()`, `Run()` |
@@ -131,7 +139,27 @@ Font/raster 실패는 UI 미리보기 오류로 표시하고 Scene 표시를 유
 | **quality** · [Quality.h](../include/minvex/Quality.h) | `QualityPreset`, `QualityProfile`, `QualityOverrides`, `QualityCapabilities`, `QualityState`. `MakeQualityProfile()`, `ExpandQuality()`, `ResolveQuality()`, `SaveQuality()`, `LoadQuality()` |
 | **telemetry** · [SystemInfo.h](../include/minvex/SystemInfo.h), [Telemetry.h](../include/minvex/Telemetry.h) | `HardwareInfo`, `MetricStatus`, `TelemetrySnapshot`. `SystemInfo::QueryHardware()`, `SystemMonitor::Sample()`, `FrameMonitor`, `EstimateQualityResources()`, `RecommendQuality()`, `SaveTelemetry()` |
 | **debug** · [Debug.h](../include/minvex/Debug.h) | `DebugView`, `DebugOptions`, `DebugDraw`, `RenderDebugInfo`. `InspectJoint()`, `InspectBoneInfluences()`. Viewer/Embedded의 `SetDebugOptions()`, `SetDebugDraw()`, `GetRenderDebugInfo()` |
-| **optimization** · [Optimization.h](../include/minvex/Optimization.h) | `MeshOptimization`, `OptimizationStatistics`, `OptimizeMesh()`, `GenerateMeshLods()`, `SelectMeshLod()`, `TextureMipBytes()` |
+| **optimization** · [Optimization.h](../include/minvex/Optimization.h) | `MeshOptimization`, `MeshOptimizationOptions`, `MeshLocalityStatistics`, `OptimizationStatistics`, `OptimizeMesh()`, `AnalyzeMeshLocality()`, `GenerateMeshLods()`, `SelectMeshLod()`, `TextureMipBytes()` |
+
+## 메시 캐시·전송 최적화
+
+`OptimizeMesh(mesh, lods={})`는 원본을 수정하지 않고 triangle 순서와 vertex 배치를 바꾼 독립 복사본을 반환함. Post-Transform Vertex Cache Optimization 뒤 Vertex Fetch Optimization을 수행하며 정점의 모든 속성·삼각형 winding·중복 삼각형·미사용 정점을 보존함. `VertexRemap[source]`는 결과 정점 번호인 전단사 매핑이며 반환된 base/LOD index는 이미 재매핑되어 있음. LOD는 최대 3개이고 입력 순서·Error를 유지함. triangle 순서는 보존하지 않으므로 triangle 순서에 의미를 부여하는 처리에는 별도 대응이 필요함.
+
+`OptimizeMesh(mesh, lods, options)`의 `VertexCache / VertexFetch / CoarsestLodFirst` 기본값은 true임. fetch pass는 가장 적은 index의 LOD부터 정점을 모아 작은 LOD가 좁은 vertex 범위를 사용하게 함. base LOD의 fetch locality가 나빠질 수 있으며 `CoarsestLodFirst=false`로 base 우선 배치를 선택할 수 있음. `VertexFetch=false`이면 vertex 순서와 identity remap을 유지함.
+
+`Overdraw`는 기본 false이며 불투명·정적 geometry에만 호출자가 선택함. cache pass 뒤에 실행하며 `VertexCache=true`가 필요함. `OverdrawThreshold`는 유한한 1..3, 기본 1.05이며 cache 효율과 overdraw의 교환을 제어함. 유효하지 않은 mesh·LOD·옵션은 `std::invalid_argument`를 던지고 할당 실패는 표준 예외를 따름. GPU context 없이 서로 독립적인 입력을 각 스레드에서 처리할 수 있음.
+
+`AnalyzeMeshLocality(mesh, overdraw=false)`는 소프트웨어 모델을 반환함. `Acmr`는 triangle당 정점 변환 횟수, `Atvr`는 참조 정점당 변환 횟수, `Overfetch`는 필요한 vertex bytes 대비 fetch bytes임. cache 모델은 FIFO 16·warp 32, fetch 모델은 64-byte cache line·128 KiB cache를 사용함. `HasOverdraw=true`인 경우에만 software raster의 `PixelsCovered / PixelsShaded / Overdraw`가 유효함. index 수는 analyzer의 32-bit counter 보호를 위해 `UINT32_MAX/256` 이하임. 기존 `CacheMissesBefore/After`는 별도의 단순 16-entry LRU 모델임. 이 수치들은 실제 GPU counter·시간·FPS가 아니며 hardware별 효과는 실제 장면에서 측정함.
+
+Renderer는 위 cache/fetch 최적화를 사용하고, 전체 vertex 수가 Native는 65,536 이하, WebGL2는 65,535 이하이면 base/LOD GPU index를 16비트로 저장함. WebGL2의 0xffff는 [primitive restart 예약값](https://registry.khronos.org/webgl/specs/latest/2.0/#NO_PRIMITIVE_RESTART_FIXED_INDEX)이므로 그보다 큰 population에는 32비트를 사용함. CPU `MeshData`의 32비트 index 계약은 유지함. overdraw 재정렬은 CPU 최적화 API에서 명시적으로 선택할 수 있으며 내장 Renderer는 자동 적용하지 않음. Renderer에 메시를 전달하면 자체 cache/fetch pass를 수행하므로 사전에 만든 triangle 순서를 보존하는 계약은 아님. 정적 instancing은 같은 변환 목록의 GPU buffer를 재사용하며 목록이 바뀌면 교체함. 소프트웨어 분석·정점 순서 최적화는 [meshoptimizer](https://github.com/zeux/meshoptimizer/tree/v1.3)의 모델과 알고리즘을 사용함.
+
+```cpp
+#include <minvex/Optimization.h>
+lv::MeshOptimizationOptions options;
+options.Overdraw = true; // 애플리케이션이 불투명 정적 메시임을 확인한 경우
+auto optimized = lv::OptimizeMesh(mesh, lods, options);
+auto locality = lv::AnalyzeMeshLocality(optimized.Geometry);
+```
 
 ## 사용 예제
 
@@ -224,9 +252,9 @@ Blend1D는 X 오름차순·Y=0인 1~64개 sample을 요구하며 인접 두 Clip
 
 `SetBlendParameter(name, value)`·`SeekBlendTree(phase)`·`BlendTreeDuration()`을 제공함. 파라미터는 유한한 값, phase는 [0,1]임. 파라미터 편집은 phase를 유지하며 Pause·속도·Loop·역재생은 기존 제어를 따름. Stop은 Tree·파라미터를 유지하고 phase=0, ResetPose는 Tree도 해제함. Play는 단일 Clip으로 전환하고 Tree에서 CrossFade하면 현재 base TRS/Morph를 frozen source로 사용함.
 
-Viewer·EditorDocument도 `PlayBlendTree/SetBlendParameter/SeekBlendTree` Result Facade를 제공함. Editor Animation Controls에서 이름·파라미터·Clip·threshold/좌표 편집과 Apply/Play, 현재 weight·2D 삼각분할 보기를 제공하며 편집은 Undo/Redo 대상임. Scene v12는 최대 1024개 공유 Tree 정의와 독립 phase/파라미터/재생 상태를 저장하며 reader는 v1~v12임. Reimport는 실제 Skeleton/Morph layout과 모든 참조 Clip index/name·Scale 호환성을 검사함.
+Viewer·EditorDocument도 `PlayBlendTree/SetBlendParameter/SeekBlendTree` Result Facade를 제공함. Editor Animation Controls에서 이름·파라미터·Clip·threshold/좌표 편집과 Apply/Play, 현재 weight·2D 삼각분할 보기를 제공하며 편집은 Undo/Redo 대상임. Scene v13는 최대 1024개 공유 Tree 정의와 독립 phase/파라미터/재생 상태를 저장하며 reader는 v1~v13임. Reimport는 실제 Skeleton/Morph layout과 모든 참조 Clip index/name·Scale 호환성을 검사함.
 
-잘못된 입력/호환성은 low-level API에서 `std::invalid_argument`임. 반환한 handle은 정의의 수명을 유지하며 `Tree()` 참조는 Player/Scene 편집 후 다시 조회함. immutable 정의의 동시 조회·서로 다른 Player 사용은 가능하고 같은 Player의 동시 수정/평가는 금지임. SDK 1.20.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
+잘못된 입력/호환성은 low-level API에서 `std::invalid_argument`임. 반환한 handle은 정의의 수명을 유지하며 `Tree()` 참조는 Player/Scene 편집 후 다시 조회함. immutable 정의의 동시 조회·서로 다른 Player 사용은 가능하고 같은 Player의 동시 수정/평가는 금지임. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
 
 ### Additive Animation
 
@@ -247,9 +275,9 @@ Player는 TRS Additive 레이어 1개를 보유함. `SetAdditiveAnimation(clip, 
 
 `Additive()`의 상태는 Clip·Time·Speed·Loop·Weight·State·Reference·JointMask임. 레이어 속도는 Player 속도와 곱해지고 playhead/loop는 base와 독립임. `RestoreAdditiveAnimation(state)`로 전체 설정을 검증·교체하며 `SetAdditiveWeight/SetAdditiveMask/SeekAdditive()`로 개별 편집함. Seek는 duration까지 clamp함. Pause/Resume은 base와 레이어를 함께 제어하고 Stop은 두 시간을 0으로 되돌리며 설정은 유지함. Play/PlayBlendTree/CrossFade는 레이어를 유지하고 ResetPose는 해제함. `ClearAdditiveAnimation()`은 base를 유지하며 레이어만 제거함.
 
-Viewer·EditorDocument에도 같은 제어의 Result Facade를 제공함. Editor는 Clip·Skeleton/현재 base/Clip sample 기준 선택, weight·시간·속도·loop, Joint/Subtree mask, Base/Delta/Final 비교를 제공함. 편집은 Undo/Redo 대상이며 Scene v12는 레이어 reference·mask·재생 상태를 저장하고 reader는 v1~v12임. Reimport는 Skeleton·레이어 Clip index/name·시간과 reference/Scale 호환성을 검사함. Pose v1은 최종 TRS snapshot만 저장함.
+Viewer·EditorDocument에도 같은 제어의 Result Facade를 제공함. Editor는 Clip·Skeleton/현재 base/Clip sample 기준 선택, weight·시간·속도·loop, Joint/Subtree mask, Base/Delta/Final 비교를 제공함. 편집은 Undo/Redo 대상이며 Scene v13는 레이어 reference·mask·재생 상태를 저장하고 reader는 v1~v13임. Reimport는 Skeleton·레이어 Clip index/name·시간과 reference/Scale 호환성을 검사함. Pose v1은 최종 TRS snapshot만 저장함.
 
-공유 Model/Clip은 수정하지 않으며 레이어·기준 Pose·mask는 Player별로 소유함. 상태 참조는 Player/Scene 편집 후 다시 조회하고 같은 Player의 동시 수정/평가는 금지임. weight 0 또는 전체 mask 0인 레이어의 시간 변화는 정적인 base의 On-Demand 이미지를 무효화하지 않음. SDK 1.20.0 소비자는 함께 재빌드해야 하며 ImportVersion 6은 유지함.
+공유 Model/Clip은 수정하지 않으며 레이어·기준 Pose·mask는 Player별로 소유함. 상태 참조는 Player/Scene 편집 후 다시 조회하고 같은 Player의 동시 수정/평가는 금지임. weight 0 또는 전체 mask 0인 레이어의 시간 변화는 정적인 base의 On-Demand 이미지를 무효화하지 않음. SDK 1.0.0 소비자는 함께 재빌드해야 하며 ImportVersion 6은 유지함.
 
 ### Animation Event
 
@@ -274,9 +302,9 @@ Player 큐는 최대 1024개임. 초과 시 `AnimationEventOverflow`를 던지�
 
 track당 최대 1024개, overlay 최대 256 track, 기본 track별·인스턴스 전체 overlay별 이름/페이로드 합계는 각각 1 MiB임. 이름은 1~256 bytes, payload는 최대 4096 bytes의 NUL 없는 UTF-8이며 시간은 유한한 [0,duration] 오름차순임. 잘못된 데이터는 `std::invalid_argument`임. Player/Scene의 동시 수정·평가는 금지이고 Viewer는 생성한 owner thread에서 사용함. callback은 명시적 Dispatch를 호출한 스레드에서 실행하며 전달된 참조는 해당 호출 동안만 유효함.
 
-Editor는 Timeline marker, 추가·삭제·시간·이름·payload 편집, 수집 Seek 선택과 발생 로그를 제공함. marker 편집은 Undo/Redo 대상이며 큐 배출·로그는 문서를 dirty로 만들지 않음. Scene v12는 overlay와 Clip identity를 저장하고 reader는 v1~v12임. 발생 큐·callback·로그는 저장하지 않으며 Undo/Redo는 과거 큐를 재발송하지 않음. Reimport는 overlay Clip identity/duration을 검사함. SDK 1.20.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
+Editor는 Timeline marker, 추가·삭제·시간·이름·payload 편집, 수집 Seek 선택과 발생 로그를 제공함. marker 편집은 Undo/Redo 대상이며 큐 배출·로그는 문서를 dirty로 만들지 않음. Scene v13는 overlay와 Clip identity를 저장하고 reader는 v1~v13임. 발생 큐·callback·로그는 저장하지 않으며 Undo/Redo는 과거 큐를 재발송하지 않음. Reimport는 overlay Clip identity/duration을 검사함. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
 
-### Shared Skeleton / Leader Pose / Socket (SDK 1.20)
+### Shared Skeleton / Leader Pose / Socket (SDK 1.0)
 
 공개 정의는 `minvex/Skeleton.h`·`minvex/Scene.h`이며 `minvex::animation`과 `minvex::scene`에 구현됨. 제품명은 Minvex, C++ namespace는 `lv`임.
 
@@ -332,7 +360,7 @@ Follower는 자체 애니메이션 Player의 TRS·Morph 재생과 이벤트 수�
 
 잘못된 입력·누락된 소켓/본·호환성·순환·singular TRS는 `std::invalid_argument`임. world-preserving detach 또는 SetWorldTransform 결과에 shear가 있으면 TRS로 저장할 수 없어 변경 전에 거부함. `EditorDocument`는 공유 Skeleton·Leader·소켓·부착 API를 같은 인수로 제공하고 Result 오류 및 Undo/Redo를 적용함. 전체 Pose 저장은 Follower의 표시되는 최종 local TRS를 저장하며 local shear는 거부함. overrides-only 저장은 dormant 독립 Player의 override임. Viewer는 owner thread에서 `GetScene()`을 통해 사용함.
 
-Scene writer는 v12이며 reader는 v1~v12임. 최대 1024개의 공유 Skeleton 정의를 중복 없이 저장하고 본/기준 자세/공유 소켓, 인스턴스 소켓 override, Leader·Transform 부모·부착 소켓을 복원함. 파일의 ObjectId는 새 런타임 ID로 매핑하며 모순된 참조·순환·256단계 초과 chain은 거부함. v1~v11에서는 새 관계가 없는 일반 객체로 읽음. 기존 16 MiB JSON·65536 객체·4096 모델 제한을 유지함. 이전 SDK reader는 v12를 읽을 수 없음. Pose v1·ImportVersion 6은 유지하고 정적 SDK 소비자는 1.20.0 헤더/라이브러리로 함께 재빌드해야 함.
+Scene writer는 v13이며 reader는 v1~v13임. 최대 1024개의 공유 Skeleton 정의를 중복 없이 저장하고 본/기준 자세/공유 소켓, 인스턴스 소켓 override, Leader·Transform 부모·부착 소켓을 복원함. 파일의 ObjectId는 새 런타임 ID로 매핑하며 모순된 참조·순환·256단계 초과 chain은 거부함. v1~v11에서는 새 관계가 없는 일반 객체로 읽음. 기존 16 MiB JSON·65536 객체·4096 모델 제한을 유지함. 이전 SDK reader는 v13를 읽을 수 없음. Pose v1·ImportVersion 6은 유지하고 정적 SDK 소비자는 1.0.0 헤더/라이브러리로 함께 재빌드해야 함.
 
 예제는 [Equipment](../examples/Equipment/Main.cpp), 설치 SDK 소비자는 [SdkConsumer/Equipment](../examples/SdkConsumer/Equipment.cpp)임. C++/Editor 기능을 제공하며 Python/JavaScript의 장착 제어 바인딩은 제공하지 않음.
 
@@ -351,9 +379,9 @@ auto changed = viewer.SetMaterial(id, 0, material); // Result<void> 확인 필�
 // viewer.ResetMaterial(id, 0)으로 원본 복원
 ```
 
-렌더링에는 Advanced lighting과 `QualityOverrides::Pbr=true`가 필요함. Low/Medium은 기본 OFF, High는 ON임. `QualityCapabilities::PbrLighting`을 확인하며 미지원은 거부하고 AllowFallback일 때만 Basic 재질 경로로 대체함. 직접광 Directional/Point/Spot, Normal Map·Skinning·Instancing·Sun Shadow를 사용하며 IBL은 제공하지 않음.
+렌더링에는 Advanced lighting과 `QualityOverrides::Pbr=true`가 필요함. Low/Medium은 기본 OFF, High는 ON임. `QualityCapabilities::PbrLighting`을 확인하며 미지원은 거부하고 AllowFallback일 때만 Basic 재질 경로로 대체함. 직접광 Directional/Point/Spot/Rect, Normal Map·Skinning·Instancing·Sun Shadow를 사용하며 IBL은 제공하지 않음.
 
-`Scene::SetMaterial/ResetMaterial`과 `EditorDocument::SetMaterial/ResetMaterial`도 제공함. SetMaterial은 재질 전체 값을 override하며 ResetMaterial로 원본을 복원함. override가 있는 객체는 개별 draw로 처리함. Document 편집은 Undo/Redo 대상이며 Scene v12에 저장함. Texture는 같은 모델 내부 index만 참조함. Reimport 시 override material index/name·texture index 호환성을 검사함. PBR 설정은 현재 Quality writer v2로 저장하며 reader는 v1~v2를 지원함. 정적 SDK 소비자는 공개 구조체 변경 시 헤더/라이브러리를 함께 재빌드해야 함.
+`Scene::SetMaterial/ResetMaterial`과 `EditorDocument::SetMaterial/ResetMaterial`도 제공함. SetMaterial은 재질 전체 값을 override하며 ResetMaterial로 원본을 복원함. override가 있는 객체는 개별 draw로 처리함. Document 편집은 Undo/Redo 대상이며 Scene v13에 저장함. Texture는 같은 모델 내부 index만 참조함. Reimport 시 override material index/name·texture index 호환성을 검사함. PBR 설정은 현재 Quality writer v2로 저장하며 reader는 v1~v2를 지원함. 정적 SDK 소비자는 공개 구조체 변경 시 헤더/라이브러리를 함께 재빌드해야 함.
 
 ### Morph Target
 
@@ -373,7 +401,7 @@ Mesh당 최대 8개 target이며 `ImportSettings::MaxMorphTargets`로 더 낮출
 
 평가 순서는 Clip/Cross-fade/Blend Tree → 수동 weight override → GPU Morph → GPU Skinning임. Morph cross-fade도 live/frozen source·Pause·역재생을 따름. NORMAL/TANGENT를 정규화하고 누락 채널은 base 값을 유지함. GPU는 정점 remap과 일치하는 공유 storage buffer를 사용하며 Morph Mesh의 reduced LOD/instancing은 사용하지 않음. Bounds·Picking/Focus·Culling·Shadow·On-Demand·자원 비용에 변형을 반영함. GPU packed delta 비용은 정점×target×48 bytes임.
 
-Scene v12는 node별 override와 frozen source Morph, layout signature를 저장함. 사용 중인 node/mesh·target 이름/순서·vertex 수·기본값 변경은 Reimport에서 거부함. Pose v1은 Morph를 저장하지 않음. 반환된 override 참조는 Player/Scene 편집 후 다시 조회하며 기존 owner-thread·오류 계약을 따름. `--morph` 렌더링 예제와 `examples/assets/MorphRibbon.gltf`를 제공함.
+Scene v13는 node별 override와 frozen source Morph, layout signature를 저장함. 사용 중인 node/mesh·target 이름/순서·vertex 수·기본값 변경은 Reimport에서 거부함. Pose v1은 Morph를 저장하지 않음. 반환된 override 참조는 Player/Scene 편집 후 다시 조회하며 기존 owner-thread·오류 계약을 따름. `--morph` 렌더링 예제와 `examples/assets/MorphRibbon.gltf`를 제공함.
 
 ### Frame Pacing / 장착 예제 진단
 
@@ -381,13 +409,60 @@ Scene v12는 node별 override와 frozen source Morph, layout signature를 저장
 
 제한 시간은 첫 제출 epoch에 고정된 시간 격자를 사용함. 각 callback의 작은 지연을 다음 deadline에 누적하지 않으며, VSync 경계에서는 `min(0.5ms, framePeriod × 0.05)`의 이른 제출을 허용함. 허용한 프레임의 시간 slot은 다음 제출 시 계산에 포함되어 동일 slot을 중복 제출하지 않음. 높은 callback 빈도에서도 목표 평균 FPS를 유지하며, Viewer·Embedded·Editor의 공통 RenderSurface에 적용됨. VSync와 FPS 제한은 서로 다른 기능이며, 화면 주사율 그대로 재생할 애니메이션 미리보기는 `ViewerOptions::VSync=true`와 `Quality.Overrides.TargetFps=0`을 함께 사용할 수 있음. 서로 나누어떨어지지 않는 주사율/목표 FPS 조합의 표시 간격은 여전히 달라질 수 있음.
 
+Windows Standalone은 사용 가능한 경우 전용 고정밀 대기 타이머로 FPS 제한과 정적 대기를 처리함. 타이머를 사용할 수 없으면 일반 대기로 대체하며 OS 스케줄링·GPU 부하에 따라 실제 간격은 달라질 수 있음. Embedded·Editor는 각각 Host 호출 주기·Editor 이벤트 루프의 pacing을 따름.
+
 `minvex_equipment`는 위 VSync 설정을 기본으로 사용하며 `--target-fps 0..240`·`--no-vsync`로 비교할 수 있음. 팔 회전·몸 translation은 60 Hz cosine key로 방향 전환과 loop 경계를 완화하고 기존 Clip Slerp/Lerp로 평가함. `--profile path.json --frames 270`은 30프레임 warmup 후 wall-clock callback 간격을 기록함. 시뮬레이션 delta가 긴 stall 이후 clamp되어도 실제 간격을 기록하며, JSON 요약·frame별 CSV·기존 Telemetry JSON을 생성함. profile은 동기식 파일 IO이며 해당 path에 쓰기 권한이 필요하고 실패 시 예제는 오류를 출력하고 종료 코드 1을 반환함. 측정은 opt-in이며 수집된 본 행렬 비교는 Scene 상태를 변경하지 않음.
 
 `RenderScheduler`의 비공개 저장 상태를 포함한 구조체 크기와 바이너리 ABI는 고정하지 않음. 정적 SDK 소비자는 헤더/라이브러리를 함께 재빌드해야 함.
 
+### Ambient / Point / Spot / Rect 조명
+
+`Scene`는 `Sun`, 독립 `Ambient`, `PointLights / SpotLights / RectLights`와 `LocalShadowResolution`을 소유함. Scene과 같은 호출 스레드에서 수정하며 `ValidateLighting()`은 잘못된 값에 `std::invalid_argument`를 던짐. 렌더링·저장·Editor의 Result Facade도 이 검증을 수행함. 빛의 위치·방향은 world space이며 SceneObject의 부모/Animation을 자동으로 따르지 않음. 호스트가 frame callback에서 갱신할 수 있음.
+
+| 타입 | 계약 |
+|---|---|
+| `AmbientLight` | `Color={1,1,1}`, `Intensity=0`. 전역 diffuse ambient이며 IBL·AO를 포함하지 않음. `Sun.Ambient`의 회색 계수와 더해짐. 독립 Ambient만 사용할 때는 `Sun.Ambient=0`으로 지정함 |
+| `PointLight` | `Position`, `Color`, `Intensity=1`, `Range=10`, `Shadow`. 전 방향 조명이며 거리 `d`의 감쇠는 `max(1-d/Range,0)^2/(1+d*d)`임 |
+| `SpotLight` | Point와 같은 위치·색·감쇠, `Direction={0,-1,0}`, `InnerConeRadians=.35`, `OuterConeRadians=.7`. 반각은 `0 <= inner <= outer < pi/2`, outer는 0보다 커야 함 |
+| `RectLight` | `Position`, `Direction={0,-1,0}`, `Up={0,0,1}`, `Color`, `Intensity=1`, `Width=2 / Height=2`, `Range=10`, `TwoSided=false`. Width/Height는 전체 길이이며 0보다 크고 1,000,000 이하. Direction/Up은 유한하고 서로 독립인 비영 벡터여야 함 |
+
+색·강도는 유한한 비음수이며 RGB는 linear임. 위치는 유한해야 하고 Range는 유한한 양수임. Intensity는 SDK의 RGB 강도 스케일이며 lumen/candela 단위로 교정한 계약은 아님. Point+Spot+Rect 합계는 `MaxLocalLights=8`, 그중 Rect는 `MaxRectLights=4` 이하임. Point/Spot/Rect 렌더링에는 Advanced lighting이 필요하며 Ambient와 Sun은 Basic에도 적용함. Unlit 재질은 조명의 영향을 받지 않음.
+
+Rect는 균일한 사각형 방출면의 [LTC 면적광](https://github.com/selfshadow/ltc_code)을 사용함. diffuse와 GGX specular를 근사 적분하며, specular에는 `ShadingModel::Pbr`와 PBR 품질이 필요함. emission 방향 앞쪽에 빛을 내고 `TwoSided`로 양쪽을 선택함. 방출면의 가장 가까운 점과 수신점 사이의 거리에 따라 `max(1-d/Range,0)^2`로 줄어듦. Renderer마다 64×64 RGBA16F lookup texture 두 개, 총 64 KiB를 필요한 동안 보관하며 모든 메시가 공유함. `QualityCapabilities::RectAreaLighting`으로 filterable RGBA16F 지원을 확인함. Rect shadow·광원 texture·IES는 제공하지 않음.
+
+`LocalShadowSettings`는 Point/Spot에 속함. `Enabled=false`, `Filter=LocalShadowFilter::Pcf`, `NearPlane=.05`, `DepthBias=.005`, `SlopeBias=.02`가 기본값임. Filter는 Hard 또는 Pcf, near는 유한한 양수이며 Enabled이면 Range보다 작아야 함. bias는 유한한 비음수 **world distance**이며 Sun의 정규화 depth bias와 단위가 다름. 그림자를 켠 Point/Spot은 합계 `MaxShadowedLocalLights=4` 이하임. 사용 장면의 world scale에 맞게 near와 bias를 설정함.
+
+Native local shadow에는 Advanced lighting, `Quality.Shadow != Off`, `QualityCapabilities::LocalShadowMapping`이 필요함. Point는 6개의 projective 방향, Spot은 1개의 perspective 방향을 공용 R32F+depth atlas에 배치하고 radial depth를 비교함. `Scene::LocalShadowResolution`은 각 면의 크기이며 128/256/512/1024, 기본 512임. Hard는 1회, Pcf는 3×3 비교이며 Point의 PCF는 인접 면으로 sample을 다시 투영함. Sun의 PCSS 선택은 local Filter를 바꾸지 않음. 조명 수·해상도로 인한 atlas와 렌더 타깃 합계가 기기 한도/attachment budget을 넘으면 `InsufficientResource`이며 해상도나 shadowed light 수를 줄여야 함. `LocalShadowResolution`과 local Filter는 Scene v13에 저장하고 Quality v2에는 저장하지 않음.
+
+정적인 shadow map은 재사용하며 카메라·빛 색·강도·filter/bias만 바꾸면 다시 그리지 않음. 켜짐/꺼짐 또는 강도 0 전환은 atlas 구성을 바꿀 수 있음. 물체/pose/Morph/alpha material과 빛의 위치·방향·range·near가 바뀌면 해당 map을 갱신함. 같은 frame의 world/pose snapshot을 여러 shadow pass에서 공유하며 각 면의 frustum으로 caster를 걸러냄. 개별 map 갱신과 Skin/Morph·Alpha Mask·정적 instancing을 지원함. Scene 모델 자산은 다른 렌더링 경로와 같이 immutable 계약을 따름.
+
+`EstimateQualityResources()`의 `QualityEstimate::LocalShadowFaces / LocalShadowResolution`은 atlas 배치 정보임. `Cost.RenderTargetBytes`에는 atlas의 R32F+depth와 빈 타일을 포함한 할당 면적을, `Cost.TextureBytes`에는 필요한 LTC lookup 64 KiB를 포함함. `current`에는 이전 추정 결과를 그대로 전달하며 이 필드와 Cost를 따로 수정하지 않음. `ReusedBytes / AdditionalBytes / TemporaryPeakBytes`는 이전 자원이 살아 있는 품질 전환의 논리 크기이며 driver 정렬·지연 해제·실제 VRAM 사용량은 아님.
+
+Windows의 내장 shader는 빌드 때 DXBC로 컴파일함. macOS는 Metal source 경로를 유지하여 full Xcode 설치를 추가 요구하지 않음. 기기별 pipeline 초기화 비용과 native 실행 결과가 동일하다고 보장하지 않음. WebGL2는 local shadow를 제공하지 않음.
+
+```cpp
+auto& scene = viewer.GetScene();
+scene.Sun.Ambient = 0;
+scene.Ambient = {{.2f,.3f,.5f}, .25f};
+lv::PointLight point;
+point.Position = {0,2,0};
+point.Shadow.Enabled = true;
+scene.PointLights = {point};
+lv::RectLight rectangle;
+rectangle.Position = {0,3,0};
+rectangle.Width = 3;
+rectangle.Height = 2;
+scene.RectLights = {rectangle};
+scene.LocalShadowResolution = 256;
+auto quality = lv::MakeQualityProfile(lv::QualityPreset::Medium);
+auto result = viewer.SetQuality(quality); // Result<void> 확인
+```
+
+Editor Inspector는 Ambient와 Point/Spot/Rect의 편집·추가·삭제, local shadow 설정·해상도를 제공함. `EditorDocument::SetAmbientLight`, `SetLocalLights(points,spots,rects)`, `SetLocalShadowResolution`은 Undo/Redo와 실패 시 상태 보존을 제공함. 두 인자의 `SetLocalLights(points,spots)`는 기존 Rect를 유지함. Python은 같은 값 타입과 `viewer.scene.ambient / point_lights / spot_lights / rect_lights / local_shadow_resolution`을 제공하며 getter는 독립 복사본임. 수정한 복사본을 property에 다시 대입함. Web의 JavaScript binding에는 별도 조명 편집 API가 없음.
+
 ### PCSS Shadow
 
-단일 Directional Sun의 직교 그림자에 blocker search → 거리별 penumbra → 가변 반경 PCF를 적용함. R32F raw map을 재사용하며 Spot/Point shadow·atlas·cascade는 제공하지 않음. Low는 Off, Medium은 Basic, High는 PCF 기본값을 유지하고 Custom에서 PCSS를 선택함.
+단일 Directional Sun의 직교 그림자에 blocker search → 거리별 penumbra → 가변 반경 PCF를 적용함. R32F raw map을 재사용하며 local shadow는 위의 독립 Hard/PCF atlas를 사용함. cascade는 제공하지 않음. Low는 Off, Medium은 Basic, High는 PCF 기본값을 유지하고 Custom에서 PCSS를 선택함.
 
 | RenderSettings / QualityOverrides | 기본값 · 유효 범위 |
 |---|---|
@@ -418,7 +493,7 @@ auto changed = viewer.SetQuality(quality); // Result<void> 확인 필요
 
 ```sh
 python -m pip wheel . --wheel-dir out/wheels
-python -m pip install --force-reinstall out/wheels/minvex-1.20.0-cp312-cp312-win_amd64.whl
+python -m pip install --force-reinstall out/wheels/minvex-1.0.0-cp312-cp312-win_amd64.whl
 python python/examples/viewer.py examples/assets/MorphRibbon.gltf --frames 60
 ```
 
@@ -532,6 +607,8 @@ macOS Metal 경로는 **Apple Silicon arm64용 Preview**임. Intel Mac은 공식
 
 [Result.h](../include/minvex/Result.h)의 `Result<T>`는 성공 시 `Value()`, 실패 시 `Error()`로 조회함. `Error`는 `Code`, `Message`, `Hint`, `SourcePath`를 제공함. 실패한 Result의 Value 또는 성공한 Result의 Error 접근은 `std::logic_error`임.
 
+lvalue Result의 `Value()`는 보관된 값의 mutable/const 참조임. rvalue Result의 `Value()`는 소유하는 값을 move하며 const rvalue는 copy함. 따라서 임시 Result가 사라져도 꺼낸 값 자체의 수명은 유지됨. const rvalue에서 꺼내려면 T가 copy 가능해야 함. `Error()`도 rvalue에서 값으로 꺼냄.
+
 | 오류 | 의미 |
 |---|---|
 | `InvalidArgument` · `InvalidHandle` · `InvalidData` | 잘못된 인수·핸들·파일/데이터 |
@@ -546,12 +623,12 @@ Facade·IO는 Result를 사용하고, low-level Asset/Scene/Animation API는 `Im
 
 | 항목 | 현재 규칙 |
 |---|---|
-| **Scene** | writer v12 / reader v1~v12. 외부 모델 참조·계층·카메라·조명·Pose·Clip/Cross-fade·Blend Tree·Additive·Event overlay·재질/Morph override·Shared Skeleton·Leader Pose·Socket 저장. 로드 시 runtime ID 재매핑 |
+| **Scene** | writer v13 / reader v1~v13. 외부 모델 참조·계층·카메라·조명·Pose·Clip/Cross-fade·Blend Tree·Additive·Event overlay·재질/Morph override·Shared Skeleton·Leader Pose·Socket 저장. 로드 시 runtime ID 재매핑 |
 | **Pose / Quality / Import** | Pose v1, Quality writer v2 / reader v1~v2, ImportVersion 6. Pose는 skeleton signature 호환 필요 |
 | **Quality** | Low·Medium·High, Overrides가 있으면 Custom. 기본 `AllowFallback=false`; 미지원 설정 대체는 명시적으로 허용 |
 | **SDK** | 정적 라이브러리. 같은 architecture·compiler/toolset·configuration·C++ runtime으로 소비자 재빌드 필요. 바이너리 ABI 비고정 |
 
-Scene v12는 v11 이하만 지원하는 이전 SDK reader로 읽을 수 없음. Scene/Pose/Quality 저장은 임시 파일 작성 후 교체하며 모델 파일 자체를 Scene에 내장하지 않음. Undo 이력·UI 상태·Telemetry는 Scene에 저장하지 않음.
+Scene v13는 v12 이하만 지원하는 이전 SDK reader로 읽을 수 없음. Scene/Pose/Quality 저장은 임시 파일 작성 후 교체하며 모델 파일 자체를 Scene에 내장하지 않음. Undo 이력·UI 상태·Telemetry는 Scene에 저장하지 않음.
 
 Scene의 모델·텍스처 디렉터리 상대 참조는 실제 부모 디렉터리를 기준으로 계산함. macOS의 `/var` → `/private/var` 같은 디렉터리 링크나 Windows junction을 통해 저장·로드해도 같은 리소스를 가리키며, 프로젝트를 함께 옮길 수 있음.
 
@@ -559,6 +636,6 @@ CPU-only 구성의 native 초기화·실행은 `UnsupportedFeature`를 반환함
 
 ## 지원 범위
 
-이 문서는 SDK 1.20.0의 공개 API를 설명함. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고함.
+이 문서는 SDK 1.0.0의 공개 API를 설명함. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고함.
 
-Python wheel은 기본 renderer ON이며 CPU-only wheel은 `MINVEX_BUILD_RENDERER=OFF`로 구성함. Web은 Skin당 48 Joint·CPU Morph를 사용하며 Shadow/PCSS·HDR·BC3를 제공하지 않음. Asset Import는 문서화된 subset과 진단 경고를 따름. IBL·Emissive/Occlusion 렌더링·Alpha BLEND·Point/Spot shadow는 지원하지 않음.
+Python wheel은 기본 renderer ON이며 CPU-only wheel은 `MINVEX_BUILD_RENDERER=OFF`로 구성함. Web은 Skin당 48 Joint·CPU Morph를 사용하며 Shadow/PCSS·HDR·BC3를 제공하지 않음. Asset Import는 문서화된 subset과 진단 경고를 따름. IBL·Emissive/Occlusion 렌더링·Alpha BLEND·Rect shadow는 지원하지 않음.

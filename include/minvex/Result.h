@@ -33,7 +33,9 @@ public:
 
     T& Value() & { RequireValue(); return std::get<0>(data_); }
     const T& Value() const& { RequireValue(); return std::get<0>(data_); }
-    T&& Value() && { RequireValue(); return std::move(std::get<0>(data_)); }
+    // A temporary Result must not lend a reference to its soon-destroyed storage.
+    T Value() && { RequireValue(); return std::move(std::get<0>(data_)); }
+    T Value() const&& { RequireValue(); return std::get<0>(data_); }
     const lv::Error& Error() const& {
         if (HasValue()) { throw std::logic_error("Successful Result has no Error."); }
         return std::get<1>(data_);
@@ -42,6 +44,7 @@ public:
         if (HasValue()) { throw std::logic_error("Successful Result has no Error."); }
         return std::move(std::get<1>(data_));
     }
+    lv::Error Error() const&& {if (HasValue()) {throw std::logic_error("Successful Result has no Error.");}return std::get<1>(data_);}
 
 private:
     template<std::size_t I, typename U>
@@ -66,6 +69,7 @@ public:
         if (HasValue()) { throw std::logic_error("Successful Result has no Error."); }
         return std::move(std::get<1>(data_));
     }
+    lv::Error Error() const&& {if (HasValue()) {throw std::logic_error("Successful Result has no Error.");}return std::get<1>(data_);}
 
 private:
     explicit Result(std::monostate value) : data_(value) {}

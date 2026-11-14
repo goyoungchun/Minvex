@@ -12,6 +12,19 @@ struct MeshOptimization {
 };
 // Reorders triangles/vertices without changing attributes or source data. Retains unused vertices.
 MeshOptimization OptimizeMesh(const MeshData& mesh,std::span<const MeshLod> lods={});
+struct MeshOptimizationOptions {
+    bool VertexCache=true,VertexFetch=true,CoarsestLodFirst=true;
+    bool Overdraw=false; // Opaque/static content only; caller owns this decision.
+    float OverdrawThreshold=1.05f; // Allowed cache tradeoff; finite [1,3].
+};
+MeshOptimization OptimizeMesh(const MeshData& mesh,std::span<const MeshLod> lods,const MeshOptimizationOptions& options);
+struct MeshLocalityStatistics {
+    std::uint64_t VerticesTransformed=0,VertexBytesFetched=0,PixelsCovered=0,PixelsShaded=0;
+    double Acmr=0,Atvr=0,Overfetch=0,Overdraw=0;
+    bool HasOverdraw=false;
+};
+// Software cache/fetch/raster models, never measured GPU timings. Overdraw is opt-in.
+MeshLocalityStatistics AnalyzeMeshLocality(const MeshData& mesh,bool overdraw=false);
 // Conservative attribute-aware index-only LOD1..3, target ratios .5/.25/.125; may stop earlier.
 std::vector<MeshLod> GenerateMeshLods(const MeshData& mesh,float targetError=.02f);
 unsigned SelectMeshLod(float projectedDiameterPixels,float bias,std::size_t reducedLevels);

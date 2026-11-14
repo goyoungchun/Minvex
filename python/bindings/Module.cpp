@@ -56,6 +56,7 @@ struct Object {
     }
 };
 struct Scene {std::weak_ptr<State> Owner;};
+void SetLights(lv::Scene& world,std::vector<lv::PointLight> points,std::vector<lv::SpotLight> spots,std::vector<lv::RectLight> rects) {lv::Scene candidate;candidate.PointLights=std::move(points);candidate.SpotLights=std::move(spots);candidate.RectLights=std::move(rects);candidate.ValidateLighting();world.PointLights=std::move(candidate.PointLights);world.SpotLights=std::move(candidate.SpotLights);world.RectLights=std::move(candidate.RectLights);}
 struct Tree {lv::BlendTreeHandle Native;};
 Object AddModel(const std::shared_ptr<State>& s,const std::filesystem::path& path,const lv::Transform& transform,lv::ObjectId parent,const lv::ImportSettings& settings) {
     auto& v=s->Get();lv::ModelOptions options;options.Transform=transform;options.Parent=parent;options.Import=settings;
@@ -173,6 +174,11 @@ PYBIND11_MODULE(_native,m) {
         .def("object",[](const Scene& scene,lv::ObjectId id){auto s=Lock(scene.Owner);Object o{s,id};(void)o.Get();return o;})
         .def_property("camera",[](const Scene& scene){auto s=Lock(scene.Owner);return lv::Camera(s->Get().GetScene().MainCamera);},[](const Scene& scene,const lv::Camera& c){auto s=Lock(scene.Owner);Check(s->Get().SetCamera(c));})
         .def_property("sun",[](const Scene& scene){auto s=Lock(scene.Owner);return lv::DirectionalLight(s->Get().GetScene().Sun);},[](const Scene& scene,const lv::DirectionalLight& l){auto s=Lock(scene.Owner);Check(s->Get().SetLight(l));})
+        .def_property("ambient",[](const Scene& scene){auto s=Lock(scene.Owner);return s->Get().GetScene().Ambient;},[](const Scene& scene,const lv::AmbientLight& l){auto s=Lock(scene.Owner);l.Validate();s->Get().GetScene().Ambient=l;})
+        .def_property("point_lights",[](const Scene& scene){auto s=Lock(scene.Owner);return s->Get().GetScene().PointLights;},[](const Scene& scene,std::vector<lv::PointLight> lights){auto s=Lock(scene.Owner);auto& world=s->Get().GetScene();SetLights(world,std::move(lights),world.SpotLights,world.RectLights);})
+        .def_property("spot_lights",[](const Scene& scene){auto s=Lock(scene.Owner);return s->Get().GetScene().SpotLights;},[](const Scene& scene,std::vector<lv::SpotLight> lights){auto s=Lock(scene.Owner);auto& world=s->Get().GetScene();SetLights(world,world.PointLights,std::move(lights),world.RectLights);})
+        .def_property("rect_lights",[](const Scene& scene){auto s=Lock(scene.Owner);return s->Get().GetScene().RectLights;},[](const Scene& scene,std::vector<lv::RectLight> lights){auto s=Lock(scene.Owner);auto& world=s->Get().GetScene();SetLights(world,world.PointLights,world.SpotLights,std::move(lights));})
+        .def_property("local_shadow_resolution",[](const Scene& scene){auto s=Lock(scene.Owner);return s->Get().GetScene().LocalShadowResolution;},[](const Scene& scene,int resolution){auto s=Lock(scene.Owner);lv::Scene candidate;candidate.LocalShadowResolution=resolution;candidate.ValidateLighting();s->Get().GetScene().LocalShadowResolution=resolution;})
         .def("update_animations",[](const Scene& scene,double dt){auto s=Lock(scene.Owner);s->Get().GetScene().UpdateAnimations(dt);})
         .def("save",[](const Scene& scene,const std::filesystem::path& path){auto s=Lock(scene.Owner);py::gil_scoped_release release;Check(lv::SaveScene(s->Get().GetScene(),path));})
         .def("load",[](const Scene& scene,const std::filesystem::path& path){

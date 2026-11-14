@@ -61,6 +61,7 @@ install(FILES third_party/json/LICENSE.MIT DESTINATION "${_sdk_share}/licenses" 
 install(FILES third_party/tinyobjloader/LICENSE DESTINATION "${_sdk_share}/licenses" RENAME tinyobjloader-LICENSE)
 install(FILES third_party/ufbx/LICENSE DESTINATION "${_sdk_share}/licenses" RENAME ufbx-LICENSE)
 install(FILES third_party/meshoptimizer/LICENSE DESTINATION "${_sdk_share}/licenses" RENAME meshoptimizer-LICENSE)
+install(FILES third_party/ltc/LICENSE DESTINATION "${_sdk_share}/licenses" RENAME ltc-LICENSE)
 # stb permits redistributing this header with its embedded license notice.
 install(FILES third_party/stb/stb_image.h DESTINATION "${_sdk_share}/licenses")
 if(MINVEX_BUILD_RENDERER)

@@ -39,7 +39,8 @@ struct ResourceCost {
 struct QualityEstimate {
     QualityState Quality;
     ResourceCost Cost;
-    std::uint64_t AssetSignature = 0; // Process-local immutable asset identity; not a persistent hash.
+    int LocalShadowFaces=0,LocalShadowResolution=0; // Allocation layout included in Cost.RenderTargetBytes.
+    std::uint64_t AssetSignature = 0; // Process-local asset/material and light allocation identity; not persistent.
     // Additional allocation and logical transient peak while old resources remain alive.
     std::uint64_t ReusedBytes = 0, AdditionalBytes = 0, TemporaryPeakBytes = 0;
 };

@@ -4,7 +4,14 @@ function(minvex_compile_shader target source)
     set(output "${output_directory}/${shader_name}.h")
     set(shader_input "${source}")
     set(slang hlsl5:metal_macos)
+    # Windows embeds DXBC to avoid runtime D3DCompile stalls. Other backend
+    # source remains available; no full-Xcode requirement is added on macOS.
+    set(bytecode)
+    if(CMAKE_HOST_WIN32 AND NOT EMSCRIPTEN)
+        set(bytecode --bytecode)
+    endif()
     if(EMSCRIPTEN)
+        set(bytecode)
         set(slang glsl300es)
         set(shader_input "${output_directory}/${shader_name}")
         add_custom_command(OUTPUT "${shader_input}"
@@ -16,7 +23,7 @@ function(minvex_compile_shader target source)
         OUTPUT "${output}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${output_directory}"
         COMMAND "${MINVEX_SOKOL_SHDC}" --input "${shader_input}" --output "${output}"
-            --slang "${slang}" --ifdef
+            --slang "${slang}" --ifdef ${bytecode}
         DEPENDS "${shader_input}" "${MINVEX_SOKOL_SHDC}"
         COMMENT "Compiling ${shader_name} to ${slang}"
         VERBATIM

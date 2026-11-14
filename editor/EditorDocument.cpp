@@ -31,7 +31,7 @@ auto Edit(Function function) -> Result<decltype(function())> {
 }
 std::unique_ptr<EditorDocument::Snapshot> EditorDocument::Capture() const {
     auto s=std::make_unique<Snapshot>();s->Registry=registry_;s->Library=library_;s->Selection=selection_;s->Revision=revision_;
-    s->World.objects_=world_.objects_;s->World.order_=world_.order_;s->World.MainCamera=world_.MainCamera;s->World.Sun=world_.Sun;s->World.PointLights=world_.PointLights;s->World.SpotLights=world_.SpotLights;return s;
+    s->World.objects_=world_.objects_;s->World.order_=world_.order_;s->World.MainCamera=world_.MainCamera;s->World.Sun=world_.Sun;s->World.Ambient=world_.Ambient;s->World.LocalShadowResolution=world_.LocalShadowResolution;s->World.PointLights=world_.PointLights;s->World.SpotLights=world_.SpotLights;s->World.RectLights=world_.RectLights;return s;
 }
 void EditorDocument::Restore(std::unique_ptr<Snapshot> s) noexcept {
     registry_=std::move(s->Registry);world_=std::move(s->World);library_=std::move(s->Library);selection_=s->Selection;revision_=s->Revision;dirty_=revision_ != savedRevision_;
@@ -192,7 +192,12 @@ Result<void> EditorDocument::SetLight(const DirectionalLight& light) {
     return Change([&] { light.Validate(); world_.Sun = light; MarkChanged(); });
 }
 Result<void> EditorDocument::SetLocalLights(std::vector<PointLight> points,std::vector<SpotLight> spots) {
-    return Change([&] {if (points.size()+spots.size() > MaxLocalLights) {throw std::invalid_argument("At most 8 local lights are supported.");}for (const auto& p:points) {p.Validate();}for (const auto& s:spots) {s.Validate();}world_.PointLights=std::move(points);world_.SpotLights=std::move(spots);MarkChanged();});
+    return SetLocalLights(std::move(points),std::move(spots),world_.RectLights);
+}
+Result<void> EditorDocument::SetAmbientLight(const AmbientLight& light) {return Change([&] {light.Validate();world_.Ambient=light;MarkChanged();});}
+Result<void> EditorDocument::SetLocalShadowResolution(int resolution) {return Change([&] {Scene candidate;candidate.LocalShadowResolution=resolution;candidate.ValidateLighting();world_.LocalShadowResolution=resolution;MarkChanged();});}
+Result<void> EditorDocument::SetLocalLights(std::vector<PointLight> points,std::vector<SpotLight> spots,std::vector<RectLight> rects) {
+    return Change([&] {Scene candidate;candidate.PointLights=std::move(points);candidate.SpotLights=std::move(spots);candidate.RectLights=std::move(rects);candidate.ValidateLighting();world_.PointLights=std::move(candidate.PointLights);world_.SpotLights=std::move(candidate.SpotLights);world_.RectLights=std::move(candidate.RectLights);MarkChanged();});
 }
 Result<void> EditorDocument::PlayAnimation(ObjectId object, std::size_t clip) { return ChangeAnimation(object,[&](auto& p) { p.Play(clip); }); }
 Result<void> EditorDocument::CrossFadeAnimation(ObjectId object,std::size_t clip,double duration) {return ChangeAnimation(object,[&](auto& p) {p.CrossFade(clip,duration);});}

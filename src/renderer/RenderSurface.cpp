@@ -1,5 +1,7 @@
 #include "RenderSurface.h"
 #include "UiRenderer.h"
+#include "LocalShadowAtlas.h"
+#include "platform/FrameProfiling.h"
 #include "GraphicsTelemetry.h"
 #include "DebugRenderer.h"
 #include "DebugResources.h"
@@ -41,6 +43,7 @@ struct RenderSurface::Targets {
     ~Targets() {Destroy();}
 };
 struct RenderSurface::ShadowTargets {
+    std::uint64_t Signature=0;bool Valid=false;
     sg_image Color{},Depth{};sg_view ColorView{},DepthView{},Texture{};sg_sampler Sampler{};
     explicit ShadowTargets(int size) {
         try {sg_image_desc d{};d.width=d.height=size;d.sample_count=1;d.pixel_format=SG_PIXELFORMAT_R32F;d.usage.color_attachment=true;Color=sg_make_image(d);d.pixel_format=SG_PIXELFORMAT_DEPTH;d.usage={};d.usage.depth_stencil_attachment=true;Depth=sg_make_image(d);
@@ -104,7 +107,11 @@ Result<void> RenderSurface::ApplyQuality(const QualityProfile& profile,const Sce
     applying_=true;struct Reset {bool& Flag;~Reset(){Flag=false;}}reset{applying_};
     try {
         auto next=std::move(resolved).Value();const auto& settings=*next.Effective;
+        scene.ValidateLighting();
+        if(settings.Lighting==LightingMode::Advanced&&!scene.RectLights.empty()&&!caps.RectAreaLighting){return Fail({ErrorCode::UnsupportedFeature,"Rectangle lighting lookup sampling is unavailable.","Use a device with filterable RGBA16F textures.",{}});}
+        if(settings.Shadow!=ShadowMode::Off&&settings.Lighting==LightingMode::Advanced){const auto atlas=ShadowLayout(scene);if(atlas.Faces&&!caps.LocalShadowMapping){return Fail({ErrorCode::UnsupportedFeature,"Local shadow mapping is unavailable.","Disable Point/Spot shadows or use a compatible native device.",{}});}if(atlas.Width()>caps.MaxRenderSize||atlas.Height()>caps.MaxRenderSize||atlas.Bytes()+RenderTargetBytes(settings,next.RenderWidth,next.RenderHeight)>caps.RenderTargetBudgetBytes){return Fail({ErrorCode::InsufficientResource,"Local shadow atlas exceeds the device extent or attachment budget.","Reduce Scene.LocalShadowResolution or shadowed light count.",{}});}}
         const bool rebuild=!renderer_ || !state_.Effective || settings.MsaaSamples != state_.Effective->MsaaSamples || settings.MaxTextureSize != state_.Effective->MaxTextureSize || settings.Anisotropy != state_.Effective->Anisotropy || settings.PostProcessing != state_.Effective->PostProcessing || settings.Lod != state_.Effective->Lod || settings.Compression != state_.Effective->Compression || (settings.Shadow != ShadowMode::Off) != (state_.Effective->Shadow != ShadowMode::Off) || (settings.Lighting == LightingMode::Advanced) != (state_.Effective->Lighting == LightingMode::Advanced);
+        const bool maskChanged=state_.Effective&&(settings.MaxTextureSize!=state_.Effective->MaxTextureSize||settings.Anisotropy!=state_.Effective->Anisotropy||settings.Compression!=state_.Effective->Compression);
         std::unique_ptr<Targets> targets;
         const bool resize=!targets_ || next.RenderWidth != state_.RenderWidth || next.RenderHeight != state_.RenderHeight || !state_.Effective || settings.MsaaSamples != state_.Effective->MsaaSamples || settings.PostProcessing != state_.Effective->PostProcessing;
         if (resize && width > 0 && height > 0) {targets=std::make_unique<Targets>(next.RenderWidth,next.RenderHeight,settings.MsaaSamples,settings.PostProcessing);}
@@ -119,6 +126,7 @@ Result<void> RenderSurface::ApplyQuality(const QualityProfile& profile,const Sce
         if (resize) {targets_.swap(targets);}if (rebuild) {renderer_.swap(renderer);}if (presenter) {presenter_.swap(presenter);}
         if (rebuild || resize) {debugRenderer_.reset();debugPreview_.reset();}
         if (replaceShadow) {shadow_.swap(shadow);}
+        if(maskChanged){if(shadow_){shadow_->Valid=false;}if(localShadow_){localShadow_->Invalidate();}}
         if (telemetry) {telemetry_.swap(telemetry);}if (changed) {frameMonitor_.Reset();telemetry_->ResetGpu();}
         renderer_->SetDrawSettings(settings);next.Applied=bool(targets_);
         if (!targets_) {next.RenderWidth=next.RenderHeight=0;}
@@ -127,13 +135,14 @@ Result<void> RenderSurface::ApplyQuality(const QualityProfile& profile,const Sce
     catch (const std::exception& e) {return Fail({ErrorCode::Rendering,e.what(),"Quality application failed; previous settings/resources are retained.",{}});}
 }
 Result<void> RenderSurface::Resize(const Scene& scene,int width,int height) {
-    if (width <= 0 || height <= 0) {targets_.reset();shadow_.reset();state_.RenderWidth=state_.RenderHeight=0;state_.Applied=false;outputWidth_=width;outputHeight_=height;scheduler_.Invalidate();return Result<void>::Success();}
+    if (width <= 0 || height <= 0) {targets_.reset();shadow_.reset();localShadow_.reset();state_.RenderWidth=state_.RenderHeight=0;state_.Applied=false;outputWidth_=width;outputHeight_=height;scheduler_.Invalidate();return Result<void>::Success();}
     if (targets_ && width == outputWidth_ && height == outputHeight_) {return Result<void>::Success();}
     if (width == failedWidth_ && height == failedHeight_ && state_.LastError) {return Result<void>::Failure(*state_.LastError);}
     auto result=ApplyQuality(state_.Requested,scene,width,height);if (!result) {failedWidth_=width;failedHeight_=height;outputWidth_=width;outputHeight_=height;scheduler_.Invalidate();}return result;
 }
 bool RenderSurface::Due(double now) const {return scheduler_.Due(now,state_.Effective ? state_.Effective->TargetFps:0);}
 bool RenderSurface::Render(const Scene& scene,double now,bool force,const std::array<float,4>& clear,bool bypassPacing) {
+    ProfileScope profileRender(FramePhase::Render);
     if (!targets_ || !renderer_ || !state_.Effective || (!bypassPacing && !Due(now))) {return false;}
     auto signature=SceneRenderSignature(scene);for (float value:clear) {signature^=std::bit_cast<std::uint32_t>(value);signature*=1099511628211ull;}
     if (!scheduler_.NeedsRender(state_.Effective->OnDemand,signature,force || bypassPacing || SceneHasActiveAnimation(scene))) {return false;}
@@ -143,13 +152,31 @@ bool RenderSurface::Render(const Scene& scene,double now,bool force,const std::a
     if (debug_.View == DebugView::ShadowMap && !debugPreview_) {debugPreview_=std::make_unique<DebugPreview>(*state_.Effective);}
     const auto cpuStart=RenderClockSeconds();telemetry_->BeginGpu(cpuStart,frameMonitor_);
     struct EndGpu {GraphicsTelemetry& Telemetry;~EndGpu() {Telemetry.EndGpu();}} gpuScope{*telemetry_};
-    renderer_->SetDebugOptions(debug_);renderer_->SetViewport(static_cast<float>(std::max(1,outputWidth_))/std::max(1,outputHeight_),state_.RenderHeight);renderer_->Prepare(scene);
+    renderer_->SetDebugOptions(debug_);renderer_->SetViewport(static_cast<float>(std::max(1,outputWidth_))/std::max(1,outputHeight_),state_.RenderHeight);
+    {ProfileScope profilePrepare(FramePhase::Prepare);renderer_->Prepare(scene);}
     const auto assets=renderer_->GetStats().ResidentAssetSignature;
     if (monitoredAssets_ && *monitoredAssets_ != assets) {frameMonitor_.Reset();telemetry_->ResetGpu();}
     monitoredAssets_=assets;ShadowSampling shadow;
     if (debugRenderer_) {debugRenderer_->Prepare(scene,debug_,debugDraw_);}
     debugLines_=debugRenderer_ ? debugRenderer_->LineCount():0;debugCalls_=debugLines_ ? 1:0;
-    if (shadow_) {shadow.ViewProjection=renderer_->ShadowViewProjection(scene,&shadow.Extent);shadow.Texture=shadow_->Texture;shadow.Sampler=shadow_->Sampler;shadow.Settings=*state_.Effective;sg_pass p{};p.attachments.colors[0]=shadow_->ColorView;p.attachments.depth_stencil=shadow_->DepthView;p.action.colors[0].load_action=SG_LOADACTION_CLEAR;p.action.colors[0].clear_value={1,1,1,1};p.action.depth.load_action=SG_LOADACTION_CLEAR;p.action.depth.clear_value=1;sg_begin_pass(p);try {renderer_->DrawShadow(scene,shadow.ViewProjection);}catch (...) {sg_end_pass();throw;}sg_end_pass();}
+    renderer_->ResetShadowStatistics();
+    const auto geometry=shadow_ ? SceneGeometrySignature(scene):0;
+    if (shadow_) {
+        shadow.ViewProjection=renderer_->ShadowViewProjection(scene,&shadow.Extent);shadow.Texture=shadow_->Texture;shadow.Sampler=shadow_->Sampler;shadow.Settings=*state_.Effective;
+        const auto key=ShadowKey(geometry,shadow.ViewProjection);
+        if (!shadow_->Valid||shadow_->Signature!=key) {
+            sg_pass p{};p.attachments.colors[0]=shadow_->ColorView;p.attachments.depth_stencil=shadow_->DepthView;p.action.colors[0].load_action=SG_LOADACTION_CLEAR;p.action.colors[0].clear_value={1,1,1,1};p.action.depth.load_action=SG_LOADACTION_CLEAR;p.action.depth.clear_value=1;sg_begin_pass(p);
+            try {renderer_->DrawShadow(scene,shadow.ViewProjection);}catch (...) {sg_end_pass();shadow_->Valid=false;throw;}sg_end_pass();shadow_->Signature=key;shadow_->Valid=true;
+        }
+    }
+    const auto layout=ShadowLayout(scene);
+    if(shadow_&&state_.Effective->Lighting==LightingMode::Advanced&&layout.Faces) {
+        const auto caps=QueryQualityCapabilities();
+        if(layout.Bytes()+RenderTargetBytes(*state_.Effective,state_.RenderWidth,state_.RenderHeight)>caps.RenderTargetBudgetBytes){throw std::length_error("Local shadow atlas exceeds the attachment budget; reduce Scene.LocalShadowResolution.");}
+        if(!localShadow_||!localShadow_->Matches(layout)){auto next=std::make_unique<LocalShadowAtlas>(layout);localShadow_=std::move(next);}
+        const auto before=renderer_->GetStats();shadow.Local=&localShadow_->Update(scene,*renderer_,geometry);const auto after=renderer_->GetStats();renderer_->SetLocalShadowStatistics(after.LastShadowDrawCalls-before.LastShadowDrawCalls,after.LastShadowTriangles-before.LastShadowTriangles);
+    }else {localShadow_.reset();}
+
     sg_pass pass{};pass.attachments.colors[0]=targets_->Attachment;pass.attachments.resolves[0]=targets_->Resolve;pass.attachments.depth_stencil=targets_->DepthAttachment;
     pass.action.colors[0].load_action=SG_LOADACTION_CLEAR;pass.action.colors[0].clear_value={clear[0],clear[1],clear[2],clear[3]};pass.action.depth.load_action=SG_LOADACTION_CLEAR;pass.action.depth.clear_value=1;
     const auto aspect=static_cast<float>(std::max(1,outputWidth_))/static_cast<float>(std::max(1,outputHeight_));
@@ -176,11 +203,12 @@ TelemetrySnapshot RenderSurface::Telemetry(double now) {
     const auto stats=Stats();result.ResidentAssetSignature=stats.ResidentAssetSignature;result.Resident.TextureBytes=stats.LogicalTextureBytes;result.Resident.BufferBytes=stats.LogicalBufferBytes;
     result.Optimization=stats.Optimization;
     if (targets_ && state_.Effective) {result.Resident.RenderTargetBytes=RenderTargetBytes(*state_.Effective,state_.RenderWidth,state_.RenderHeight);}
-    if (uiRenderer_) {result.Resident.RenderTargetBytes+=uiRenderer_->PixelBytes();result.Resident.TextureBytes+=uiRenderer_->PixelBytes();}
+    if (uiRenderer_) {result.Resident.RenderTargetBytes+=uiRenderer_->PixelBytes();result.Resident.TextureBytes+=uiRenderer_->PixelBytes();result.Resident.BufferBytes+=uiRenderer_->UploadBytes();}
+    if(localShadow_) {result.Resident.RenderTargetBytes+=localShadow_->Bytes();}
     result.Resident.TotalBytes=result.Resident.TextureBytes+result.Resident.BufferBytes+result.Resident.RenderTargetBytes;
     result.PreviousQualityFrames=previousFrames_;result.PreviousQualityName=previousName_;return result;
 }
-void RenderSurface::Clear() noexcept {uiRenderer_.reset();ui_=nullptr;uiRevision_=0;debugRenderer_.reset();debugPreview_.reset();debugDraw_.Clear();debug_={};debugLines_=debugCalls_=0;targets_.reset();shadow_.reset();renderer_.reset();presenter_.reset();telemetry_.reset();frameMonitor_.Reset();monitoredAssets_.reset();previousFrames_.reset();previousName_.clear();state_.Effective.reset();state_.Applied=false;state_.RenderWidth=state_.RenderHeight=0;scheduler_.Invalidate();}
+void RenderSurface::Clear() noexcept {uiRenderer_.reset();ui_=nullptr;uiRevision_=0;debugRenderer_.reset();debugPreview_.reset();debugDraw_.Clear();debug_={};debugLines_=debugCalls_=0;targets_.reset();shadow_.reset();localShadow_.reset();renderer_.reset();presenter_.reset();telemetry_.reset();frameMonitor_.Reset();monitoredAssets_.reset();previousFrames_.reset();previousName_.clear();state_.Effective.reset();state_.Applied=false;state_.RenderWidth=state_.RenderHeight=0;scheduler_.Invalidate();}
 
 Result<void> RenderSurface::SetDebugOptions(const DebugOptions& options) {
     if (!sg_isvalid() || sg_query_pass_state() != SG_PASSSTATE_NONE) {return Result<void>::Failure({ErrorCode::InvalidState,"Change debug options outside passes on the graphics thread.","Use OnFrame or between renders.",{}});}
@@ -197,11 +225,12 @@ sg_sampler RenderSurface::InspectionSampler(int target) const noexcept {return t
 RenderDebugInfo RenderSurface::Inspect() const {
     RenderDebugInfo r;r.Live=sg_isvalid();r.Options=debug_;r.RenderedFrames=frames_;r.LineCount=debugLines_+(debug_.View == DebugView::Wireframe ? Stats().LastWireLines:0);r.LineDrawCalls=debugCalls_;
     if (!r.Live) {return r;}const auto stats=Stats();r.Optimization=stats.Optimization;
-    if (shadow_) {r.Passes.push_back({"Sun shadow","shadow_mesh / shadow_skin","R32F + depth, masked triangles",stats.LastShadowDrawCalls,stats.LastShadowTriangles});InspectImage(r.Resources,shadow_->Color,"Shadow depth color",true);InspectImage(r.Resources,shadow_->Depth,"Shadow depth attachment",true);}
+    if (shadow_) {r.Passes.push_back({"Sun shadow","shadow_mesh / shadow_skin","R32F + depth, masked triangles",stats.LastShadowDrawCalls-stats.LastLocalShadowDrawCalls,stats.LastShadowTriangles-stats.LastLocalShadowTriangles});InspectImage(r.Resources,shadow_->Color,"Shadow depth color",true);InspectImage(r.Resources,shadow_->Depth,"Shadow depth attachment",true);}
     if (targets_) {r.Passes.push_back({"Scene",debug_.View == DebugView::ShadowMap ? "debug_preview":"mesh / skin",DebugViewName(debug_.View),debug_.View == DebugView::ShadowMap ? 1:stats.LastDrawCalls,debug_.View == DebugView::ShadowMap ? 1:stats.LastTriangles});InspectImage(r.Resources,targets_->Color,"Resolved scene color",true);InspectImage(r.Resources,targets_->Msaa,"MSAA scene color",true);InspectImage(r.Resources,targets_->Depth,"Scene depth attachment",true);InspectImage(r.Resources,targets_->PostColor,"Final post output",true);}
     if (debugCalls_) {r.Passes.push_back({"Debug overlay","debug_lines",debug_.DepthTest ? "Depth-tested lines":"Always-visible lines",debugCalls_,0});}
     if (targets_ && targets_->PostColor.id) {r.Passes.push_back({"Post", "post",debug_.View == DebugView::Lit ? "FXAA + Reinhard":"Diagnostic color copy",1,1});}
-    if (uiRenderer_) {r.Passes.push_back({"UI overlay","ui","Full-resolution text and controls",1,1});InspectImage(r.Resources,uiRenderer_->Image(),"UI composite output",true);InspectImage(r.Resources,uiRenderer_->OverlayImage(),"UI bitmap",false);}
+    if (uiRenderer_) {r.Passes.push_back({"UI overlay","ui","Full-resolution text and controls",1,1});InspectImage(r.Resources,uiRenderer_->Image(),"UI composite output",true);InspectImage(r.Resources,uiRenderer_->OverlayImage(),"UI bitmap",false);InspectBuffer(r.Resources,uiRenderer_->UploadBuffer(),"UI upload staging");}
+    if (localShadow_) {r.Passes.push_back({"Local shadows","shadow_mesh / shadow_skin","Cached radial atlas with per-face culling",stats.LastLocalShadowDrawCalls,stats.LastLocalShadowTriangles});localShadow_->Inspect(r.Resources);}
     if (renderer_) {renderer_->Inspect(r.Resources);}if (debugRenderer_) {debugRenderer_->Inspect(r.Resources);}if (debugPreview_) {InspectShader(r.Resources,debugPreview_->Shader,"Shadow preview");InspectPipeline(r.Resources,debugPreview_->Pipeline,"Shadow preview");}
     for (const auto& resource:r.Resources) {if (resource.Kind == DebugResourceKind::Buffer && (resource.Name == "Wireframe edge indices" || resource.Name == "Debug line stream")) {r.DebugBufferBytes+=resource.Bytes;}}
     if (presenter_) {InspectShader(r.Resources,presenter_->Shader,"present");InspectPipeline(r.Resources,presenter_->Pipeline,"Host/swapchain present");InspectPipeline(r.Resources,presenter_->ColorOnlyPipeline,"Host color-only present");InspectShader(r.Resources,presenter_->PostShader,"post");InspectPipeline(r.Resources,presenter_->PostPipeline,"Post output");}return r;

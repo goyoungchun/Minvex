@@ -33,7 +33,7 @@ void Resources() {
     lv::AssetRegistry assets;const auto model=assets.LoadModel(Fixture("SharedBox.glb"));const auto first=scene.AddModel(model);
     auto one=lv::EstimateQualityResources(p,caps,scene,100,50);scene.AddModel(model);auto shared=lv::EstimateQualityResources(p,caps,scene,100,50);
     Check(one && shared && one.Value().Cost.TotalBytes == shared.Value().Cost.TotalBytes,"instances share logical GPU asset allocations");
-    std::uint64_t expected=0;for (const auto& mesh:model->Meshes) {for (const auto& primitive:mesh.Primitives) {expected+=primitive.Geometry.Vertices.size()*sizeof(lv::Vertex)+primitive.Geometry.Indices.size()*sizeof(std::uint32_t);}}
+    std::uint64_t expected=0;for (const auto& mesh:model->Meshes) {for (const auto& primitive:mesh.Primitives) {expected+=primitive.Geometry.Vertices.size()*sizeof(lv::Vertex)+primitive.Geometry.Indices.size()*(primitive.Geometry.Vertices.size()<=65536 ? sizeof(std::uint16_t):sizeof(std::uint32_t));}}
     Check(one.Value().Cost.BufferBytes == expected && expected > 0,"vertex and uint32 index buffers included");
     const auto reuse=lv::EstimateQualityResources(p,caps,scene,100,50,&shared.Value());Check(reuse && reuse.Value().AdditionalBytes == 0 && reuse.Value().ReusedBytes == shared.Value().Cost.TotalBytes,"identical quality reuses targets and GPU cache");
     auto suspended=shared.Value();suspended.Quality.RenderWidth=suspended.Quality.RenderHeight=0;suspended.Cost.RenderTargetBytes=0;suspended.Cost.TotalBytes=suspended.Cost.BufferBytes+suspended.Cost.TextureBytes;

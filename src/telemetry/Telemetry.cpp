@@ -1,6 +1,8 @@
 #include <minvex/Telemetry.h>
 #include <minvex/Optimization.h>
 #include "ResourceSignature.h"
+#include "optimization/IndexPacking.h"
+#include "renderer/LightMath.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -18,6 +20,7 @@ ResourceCost Cost(const Scene& scene,const QualityState& quality,std::uint64_t& 
     signature=14695981039346656037ull;
     ResourceCost cost;const auto& settings=*quality.Effective;
     cost.RenderTargetBytes=RenderTargetBytes(settings,quality.RenderWidth,quality.RenderHeight);
+    if(settings.Lighting==LightingMode::Advanced){if(!scene.RectLights.empty()){cost.TextureBytes+=65536;}if(settings.Shadow!=ShadowMode::Off){cost.RenderTargetBytes+=detail::ShadowLayout(scene).Bytes();}}
     std::unordered_set<const ModelAsset*> assets;
     std::unordered_map<const ModelAsset*,std::unordered_set<std::size_t>> meshes,images;
     for (const auto& item:scene.CollectRenderItems()) {
@@ -27,8 +30,8 @@ ResourceCost Cost(const Scene& scene,const QualityState& quality,std::uint64_t& 
             const bool firstMesh=meshes[item.Model.get()].insert(part.MeshIndex).second;
             for (const auto& primitive:asset.Meshes.at(part.MeshIndex).Primitives) {
                 if (firstMesh) {
-                    cost.BufferBytes=Add(cost.BufferBytes,Add(Multiply(primitive.Geometry.Vertices.size(),sizeof(Vertex)),Multiply(primitive.Geometry.Indices.size(),sizeof(std::uint32_t))));
-                    if (settings.Lod) {for (const auto& lod:primitive.Lods) {cost.BufferBytes=Add(cost.BufferBytes,Multiply(lod.Indices.size(),sizeof(std::uint32_t)));}}cost.TextureBytes=Add(cost.TextureBytes,4);cost.BufferBytes=Add(cost.BufferBytes,Multiply(Multiply(primitive.Geometry.Vertices.size(),primitive.MorphTargets.size()),48));
+                    cost.BufferBytes=Add(cost.BufferBytes,Add(Multiply(primitive.Geometry.Vertices.size(),sizeof(Vertex)),Multiply(primitive.Geometry.Indices.size(),detail::IndexElementBytes(primitive.Geometry.Vertices.size()))));
+                    if (settings.Lod) {for (const auto& lod:primitive.Lods) {cost.BufferBytes=Add(cost.BufferBytes,Multiply(lod.Indices.size(),detail::IndexElementBytes(primitive.Geometry.Vertices.size())));}}cost.TextureBytes=Add(cost.TextureBytes,4);cost.BufferBytes=Add(cost.BufferBytes,Multiply(Multiply(primitive.Geometry.Vertices.size(),primitive.MorphTargets.size()),48));
                 }
                 const auto& material=scene.GetMaterial(item.Object,primitive.MaterialIndex);
                 for (int role=0;role<3;++role) {
@@ -44,7 +47,7 @@ ResourceCost Cost(const Scene& scene,const QualityState& quality,std::uint64_t& 
             }
         }
     }
-    detail::HashMaterialResources(signature,scene);cost.TotalBytes=Add(cost.RenderTargetBytes,Add(cost.TextureBytes,cost.BufferBytes));return cost;
+    detail::HashMaterialResources(signature,scene);detail::HashLightAllocations(signature,scene,settings.Lighting==LightingMode::Advanced,settings.Shadow!=ShadowMode::Off);cost.TotalBytes=Add(cost.RenderTargetBytes,Add(cost.TextureBytes,cost.BufferBytes));return cost;
 }
 }
 void FrameMonitor::Record(double now,double cpuMs,std::uint64_t draws,std::uint64_t triangles) {
@@ -92,17 +95,26 @@ Result<QualityEstimate> EstimateQualityResources(const QualityProfile& p,const Q
     auto resolved=ResolveQuality(p,caps,w,h);if (!resolved) {return Result<QualityEstimate>::Failure(resolved.Error());}
     try {
         QualityEstimate e;e.Quality=std::move(resolved).Value();e.Cost=Cost(scene,e.Quality,e.AssetSignature);
+        const auto layout=e.Quality.Effective->Lighting==LightingMode::Advanced&&e.Quality.Effective->Shadow!=ShadowMode::Off ? detail::ShadowLayout(scene):detail::LocalShadowLayout{};
+        e.LocalShadowFaces=layout.Faces;e.LocalShadowResolution=layout.Faces ? layout.Resolution:0;
+        if(layout.Faces&&!caps.LocalShadowMapping){return Result<QualityEstimate>::Failure({ErrorCode::UnsupportedFeature,"Local shadow mapping is unavailable.","Disable Point/Spot shadows or use a compatible native device.",{}});}
+        if(!scene.RectLights.empty()&&e.Quality.Effective->Lighting==LightingMode::Advanced&&!caps.RectAreaLighting){return Result<QualityEstimate>::Failure({ErrorCode::UnsupportedFeature,"Rectangle lighting lookup sampling is unavailable.","Use a device with filterable RGBA16F textures.",{}});}
+        if(layout.Width()>caps.MaxRenderSize||layout.Height()>caps.MaxRenderSize||e.Cost.RenderTargetBytes>caps.RenderTargetBudgetBytes){return Result<QualityEstimate>::Failure({ErrorCode::InsufficientResource,"Local shadow atlas exceeds the device extent or attachment budget.","Reduce Scene.LocalShadowResolution or shadowed light count.",{}});}
         if (current && current->Quality.Effective) {
             const auto& old=*current->Quality.Effective;const auto& next=*e.Quality.Effective;
             const auto& cost = current->Cost;
             const bool suspended = current->Quality.RenderWidth == 0 && current->Quality.RenderHeight == 0;
-            const auto oldTargets = suspended ? 0 : RenderTargetBytes(old,current->Quality.RenderWidth,current->Quality.RenderHeight);
+            if(current->LocalShadowFaces<0||current->LocalShadowFaces>24||(current->LocalShadowFaces&&(current->LocalShadowResolution!=128&&current->LocalShadowResolution!=256&&current->LocalShadowResolution!=512&&current->LocalShadowResolution!=1024))||(!current->LocalShadowFaces&&current->LocalShadowResolution)){throw std::invalid_argument("Invalid current local shadow layout.");}
+            const int columns=std::min(6,current->LocalShadowFaces),rows=columns ? (current->LocalShadowFaces+columns-1)/columns:0;
+            const auto oldLocal=std::uint64_t(columns)*rows*current->LocalShadowResolution*current->LocalShadowResolution*8;
+            const auto oldTargets = suspended ? 0 : RenderTargetBytes(old,current->Quality.RenderWidth,current->Quality.RenderHeight)+oldLocal;
             if (cost.RenderTargetBytes != oldTargets || cost.TotalBytes != Add(cost.RenderTargetBytes,Add(cost.TextureBytes,cost.BufferBytes))) {
                 throw std::invalid_argument("Current resource cost does not match its extent/settings or total.");
             }
             const auto shadowBytes=[](const RenderSettings& s) {return s.Shadow != ShadowMode::Off ? std::uint64_t(s.ShadowResolution)*s.ShadowResolution*8:0;};
             if (!suspended && old.Shadow != ShadowMode::Off && next.Shadow != ShadowMode::Off && old.ShadowResolution == next.ShadowResolution) {e.ReusedBytes=shadowBytes(next);}
-            if (!suspended && old.MsaaSamples == next.MsaaSamples && old.PostProcessing == next.PostProcessing && current->Quality.RenderWidth == e.Quality.RenderWidth && current->Quality.RenderHeight == e.Quality.RenderHeight) {e.ReusedBytes=Add(e.ReusedBytes,std::min(e.Cost.RenderTargetBytes-shadowBytes(next),current->Cost.RenderTargetBytes-shadowBytes(old)));}
+            if(!suspended&&current->LocalShadowFaces==e.LocalShadowFaces&&current->LocalShadowResolution==e.LocalShadowResolution){e.ReusedBytes=Add(e.ReusedBytes,oldLocal);}
+            if (!suspended && old.MsaaSamples == next.MsaaSamples && old.PostProcessing == next.PostProcessing && current->Quality.RenderWidth == e.Quality.RenderWidth && current->Quality.RenderHeight == e.Quality.RenderHeight) {e.ReusedBytes=Add(e.ReusedBytes,std::min(e.Cost.RenderTargetBytes-shadowBytes(next)-layout.Bytes(),current->Cost.RenderTargetBytes-shadowBytes(old)-oldLocal));}
             if (current->AssetSignature == e.AssetSignature && old.MsaaSamples == next.MsaaSamples && old.MaxTextureSize == next.MaxTextureSize && old.Anisotropy == next.Anisotropy && old.PostProcessing == next.PostProcessing && old.Lod == next.Lod && old.Compression == next.Compression && old.Pbr == next.Pbr && (old.Shadow != ShadowMode::Off) == (next.Shadow != ShadowMode::Off) && (old.Lighting == LightingMode::Advanced) == (next.Lighting == LightingMode::Advanced)) {e.ReusedBytes=Add(e.ReusedBytes,std::min(e.Cost.TextureBytes,current->Cost.TextureBytes));e.ReusedBytes=Add(e.ReusedBytes,std::min(e.Cost.BufferBytes,current->Cost.BufferBytes));}
         }
         e.AdditionalBytes=e.Cost.TotalBytes-e.ReusedBytes;e.TemporaryPeakBytes=Add(current ? current->Cost.TotalBytes:0,e.AdditionalBytes);

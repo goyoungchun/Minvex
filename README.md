@@ -50,7 +50,7 @@ cmake --install out/build/windows-release --config Release --prefix out/sdk-nati
 ```
 
 ```cmake
-find_package(Minvex 1.20 CONFIG REQUIRED COMPONENTS viewer graphics)
+find_package(Minvex 1.0 CONFIG REQUIRED COMPONENTS viewer graphics)
 add_executable(my_viewer main.cpp)
 target_link_libraries(my_viewer PRIVATE minvex::viewer)
 ```
@@ -65,10 +65,10 @@ cmake --build build
 | 분야                       | 현재 지원 기능                                                                                                                                                |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Asset**                | glTF/GLB, OBJ/MTL, FBX(Static·Skin·Animation·Blend Shape Bake), 검사·재임포트·Hot Reload·비동기 로딩                                                               |
-| **Scene**                | 객체 계층·Transform, 모델 인스턴스 공유, 소켓·부착 노드, Scene v12 저장·불러오기                                                                                                |
+| **Scene**                | 객체 계층·Transform, 모델 인스턴스 공유, 소켓·부착 노드, Scene v13 저장·불러오기                                                                                                |
 | **Mesh**                 | Static/Skeletal Mesh, GPU Skinning, 정점당 최대 4개 Bone 영향                                                                                                   |
 | **Morph**                | Morph Target, GPU Morph, 노드별 독립 Weight, Weight Animation                                                                                                |
-| **Material·Lighting**    | Base Color·Texture·Normal Map, Directional/Point/Spot Light, Basic/PCF/PCSS Shadow, HDR·FXAA                                                            |
+| **Material·Lighting**    | Base Color·Texture·Normal Map, 독립 Ambient·Directional·Point·Spot·LTC Rect Light, Sun Basic/PCF/PCSS·Point/Spot Hard/PCF 그림자, HDR·FXAA                                                            |
 | **PBR**                  | Metallic/Roughness Material·Texture                                                                                                                     |
 | **Camera**               | Perspective/Orthographic, Orbit·Pan·Zoom, 자동 Focus, Bounds Picking                                                                                      |
 | **화면 UI**                | 텍스트·버튼·패널, 시스템/Font 폴더 폰트, 계층·Row/Column/Grid 자동 배치·Fixed/Fill/Hug·scroll/clip, 리치텍스트, UI Undo/Redo, 상태별 디자인, UI Designer·별도 UI 파일                      |
@@ -79,9 +79,9 @@ cmake --build build
 | **Debugging**            | Wireframe, Normal·UV·Depth, Skeleton·Bone Weight, Shadow Map·Blocker·Penumbra·Visibility, Bounding Box, GPU Resource Inspector                          |
 | **Quality**              | Low·Medium·High·Custom, 프로파일 저장·불러오기, 지원 기능 검사·Fallback                                                                                                 |
 | **Hardware·Performance** | CPU/GPU/OS 정보, FPS·Frame Time, 메모리 사용량·예산, 품질 추천                                                                                                        |
-| **Optimization**         | Frustum Culling, Rigid LOD, Static Instancing, Mesh Optimization, BC3, On-Demand Rendering                                                              |
+| **Optimization**         | Frustum Culling, Rigid LOD, Static Instancing, Vertex Cache/Fetch·LOD 배치 최적화, 선택적 Overdraw 최적화, 16비트 GPU index, BC3, On-Demand Rendering                                                              |
 | **SDK**                  | C++20, CMake 설치·연결, Facade API, Result/Error, 공식 예제, CPU-only 구성                                                                                        |
-| **Python**               | CPython 3.12, Viewer·Scene·Pose·Animation·Blend Tree·Additive·Morph·Material·Quality·Event API, Wheel                                                   |
+| **Python**               | CPython 3.12, Viewer·Scene·Lighting·Pose·Animation·Blend Tree·Additive·Morph·Material·Quality·Event API, Wheel                                                   |
 | **Web**                  | WebAssembly·WebGL2 Canvas, JavaScript API, URL·파일·메모리 로딩, Animation·Blend Tree·Additive·Event·Morph·PBR, Context 복구                                     |
 | **Platform**             | Windows x64 / D3D11, macOS Apple Silicon arm64 / Metal (Preview), Browser WebGL2                                                                        |
 

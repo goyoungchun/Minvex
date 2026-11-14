@@ -2,6 +2,8 @@
 #include <minvex/Ui.h>
 namespace lv::detail {
 struct NativeTextUnavailable : std::runtime_error {using std::runtime_error::runtime_error;};
+struct NativeTextContext {virtual ~NativeTextContext()=default;};
+using NativeTextContextSlot=std::unique_ptr<NativeTextContext>;
 inline std::filesystem::path FontPath(const std::filesystem::path& directory,const std::filesystem::path& file) {
     if (file.empty()) {return {};}
     const auto root=std::filesystem::canonical(directory),path=std::filesystem::canonical(root/file);
@@ -22,6 +24,6 @@ inline std::vector<NativeRun> TextRuns(const UiElement& element,const UiColor& c
     }return runs;
 }
 inline bool HasText(const UiElement& e) {if (e.Runs.empty()) {return !e.Text.empty();}for (const auto& r:e.Runs) {if (!r.Text.empty()) {return true;}}return false;}
-std::array<float,2> NativeMeasure(const UiElement& element,const std::filesystem::path& directory,float maxWidth);
-std::vector<std::uint8_t> NativeText(const UiElement& element,const std::filesystem::path& directory,int width,int height,float scale,const UiColor& color);
+std::array<float,2> NativeMeasure(const UiElement& element,const std::filesystem::path& directory,float maxWidth,NativeTextContextSlot* context=nullptr);
+std::vector<std::uint8_t> NativeText(const UiElement& element,const std::filesystem::path& directory,int width,int height,float scale,const UiColor& color,NativeTextContextSlot* context=nullptr);
 }

@@ -162,7 +162,7 @@ void Persistence() {
     const auto path = temp.File("Equipment.mvxscene.json");
     Check(bool(doc.Save(path)), "Scene saves complete modular character");
     const auto saved = nlohmann::json::parse(Read(path));
-    Check(saved["version"] == 12 && saved["sharedSkeletons"].size() == 1, "Scene v12 deduplicates shared skeleton definitions");
+    Check(saved["version"] == 13 && saved["sharedSkeletons"].size() == 1, "Scene v12 deduplicates shared skeleton definitions");
     lv::EditorDocument loaded;
     Check(bool(loaded.Open(path)), "Scene v12 restores complete modular character");
     const auto ids = loaded.GetScene().ObjectIds();

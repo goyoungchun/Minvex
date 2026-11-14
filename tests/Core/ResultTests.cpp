@@ -3,9 +3,11 @@
 #include <cstdio>
 #include <memory>
 #include <type_traits>
+#include <vector>
 
 namespace {
 int checks = 0, failures = 0;
+struct Owned {std::shared_ptr<bool> Alive;std::vector<int> Items{1,2,3};explicit Owned(std::shared_ptr<bool> flag):Alive(std::move(flag)){*Alive=true;}Owned(Owned&&)=default;~Owned(){if(Alive){*Alive=false;}}};
 void Check(bool value, const char* message) {
     ++checks; if (!value) { ++failures; std::fprintf(stderr,"FAIL: %s\n",message); }
 }
@@ -35,6 +37,10 @@ int main() {
     auto moveOnly = lv::Result<std::unique_ptr<int>>::Success(std::make_unique<int>(7));
     auto moved = std::move(moveOnly).Value();
     Check(moved && *moved == 7,"results support move-only values");
+    const auto alive=std::make_shared<bool>(false);
+    {const auto& held=lv::Result<Owned>::Success(Owned(alive)).Value();Check(*alive,"temporary Value extraction owns storage beyond the Result lifetime");if(*alive){Check(held.Items.size()==3,"owned temporary remains readable through a lifetime-extended reference");}}
+    Check(!*alive,"extracted value releases storage when its own lifetime ends");
+    int sum=0;for(int value:lv::Result<std::vector<int>>::Success({1,2,3}).Value()){sum+=value;}Check(sum==6,"range iteration over a temporary Result owns the extracted container");
     auto moveFailure = lv::Result<std::unique_ptr<int>>::Failure(error);
     Check(!moveFailure,"move-only result may fail without constructing a value");
     const auto extracted = lv::Result<int>::Failure(error).Error();

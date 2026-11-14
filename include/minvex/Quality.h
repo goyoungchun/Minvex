@@ -85,6 +85,7 @@ struct QualityCapabilities {
     std::uint64_t RenderTargetBudgetBytes = 256ull * 1024 * 1024;
     bool Bc3Textures=false;
     bool PbrLighting=false;
+    bool RectAreaLighting=false,LocalShadowMapping=false;
 };
 struct QualityAdjustment { std::string Field, Reason; };
 struct QualityState {

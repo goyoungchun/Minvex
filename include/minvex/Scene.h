@@ -34,15 +34,36 @@ struct DirectionalLight {
     void Validate() const;
 };
 inline constexpr std::size_t MaxLocalLights = 8;
+inline constexpr std::size_t MaxRectLights = 4, MaxShadowedLocalLights = 4;
+struct AmbientLight {
+    Vec3 Color{1,1,1};
+    float Intensity=0; // Added to legacy Sun.Ambient; linear RGB, no occlusion/IBL.
+    void Validate() const;
+};
+enum class LocalShadowFilter { Hard, Pcf };
+struct LocalShadowSettings {
+    bool Enabled=false;
+    LocalShadowFilter Filter=LocalShadowFilter::Pcf;
+    float NearPlane=.05f, DepthBias=.005f, SlopeBias=.02f; // World-space bias.
+    void Validate(float range) const;
+};
 struct PointLight {
     Vec3 Position{}, Color{1,1,1};
     float Intensity = 1, Range = 10;
+    LocalShadowSettings Shadow;
     void Validate() const;
 };
 struct SpotLight {
     Vec3 Position{}, Direction{0,-1,0}, Color{1,1,1};
     float Intensity = 1, Range = 10;
     float InnerConeRadians = .35f, OuterConeRadians = .7f;
+    LocalShadowSettings Shadow;
+    void Validate() const;
+};
+struct RectLight {
+    Vec3 Position{},Direction{0,-1,0},Up{0,0,1},Color{1,1,1};
+    float Intensity=1,Width=2,Height=2,Range=10; // Radiance scale; full dimensions.
+    bool TwoSided=false; // LTC area illumination; no Rect shadow mapping.
     void Validate() const;
 };
 
@@ -117,9 +138,12 @@ public:
 
     Camera MainCamera;
     DirectionalLight Sun;
+    AmbientLight Ambient;
+    int LocalShadowResolution=512; // Per face, shared atlas; 128/256/512/1024.
     std::vector<PointLight> PointLights;
     std::vector<SpotLight> SpotLights;
-    void ValidateLighting() const; // At most 8 point+spot lights in total.
+    std::vector<RectLight> RectLights;
+    void ValidateLighting() const; // <=8 local, <=4 rect, <=4 shadowed point/spot.
 
 private:
     friend class EditorDocument; // Private CPU history snapshots preserve object identities.

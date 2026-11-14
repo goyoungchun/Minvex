@@ -50,6 +50,11 @@ Json Local(const Transform& t) {
         {"rotation",Json::array({t.Rotation.X,t.Rotation.Y,t.Rotation.Z,t.Rotation.W})},
         {"scale",Json::array({t.Scale.X,t.Scale.Y,t.Scale.Z})}};
 }
+Json Shadow(const LocalShadowSettings& s) {return {{"enabled",s.Enabled},{"filter",s.Filter==LocalShadowFilter::Hard ? "hard":"pcf"},{"near",s.NearPlane},{"depthBias",s.DepthBias},{"slopeBias",s.SlopeBias}};}
+LocalShadowSettings Shadow(const Json& j) {
+    const auto filter=String(j.at("filter"));Require(filter=="hard"||filter=="pcf","Unknown local shadow filter.");
+    return {j.at("enabled").get<bool>(),filter=="hard" ? LocalShadowFilter::Hard:LocalShadowFilter::Pcf,Float(j.at("near")),Float(j.at("depthBias")),Float(j.at("slopeBias"))};
+}
 Transform Local(const Json& j) {
     const auto& q = j.at("rotation"); Require(q.is_array() && q.size() == 4,"Expected a quaternion.");
     Transform t{Vector(j.at("position")),{Float(q[0]),Float(q[1]),Float(q[2]),Float(q[3])},Vector(j.at("scale"))};
@@ -276,7 +281,7 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
         // Model sources are canonical. Resolve directory aliases (e.g. macOS
         // /var -> /private/var) before computing portable relative references.
         const auto base = std::filesystem::weakly_canonical(std::filesystem::absolute(path).parent_path());
-        Json root{{"format","MinvexScene"},{"version",12},{"assets",Json::array()},{"objects",Json::array()},{"blendTrees",Json::array()},{"sharedSkeletons",Json::array()}};
+        Json root{{"format","MinvexScene"},{"version",13},{"assets",Json::array()},{"objects",Json::array()},{"blendTrees",Json::array()},{"sharedSkeletons",Json::array()}};
         TreeIds trees;
         std::unordered_map<const SharedSkeletonAsset*, std::size_t> skeletons;
         std::unordered_map<const ModelAsset*,std::size_t> assetIds;
@@ -317,8 +322,10 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
         root["camera"] = {{"position",Vector(c.Position)},{"target",Vector(c.Target)},{"up",Vector(c.Up)},
             {"fov",c.VerticalFovRadians},{"near",c.NearPlane},{"far",c.FarPlane},{"projection",c.Projection == CameraProjection::Orthographic ? "orthographic":"perspective"},{"orthographicHeight",c.OrthographicHeight}};
         root["light"] = {{"direction",Vector(l.Direction)},{"color",Vector(l.Color)},{"intensity",l.Intensity},{"ambient",l.Ambient}};
-        root["pointLights"]=Json::array();for (const auto& light:scene.PointLights) {root["pointLights"].push_back({{"position",Vector(light.Position)},{"color",Vector(light.Color)},{"intensity",light.Intensity},{"range",light.Range}});}
-        root["spotLights"]=Json::array();for (const auto& light:scene.SpotLights) {root["spotLights"].push_back({{"position",Vector(light.Position)},{"direction",Vector(light.Direction)},{"color",Vector(light.Color)},{"intensity",light.Intensity},{"range",light.Range},{"inner",light.InnerConeRadians},{"outer",light.OuterConeRadians}});}
+        root["ambientLight"]={{"color",Vector(scene.Ambient.Color)},{"intensity",scene.Ambient.Intensity}};root["localShadowResolution"]=scene.LocalShadowResolution;
+        root["pointLights"]=Json::array();for (const auto& light:scene.PointLights) {root["pointLights"].push_back({{"position",Vector(light.Position)},{"color",Vector(light.Color)},{"intensity",light.Intensity},{"range",light.Range},{"shadow",Shadow(light.Shadow)}});}
+        root["spotLights"]=Json::array();for (const auto& light:scene.SpotLights) {root["spotLights"].push_back({{"position",Vector(light.Position)},{"direction",Vector(light.Direction)},{"color",Vector(light.Color)},{"intensity",light.Intensity},{"range",light.Range},{"inner",light.InnerConeRadians},{"outer",light.OuterConeRadians},{"shadow",Shadow(light.Shadow)}});}
+        root["rectLights"]=Json::array();for (const auto& light:scene.RectLights) {root["rectLights"].push_back({{"position",Vector(light.Position)},{"direction",Vector(light.Direction)},{"up",Vector(light.Up)},{"color",Vector(light.Color)},{"intensity",light.Intensity},{"range",light.Range},{"width",light.Width},{"height",light.Height},{"twoSided",light.TwoSided}});}
         WriteJson(root,path);
         return Result<void>::Success();
     } catch (...) {
@@ -329,7 +336,7 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
 Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry& registry) {
     try {
         const auto root = ReadJson(path); const auto version = UInt(root.at("version"));
-        Require(detail::MatchesDocumentFormat(root.at("format"), "MinvexScene") && (version >= 1 && version <= 12),"Unsupported scene format/version.");
+        Require(detail::MatchesDocumentFormat(root.at("format"), "MinvexScene") && (version >= 1 && version <= 13),"Unsupported scene format/version.");
         const auto& assets = root.at("assets"); const auto& objects = root.at("objects");
         Require(assets.is_array() && assets.size() <= MaxAssets,"Invalid scene asset list.");
         Require(objects.is_array() && objects.size() <= MaxObjects,"Invalid scene object list.");
@@ -376,6 +383,13 @@ Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry&
             const auto& points=root.at("pointLights");const auto& spots=root.at("spotLights");Require(points.is_array() && spots.is_array() && points.size()+spots.size() <= MaxLocalLights,"Invalid local light arrays.");
             for (const auto& p:points) {scene.PointLights.push_back({Vector(p.at("position")),Vector(p.at("color")),Float(p.at("intensity")),Float(p.at("range"))});}
             for (const auto& p:spots) {scene.SpotLights.push_back({Vector(p.at("position")),Vector(p.at("direction")),Vector(p.at("color")),Float(p.at("intensity")),Float(p.at("range")),Float(p.at("inner")),Float(p.at("outer"))});}
+        }
+        if (version>=13) {
+            const auto& ambient=root.at("ambientLight");scene.Ambient={Vector(ambient.at("color")),Float(ambient.at("intensity"))};scene.LocalShadowResolution=static_cast<int>(UInt(root.at("localShadowResolution"),1024));
+            for (std::size_t i=0;i<scene.PointLights.size();++i) {scene.PointLights[i].Shadow=Shadow(root.at("pointLights")[i].at("shadow"));}
+            for (std::size_t i=0;i<scene.SpotLights.size();++i) {scene.SpotLights[i].Shadow=Shadow(root.at("spotLights")[i].at("shadow"));}
+            const auto& rects=root.at("rectLights");Require(rects.is_array()&&rects.size()<=MaxRectLights,"Invalid rectangle light array.");
+            for (const auto& r:rects) {scene.RectLights.push_back({Vector(r.at("position")),Vector(r.at("direction")),Vector(r.at("up")),Vector(r.at("color")),Float(r.at("intensity")),Float(r.at("width")),Float(r.at("height")),Float(r.at("range")),r.at("twoSided").get<bool>()});}
         }
         ValidateScene(scene);
         const auto base = std::filesystem::weakly_canonical(std::filesystem::absolute(path).parent_path());

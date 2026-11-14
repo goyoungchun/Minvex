@@ -23,9 +23,10 @@ QualityCapabilities QueryQualityCapabilities() {
     const auto shadow=sg_query_pixelformat(SG_PIXELFORMAT_R32F),shadowDepth=sg_query_pixelformat(SG_PIXELFORMAT_DEPTH),hdr=sg_query_pixelformat(SG_PIXELFORMAT_RGBA16F);
     caps.ShadowMapping=shadow.render && shadow.sample && shadowDepth.render;
     caps.HdrPostProcessing=hdr.render && hdr.sample && hdr.filter;
+    caps.RectAreaLighting=hdr.sample&&hdr.filter;caps.LocalShadowMapping=caps.ShadowMapping;
     const auto bc3=sg_query_pixelformat(SG_PIXELFORMAT_BC3_RGBA),sbc3=sg_query_pixelformat(SG_PIXELFORMAT_BC3_SRGBA);caps.Bc3Textures=bc3.sample && bc3.filter && sbc3.sample && sbc3.filter;
 #if defined(__EMSCRIPTEN__)
-    caps.Backend=GraphicsBackend::WebGL2;caps.ShadowMapping=false;caps.HdrPostProcessing=false;
+    caps.Backend=GraphicsBackend::WebGL2;caps.ShadowMapping=false;caps.LocalShadowMapping=false;caps.HdrPostProcessing=false;
     caps.Bc3Textures=false;caps.MaxAnisotropy=1;
     GLint renderbufferSize=0;glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE,&renderbufferSize);caps.MaxRenderSize=std::min(caps.MaxRenderSize,renderbufferSize);
 #endif
@@ -53,16 +54,11 @@ QualityCapabilities QueryQualityCapabilities() {
 #endif
     return caps;
 }
-std::uint64_t SceneRenderSignature(const Scene& scene) {
+std::uint64_t SceneGeometrySignature(const Scene& scene) {
     std::uint64_t hash=14695981039346656037ull;
     const auto integer=[&](std::uint64_t value){for (int i=0;i<8;++i) {hash^=(value>>(i*8))&255;hash*=1099511628211ull;}};
     const auto scalar=[&](float value){integer(std::bit_cast<std::uint32_t>(value));};
     const auto vector=[&](Vec3 value){scalar(value.X);scalar(value.Y);scalar(value.Z);};
-    const auto& c=scene.MainCamera;vector(c.Position);vector(c.Target);vector(c.Up);scalar(c.VerticalFovRadians);scalar(c.NearPlane);scalar(c.FarPlane);
-    integer(static_cast<unsigned>(c.Projection));scalar(c.OrthographicHeight);
-    const auto& l=scene.Sun;vector(l.Direction);vector(l.Color);scalar(l.Intensity);scalar(l.Ambient);
-    integer(scene.PointLights.size());for (const auto& light:scene.PointLights) {vector(light.Position);vector(light.Color);scalar(light.Intensity);scalar(light.Range);}
-    integer(scene.SpotLights.size());for (const auto& light:scene.SpotLights) {vector(light.Position);vector(light.Direction);vector(light.Color);scalar(light.Intensity);scalar(light.Range);scalar(light.InnerConeRadians);scalar(light.OuterConeRadians);}
     for (const auto& item:scene.CollectRenderItems()) {
         integer(item.Object);integer(reinterpret_cast<std::uintptr_t>(item.Model.get()));
         if (item.MaterialOverrides) {integer(item.MaterialOverrides->size());for (std::size_t index=0;index<item.Model->Materials.size();++index) {const auto found=item.MaterialOverrides->find(index);if (found == item.MaterialOverrides->end()) {continue;}integer(index);const auto& m=found->second;for (auto value:m.BaseColor) {scalar(value);}scalar(m.AlphaCutoff);scalar(m.NormalScale);scalar(m.MetallicFactor);scalar(m.RoughnessFactor);integer(static_cast<unsigned>(m.Shading));integer(m.Unlit);integer(m.DoubleSided);for (auto texture:{m.BaseColorTexture,m.NormalTexture,m.MetallicRoughnessTexture}) {integer(texture.has_value());integer(texture.value_or(0));}}}
@@ -79,7 +75,23 @@ std::uint64_t SceneRenderSignature(const Scene& scene) {
             for (const auto& joint:item.Animation->Overrides().Joints) {integer(joint.Joint);vector(joint.Local.Position);vector(joint.Local.Scale);const auto& q=joint.Local.Rotation;scalar(q.X);scalar(q.Y);scalar(q.Z);scalar(q.W);}
         }
     } return hash;
+}std::uint64_t SceneRenderSignature(const Scene& scene) {
+    std::uint64_t hash=SceneGeometrySignature(scene);
+    const auto integer=[&](std::uint64_t value){for(int i=0;i<8;++i){hash^=(value>>(i*8))&255;hash*=1099511628211ull;}};
+    const auto scalar=[&](float value){integer(std::bit_cast<std::uint32_t>(value));};
+    const auto vector=[&](Vec3 v){scalar(v.X);scalar(v.Y);scalar(v.Z);};
+    const auto shadow=[&](const LocalShadowSettings& v){integer(v.Enabled);integer(static_cast<unsigned>(v.Filter));scalar(v.NearPlane);scalar(v.DepthBias);scalar(v.SlopeBias);};
+    const auto& c=scene.MainCamera;vector(c.Position);vector(c.Target);vector(c.Up);scalar(c.VerticalFovRadians);scalar(c.NearPlane);scalar(c.FarPlane);
+    integer(static_cast<unsigned>(c.Projection));scalar(c.OrthographicHeight);
+    const auto& l=scene.Sun;vector(l.Direction);vector(l.Color);scalar(l.Intensity);scalar(l.Ambient);
+    integer(scene.PointLights.size());for (const auto& light:scene.PointLights) {vector(light.Position);vector(light.Color);scalar(light.Intensity);scalar(light.Range);}
+    integer(scene.SpotLights.size());for (const auto& light:scene.SpotLights) {vector(light.Position);vector(light.Direction);vector(light.Color);scalar(light.Intensity);scalar(light.Range);scalar(light.InnerConeRadians);scalar(light.OuterConeRadians);}
+    vector(scene.Ambient.Color);scalar(scene.Ambient.Intensity);integer(scene.LocalShadowResolution);
+    for(const auto& v:scene.PointLights){shadow(v.Shadow);}for(const auto& v:scene.SpotLights){shadow(v.Shadow);}
+    integer(scene.RectLights.size());for(const auto& v:scene.RectLights){vector(v.Position);vector(v.Direction);vector(v.Up);vector(v.Color);scalar(v.Intensity);scalar(v.Width);scalar(v.Height);scalar(v.Range);integer(v.TwoSided);}
+    return hash;
 }
+
 bool SceneHasActiveAnimation(const Scene& scene) {
     for (const auto& item : scene.CollectRenderItems()) {
         auto driver = item.Object;

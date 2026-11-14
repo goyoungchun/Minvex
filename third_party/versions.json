@@ -15,9 +15,12 @@
     "version": "v1.3",
     "revisionType": "vendored tag snapshot with per-file SHA-256",
     "license": "MIT (meshoptimizer/LICENSE)",
-    "build": "CMakeLists.txt; selected CPU cache/fetch/simplification sources only",
+    "build": "CMakeLists.txt; selected CPU cache/fetch/overdraw/simplification and software analyzer sources",
     "sha256": {
       "allocator.cpp": "d2cc48691fe2f4c6d097bf7a766389cfb7f83ca14a5f747e3944332656d02254",
+      "indexanalyzer.cpp": "bff37aecb10cefa33f3f6a217413c6ac98899c23e6de5282420c60e6baf786ec",
+      "overdrawoptimizer.cpp": "a70412562f991133ce52b2833adee9de0a9029dc45312ada1eb5c2452dc4f3ee",
+      "rasterizer.cpp": "2172e0ac82359a19f2880763e2088f51b7ec361b23fb54f743b618691967dbe5",
       "indexgenerator.cpp": "f362cdcd8af10016333bf699347a9364335987f413f061e5b7e8cafe3b498948",
       "meshoptimizer.h": "e3688ef553f603391747895a5c221ef1528574cc7f8173782417a96cb531f61b",
       "simplifier.cpp": "719303b6970398631e30724e8eebc6cd2e7e08b67fe8ab7cbf7eecafdaa08616",
@@ -87,5 +90,18 @@
     "license": "MIT or public domain (license notices embedded in stb_image.h)",
     "file": "stb/stb_image.h",
     "sha256": "594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3"
+  },
+  "ltc": {
+    "source": "https://github.com/selfshadow/ltc_code",
+    "revision": "31e5e96b54f98f33098f8503003119ba2231a1c6",
+    "license": "BSD-style with required paper attribution (ltc/LICENSE)",
+    "paper": "Real-Time Polygonal-Light Shading with Linearly Transformed Cosines. Heitz, Dupuy, Hill and Neubelt. ACM TOG 35(4), SIGGRAPH 2016. https://eheitzresearch.wordpress.com/415-2/",
+    "sourceFile": "fit/results/ltc.js",
+    "sourceSha256": "21071160163defd419b8f754ab604a8e60c44fcf539bfff9916e0e8e82316c1d",
+    "build": "LTC lookup tables converted to IEEE binary16; shared 64 KiB GPU textures for rectangle lighting",
+    "sha256": {
+      "Tables.h": "2693a9422484d31eb2d5aa9fc1d9418f2bafcc6e388fd04e798567b5db6912c5",
+      "LICENSE": "692a54e97fcadd0f04b14027386e53809c1dcf96de3e15b15af15731b15c1e94"
+    }
   }
 }

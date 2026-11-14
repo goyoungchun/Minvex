@@ -1,9 +1,13 @@
 #include "renderer/SceneRenderer.h"
+#include "optimization/IndexPacking.h"
+#include <cstring>
 
 #include "renderer/MeshRenderer.h"
 #include "renderer/TextureData.h"
 #include "telemetry/ResourceSignature.h"
 #include "DebugResources.h"
+#include "LightMath.h"
+#include "../../third_party/ltc/Tables.h"
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +25,19 @@ sg_wrap Wrap(TextureWrap mode) {
 }
 
 } // namespace
+
+struct SceneRenderer::AreaLookup {
+    sg_image Matrix{},Amplitude{};sg_view MatrixView{},AmplitudeView{};sg_sampler Sampler{};
+    AreaLookup() {
+        try {
+            sg_image_desc d{};d.width=d.height=64;d.pixel_format=SG_PIXELFORMAT_RGBA16F;d.label="rect-ltc-matrix";d.data={LtcMatrix,sizeof(LtcMatrix)};Matrix=sg_make_image(d);d.label="rect-ltc-amplitude";d.data={LtcAmplitude,sizeof(LtcAmplitude)};Amplitude=sg_make_image(d);
+            sg_view_desc v{};v.texture.image=Matrix;MatrixView=sg_make_view(v);v.texture.image=Amplitude;AmplitudeView=sg_make_view(v);sg_sampler_desc s{};s.min_filter=s.mag_filter=SG_FILTER_LINEAR;s.wrap_u=s.wrap_v=SG_WRAP_CLAMP_TO_EDGE;Sampler=sg_make_sampler(s);
+            if (sg_query_image_state(Matrix)!=SG_RESOURCESTATE_VALID||sg_query_image_state(Amplitude)!=SG_RESOURCESTATE_VALID||sg_query_view_state(MatrixView)!=SG_RESOURCESTATE_VALID||sg_query_view_state(AmplitudeView)!=SG_RESOURCESTATE_VALID||sg_query_sampler_state(Sampler)!=SG_RESOURCESTATE_VALID) {throw std::runtime_error("Rectangle lights require sampleable/filterable RGBA16F lookup textures.");}
+        }catch (...) {Destroy();throw;}
+    }
+    void Destroy() noexcept {sg_destroy_view(MatrixView);sg_destroy_view(AmplitudeView);sg_destroy_image(Matrix);sg_destroy_image(Amplitude);sg_destroy_sampler(Sampler);}
+    ~AreaLookup() {Destroy();}
+};
 
 struct SceneRenderer::GpuModel {
     ModelHandle Asset;
@@ -44,7 +61,7 @@ struct SceneRenderer::GpuModel {
         }
     }
 
-    void Upload(ModelHandle asset,const RenderSettings& settings) {
+    void Upload(ModelHandle asset,const RenderSettings& settings,bool extendedLighting) {
         Asset=std::move(asset);Meshes.resize(Asset->Meshes.size());MeshBounds.resize(Asset->Meshes.size());MorphBounds.resize(Asset->Meshes.size());
         Images.resize(Asset->Images.size()*2);Samplers.resize(Asset->Textures.size());
         for (const auto& part:Asset->Parts) {
@@ -52,9 +69,9 @@ struct SceneRenderer::GpuModel {
             for (const auto& primitive:Asset->Meshes.at(part.MeshIndex).Primitives) {
                 for (const auto& v:primitive.Geometry.Vertices) {const Vec3 p{v.Position[0],v.Position[1],v.Position[2]};auto& b=MeshBounds[part.MeshIndex];if (first) {b={p,p};first=false;}b.Min={std::min(b.Min.X,p.X),std::min(b.Min.Y,p.Y),std::min(b.Min.Z,p.Z)};b.Max={std::max(b.Max.X,p.X),std::max(b.Max.Y,p.Y),std::max(b.Max.Z,p.Z)};}
                 const auto& material=Asset->Materials.at(primitive.MaterialIndex);auto renderer=std::make_unique<MeshRenderer>();
-                renderer->Initialize(primitive.Geometry,material.DoubleSided,primitive.HasSkinning,settings.MsaaSamples,settings.PostProcessing ? SG_PIXELFORMAT_RGBA16F:SG_PIXELFORMAT_NONE,settings.Shadow!=ShadowMode::Off,settings.Lod ? std::span<const MeshLod>(primitive.Lods):std::span<const MeshLod>{},primitive.MorphTargets,&primitive);
-                BufferBytes+=primitive.Geometry.Vertices.size()*sizeof(Vertex)+primitive.Geometry.Indices.size()*sizeof(std::uint32_t);
-                if (settings.Lod) {for (const auto& level:primitive.Lods) {BufferBytes+=level.Indices.size()*sizeof(std::uint32_t);}}
+                renderer->Initialize(primitive.Geometry,material.DoubleSided,primitive.HasSkinning,settings.MsaaSamples,settings.PostProcessing ? SG_PIXELFORMAT_RGBA16F:SG_PIXELFORMAT_NONE,settings.Shadow!=ShadowMode::Off,settings.Lod ? std::span<const MeshLod>(primitive.Lods):std::span<const MeshLod>{},primitive.MorphTargets,&primitive,extendedLighting);
+                BufferBytes+=primitive.Geometry.Vertices.size()*sizeof(Vertex)+primitive.Geometry.Indices.size()*IndexElementBytes(primitive.Geometry.Vertices.size());
+                if (settings.Lod) {for (const auto& level:primitive.Lods) {BufferBytes+=level.Indices.size()*IndexElementBytes(primitive.Geometry.Vertices.size());}}
                 if (!primitive.MorphTargets.empty()) {
 #if !defined(__EMSCRIPTEN__)
                     BufferBytes+=primitive.Geometry.Vertices.size()*primitive.MorphTargets.size()*48;
@@ -100,7 +117,7 @@ auto& bounds=MorphBounds[part.MeshIndex];bounds.resize(primitive.MorphTargets.si
 };
 
 struct SceneRenderer::Batch {
-    std::vector<Mat4> Transforms;sg_buffer Buffer{};bool Drawn=false;
+    std::vector<Mat4> Transforms,Uploaded;sg_buffer Buffer{};bool Drawn=false;
     ~Batch() {if (Buffer.id && sg_isvalid()) {sg_destroy_buffer(Buffer);}}
 };
 SceneRenderer::SceneRenderer(RenderSettings settings) : settings_(settings) {}
@@ -114,40 +131,54 @@ unsigned SceneRenderer::Lod(const Scene& scene,const Bounds& b,const Mat4& world
     const float pixels=c.Projection == CameraProjection::Orthographic ? 2*radius*height_/c.OrthographicHeight:radius*height_/(std::tan(c.VerticalFovRadians*.5f)*distance);return std::isfinite(pixels) ? SelectMeshLod(pixels,settings_.LodBias,levels):0;
 }
 void SceneRenderer::PrepareBatches(const Scene& scene) {
-    batches_.clear();stats_.Optimization={};if (!settings_.Instancing || debug_.View == DebugView::Wireframe || (!viewportKnown_ && settings_.FrustumCulling)) {return;}
+    stats_.Optimization={};if (!settings_.Instancing || debug_.View == DebugView::Wireframe || (!viewportKnown_ && settings_.FrustumCulling)) {batches_.clear();return;}
+    for (auto& [key,batch]:batches_) {(void)key;batch->Transforms.clear();batch->Drawn=false;}
     const auto vp=scene.MainCamera.ViewProjection(aspect_);
-    for (const auto& item:scene.CollectRenderItems()) {if ((item.MaterialOverrides && !item.MaterialOverrides->empty()) || bool(item.Pose)) {continue;}auto& model=*models_.at(item.Model.get());
+    for (const auto& item:items_) {if ((item.MaterialOverrides && !item.MaterialOverrides->empty()) || bool(item.Pose)) {continue;}auto& model=*models_.at(item.Model.get());
         for (const auto& part:item.Model->Parts) {if (part.SkinIndex) {continue;}const auto transform=item.WorldTransform*part.Transform;(void)transform.NormalMatrix();const bool visible=!settings_.FrustumCulling || IntersectsFrustum(model.MeshBounds[part.MeshIndex],transform,vp);
-            for (std::size_t i=0;i<item.Model->Meshes[part.MeshIndex].Primitives.size();++i) {const auto& primitive=item.Model->Meshes[part.MeshIndex].Primitives[i];if (primitive.HasSkinning) {continue;}auto* mesh=model.Meshes[part.MeshIndex][i].get();
+            for (std::size_t i=0;i<item.Model->Meshes[part.MeshIndex].Primitives.size();++i) {const auto& primitive=item.Model->Meshes[part.MeshIndex].Primitives[i];if (primitive.HasSkinning||!primitive.MorphTargets.empty()) {continue;}auto* mesh=model.Meshes[part.MeshIndex][i].get();
                 const auto append=[&](bool shadow,unsigned lod) {BatchKey key{mesh,lod,transform.LinearDeterminant()<0,shadow};auto& group=batches_[key];if (!group) {group=std::make_unique<Batch>();}group->Transforms.push_back(transform);};
                 if (visible && debug_.View != DebugView::ShadowMap) {append(false,Lod(scene,model.MeshBounds[part.MeshIndex],transform,primitive.Lods.size()));}if (settings_.Shadow != ShadowMode::Off) {append(true,0);}
             }
         }
     }
     std::erase_if(batches_,[](const auto& entry) {return entry.second->Transforms.size()<2;});
-    for (auto& [key,batch]:batches_) {key.Mesh->PrepareInstances();sg_buffer_desc b{};b.data={batch->Transforms.data(),batch->Transforms.size()*sizeof(Mat4)};b.label="static-instance-transforms";batch->Buffer=sg_make_buffer(b);if (sg_query_buffer_state(batch->Buffer) != SG_RESOURCESTATE_VALID) {throw std::runtime_error("Cannot upload static instance batch.");}stats_.Optimization.InstanceBufferBytes+=b.data.size;}
+    for (auto& [key,batch]:batches_) {
+        key.Mesh->PrepareInstances();const auto bytes=batch->Transforms.size()*sizeof(Mat4);
+        if (!batch->Buffer.id||batch->Uploaded.size()!=batch->Transforms.size()||std::memcmp(batch->Uploaded.data(),batch->Transforms.data(),bytes)!=0) {
+            sg_buffer_desc b{};b.data={batch->Transforms.data(),bytes};b.label="static-instance-transforms";const auto candidate=sg_make_buffer(b);
+            if (sg_query_buffer_state(candidate)!=SG_RESOURCESTATE_VALID) {sg_destroy_buffer(candidate);throw std::runtime_error("Cannot upload static instance batch.");}
+            sg_destroy_buffer(batch->Buffer);batch->Buffer=candidate;batch->Uploaded=batch->Transforms;
+        }
+        stats_.Optimization.InstanceBufferBytes+=bytes;
+    }
 }
 
 void SceneRenderer::Prepare(const Scene& scene) {
+    items_=scene.CollectRenderItems();
     scene.ValidateLighting();
-    if (!sg_isvalid()) { throw std::logic_error("Initialize Sokol GFX before preparing a Scene."); }
+    if (!sg_isvalid()) {throw std::logic_error("Initialize Sokol GFX before preparing a Scene.");}
+    const bool extended=settings_.Lighting==LightingMode::Advanced&&(!scene.RectLights.empty()||(settings_.Shadow!=ShadowMode::Off&&(std::any_of(scene.PointLights.begin(),scene.PointLights.end(),[](const auto& l){return l.Shadow.Enabled&&l.Intensity>0;})||std::any_of(scene.SpotLights.begin(),scene.SpotLights.end(),[](const auto& l){return l.Shadow.Enabled&&l.Intensity>0;}))));
+    if(extended!=extendedLighting_){batches_.clear();models_.clear();extendedLighting_=extended;}
+    if (settings_.Lighting==LightingMode::Advanced&&!scene.RectLights.empty()) {if (!area_) {area_=std::make_unique<AreaLookup>();}}else {area_.reset();}
+
     std::unordered_set<const ModelAsset*> needed;
     std::uint64_t signature=14695981039346656037ull;
-    for (const auto& item : scene.CollectRenderItems()) {
+    for (const auto& item : items_) {
         if (needed.insert(item.Model.get()).second) {HashResourceIdentity(signature,item.Model.get());}
         if (!models_.contains(item.Model.get())) {
             auto model = std::make_unique<GpuModel>();
-            model->Upload(item.Model,settings_);
+            model->Upload(item.Model,settings_,extendedLighting_);
             models_.emplace(item.Model.get(), std::move(model));
         }
     }
     std::erase_if(models_, [&needed](const auto& entry) { return !needed.contains(entry.first); });
     for (auto& [key,model]:models_) {(void)key;model->BeginMaterials();}
-    for (const auto& item:scene.CollectRenderItems()) {auto& gpu=*models_.at(item.Model.get());for (const auto& part:item.Model->Parts) {for (std::size_t i=0;i<item.Model->Meshes[part.MeshIndex].Primitives.size();++i) {const auto& primitive=item.Model->Meshes[part.MeshIndex].Primitives[i];const auto& material=scene.GetMaterial(item.Object,primitive.MaterialIndex);gpu.UseMaterial(material,settings_);if (material.DoubleSided) {gpu.Meshes[part.MeshIndex][i]->PrepareDoubleSided();}}}}
+    for (const auto& item:items_) {auto& gpu=*models_.at(item.Model.get());for (const auto& part:item.Model->Parts) {for (std::size_t i=0;i<item.Model->Meshes[part.MeshIndex].Primitives.size();++i) {const auto& primitive=item.Model->Meshes[part.MeshIndex].Primitives[i];const auto& material=scene.GetMaterial(item.Object,primitive.MaterialIndex);gpu.UseMaterial(material,settings_);if (material.DoubleSided) {gpu.Meshes[part.MeshIndex][i]->PrepareDoubleSided();}}}}
     for (auto& [key,model]:models_) {(void)key;model->EndMaterials();}
     if (debug_.View == DebugView::Wireframe) {for (auto& [key,model]:models_) {(void)key;for (std::size_t i=0;i<model->Meshes.size();++i) {for (std::size_t p=0;p<model->Meshes[i].size();++p) {model->Meshes[i][p]->PrepareWireframe(model->Asset->Meshes[i].Primitives[p].Geometry);}}}}
     stats_.ResidentModels = models_.size();
-    HashMaterialResources(signature,scene);stats_.ResidentAssetSignature=signature;
+    HashMaterialResources(signature,scene);HashLightAllocations(signature,scene,settings_.Lighting==LightingMode::Advanced,settings_.Shadow!=ShadowMode::Off);stats_.ResidentAssetSignature=signature;
     stats_.ResidentPrimitives = stats_.ResidentImages = 0;
     stats_.MaxResidentTextureSize=0;
     stats_.LogicalTextureBytes=stats_.LogicalBufferBytes=0;
@@ -158,18 +189,19 @@ void SceneRenderer::Prepare(const Scene& scene) {
         for (const auto& image : model->Images) { if (image.Image.id) { ++stats_.ResidentImages;stats_.MaxResidentTextureSize=std::max(stats_.MaxResidentTextureSize,image.Size); } }
     }
 #if defined(__EMSCRIPTEN__)
-    std::vector<ObjectId> live;for (const auto& item:scene.CollectRenderItems()) {live.push_back(item.Object);}
+    std::vector<ObjectId> live;for (const auto& item:items_) {live.push_back(item.Object);}
     for (auto& [key,model]:models_) {(void)key;for (auto& mesh:model->Meshes) {for (auto& renderer:mesh) {renderer->PruneWebMorph(live);stats_.LogicalBufferBytes+=renderer->WebMorphBytes();}}}
 #endif
+    if (area_) {stats_.LogicalTextureBytes+=65536;}
     PrepareBatches(scene);
 }
 
 void SceneRenderer::Draw(const Scene& scene,float aspect,const ShadowSampling& shadow) {stats_.LastWireLines=0;DrawImpl(scene,scene.MainCamera.ViewProjection(aspect),false,shadow);}
-void SceneRenderer::DrawShadow(const Scene& scene,const Mat4& matrix) {DrawImpl(scene,matrix,true,{});}
-void SceneRenderer::DrawImpl(const Scene& scene,const Mat4& viewProjection,bool shadowPass,const ShadowSampling& shadow) {
+void SceneRenderer::DrawShadow(const Scene& scene,const Mat4& matrix,ShaderVec4 radial,bool append) {if (!append) {stats_.LastShadowDrawCalls=stats_.LastShadowTriangles=0;}for (auto& [key,batch]:batches_) {if(key.Shadow){batch->Drawn=false;}}DrawImpl(scene,matrix,true,{},radial);}
+void SceneRenderer::DrawImpl(const Scene& scene,const Mat4& viewProjection,bool shadowPass,const ShadowSampling& shadow,ShaderVec4 radial) {
     scene.ValidateLighting();
-    if (shadowPass) {stats_.LastShadowDrawCalls=stats_.LastShadowTriangles=0;}else {stats_.LastDrawCalls=0;stats_.LastCulledParts=0;stats_.LastTriangles=0;if (settings_.Shadow == ShadowMode::Off) {stats_.LastShadowDrawCalls=stats_.LastShadowTriangles=0;}}
-    for (const auto& item : scene.CollectRenderItems()) {
+    if (!shadowPass) {stats_.LastDrawCalls=0;stats_.LastCulledParts=0;stats_.LastTriangles=0;if (settings_.Shadow == ShadowMode::Off) {stats_.LastShadowDrawCalls=stats_.LastShadowTriangles=0;}}
+    for (const auto& item : items_) {
         const auto found = models_.find(item.Model.get());
         if (found == models_.end()) { throw std::logic_error("Call SceneRenderer::Prepare after changing visible model instances."); }
         const auto& model = *found->second;
@@ -190,7 +222,7 @@ void SceneRenderer::DrawImpl(const Scene& scene,const Mat4& viewProjection,bool 
                 // joint palette. Apply the Scene instance transform exactly once.
                 transform = item.WorldTransform;
             }
-            if (!shadowPass && settings_.FrustumCulling) {
+            if ((!shadowPass && settings_.FrustumCulling)||(shadowPass && radial.W>0)) {
                 bool visible=IntersectsFrustum(meshBounds,transform,viewProjection);
                 if (part.SkinIndex) {
                     Bounds combined;bool first=true;const auto& b=meshBounds;
@@ -214,9 +246,10 @@ void SceneRenderer::DrawImpl(const Scene& scene,const Mat4& viewProjection,bool 
                     texture = model.Images.at(item.Model->Textures.at(index).ImageIndex).View;
                     sampler = model.Samplers.at(index);
                 }
-                if (shadowPass) {auto* renderer=model.Meshes.at(part.MeshIndex).at(i).get();MeshLighting instances;instances.MorphWeights=weights;auto drawTransform=transform;std::size_t count=1;const auto group=batches_.find({renderer,0,transform.LinearDeterminant()<0,true});const bool eligible=(!item.MaterialOverrides || item.MaterialOverrides->empty()) && !mesh.Primitives[i].HasSkinning && !item.Pose;if (eligible && group != batches_.end()) {auto& batch=*group->second;if (batch.Drawn) {continue;}batch.Drawn=true;count=batch.Transforms.size();instances.Instances=batch.Buffer;instances.InstanceCount=static_cast<int>(count);instances.Mirrored=transform.LinearDeterminant()<0;drawTransform=Mat4::Identity();++stats_.Optimization.InstanceDraws;stats_.Optimization.SavedDrawCalls+=count-1;}renderer->DrawShadow(drawTransform,viewProjection,material,texture,sampler,palette,instances);++stats_.LastShadowDrawCalls;stats_.LastShadowTriangles+=mesh.Primitives[i].Geometry.Indices.size()/3*count;}
+                if (shadowPass) {auto* renderer=model.Meshes.at(part.MeshIndex).at(i).get();MeshLighting instances;instances.MorphWeights=weights;auto drawTransform=transform;std::size_t count=1;const auto group=batches_.find({renderer,0,transform.LinearDeterminant()<0,true});const bool eligible=(!item.MaterialOverrides || item.MaterialOverrides->empty()) && !mesh.Primitives[i].HasSkinning && !item.Pose;if (eligible && group != batches_.end()) {auto& batch=*group->second;if (batch.Drawn) {continue;}batch.Drawn=true;count=batch.Transforms.size();instances.Instances=batch.Buffer;instances.InstanceCount=static_cast<int>(count);instances.Mirrored=transform.LinearDeterminant()<0;drawTransform=Mat4::Identity();++stats_.Optimization.InstanceDraws;stats_.Optimization.SavedDrawCalls+=count-1;}renderer->DrawShadow(drawTransform,viewProjection,material,texture,sampler,palette,instances,radial);++stats_.LastShadowDrawCalls;stats_.LastShadowTriangles+=mesh.Primitives[i].Geometry.Indices.size()/3*count;}
                 else {
-                    MeshLighting lighting;lighting.MorphWeights=weights;lighting.Object=item.Object;lighting.Node=part.Node;lighting.Advanced=settings_.Lighting == LightingMode::Advanced;lighting.Points=scene.PointLights;lighting.Spots=scene.SpotLights;lighting.Shadow=&shadow;
+                    MeshLighting lighting;lighting.MorphWeights=weights;lighting.Object=item.Object;lighting.Node=part.Node;lighting.Advanced=settings_.Lighting == LightingMode::Advanced;lighting.Points=scene.PointLights;lighting.Spots=scene.SpotLights;lighting.Rects=scene.RectLights;lighting.Ambient=scene.Ambient;lighting.Shadow=&shadow;
+                    if (area_) {lighting.LtcMatrix=area_->MatrixView;lighting.LtcAmplitude=area_->AmplitudeView;lighting.LtcSampler=area_->Sampler;}
                     lighting.Debug=debug_;lighting.NearPlane=scene.MainCamera.NearPlane;lighting.FarPlane=scene.MainCamera.FarPlane;
                     lighting.Orthographic=scene.MainCamera.Projection == CameraProjection::Orthographic;lighting.Pbr=settings_.Pbr && lighting.Advanced;lighting.Eye=scene.MainCamera.Position;
                     lighting.ViewDirection={scene.MainCamera.Position.X-scene.MainCamera.Target.X,scene.MainCamera.Position.Y-scene.MainCamera.Target.Y,scene.MainCamera.Position.Z-scene.MainCamera.Target.Z};
@@ -239,7 +272,7 @@ Mat4 SceneRenderer::ShadowViewProjection(const Scene& scene,Vec3* extent) const 
     if (extent) {*extent={1,1,1};}
     Bounds world;bool first=true;
     const auto add=[&](Vec3 p) {if (first) {world={p,p};first=false;}world.Min={std::min(world.Min.X,p.X),std::min(world.Min.Y,p.Y),std::min(world.Min.Z,p.Z)};world.Max={std::max(world.Max.X,p.X),std::max(world.Max.Y,p.Y),std::max(world.Max.Z,p.Z)};};
-    for (const auto& item:scene.CollectRenderItems()) {
+    for (const auto& item:items_) {
         const auto found=models_.find(item.Model.get());if (found == models_.end()) {continue;}
         const auto& pose = item.Pose;
         for (const auto& part:item.Model->Parts) {
@@ -261,7 +294,7 @@ Mat4 SceneRenderer::ShadowViewProjection(const Scene& scene,Vec3* extent) const 
     Mat4 projection=Mat4::Identity();projection.Elements[0]=2/(right-left);projection.Elements[5]=2/(top-bottom);projection.Elements[10]=1/(near-far);projection.Elements[12]=-(right+left)/(right-left);projection.Elements[13]=-(top+bottom)/(top-bottom);projection.Elements[14]=near/(near-far);
     return projection*view;
 }
-void SceneRenderer::Clear() noexcept {batches_.clear();models_.clear(); stats_ = {}; }
-void SceneRenderer::Inspect(std::vector<DebugResource>& r) const {for (const auto& [key,model]:models_) {(void)key;for (const auto& mesh:model->Meshes) {for (const auto& p:mesh) {p->Inspect(r);}}for (const auto& image:model->Images) {InspectImage(r,image.Image,"Asset texture (base/normal)");}}for (const auto& [key,batch]:batches_) {(void)key;InspectBuffer(r,batch->Buffer,"Static instance transforms");}}
+void SceneRenderer::Clear() noexcept {area_.reset();items_.clear();batches_.clear();models_.clear(); stats_ = {}; }
+void SceneRenderer::Inspect(std::vector<DebugResource>& r) const {if(area_){InspectImage(r,area_->Matrix,"Rect LTC matrix");InspectImage(r,area_->Amplitude,"Rect LTC amplitude");}for (const auto& [key,model]:models_) {(void)key;for (const auto& mesh:model->Meshes) {for (const auto& p:mesh) {p->Inspect(r);}}for (const auto& image:model->Images) {InspectImage(r,image.Image,"Asset texture (base/normal)");}}for (const auto& [key,batch]:batches_) {(void)key;InspectBuffer(r,batch->Buffer,"Static instance transforms");}}
 
 } // namespace lv::detail

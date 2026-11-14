@@ -34,6 +34,36 @@ class BindingTests(unittest.TestCase):
         self.assertIsInstance(raised.exception.hint, str)
         return raised.exception
 
+    def test_lighting_state_and_archive(self):
+        with mvx.Viewer() as viewer, tempfile.TemporaryDirectory() as directory:
+            scene = viewer.scene
+            ambient = mvx.AmbientLight()
+            ambient.color, ambient.intensity = mvx.Vec3(.2, .4, 1), .5
+            scene.ambient = ambient
+            ambient.intensity = 2
+            self.assertAlmostEqual(scene.ambient.intensity, .5)
+            point, spot, rect = mvx.PointLight(), mvx.SpotLight(), mvx.RectLight()
+            point.shadow.enabled = True
+            scene.point_lights, scene.spot_lights, scene.rect_lights = [point], [spot], [rect]
+            point.intensity = 100
+            self.assertEqual(scene.point_lights[0].intensity, 1)
+            bad = mvx.RectLight()
+            bad.width = 0
+            self.error(mvx.ErrorCode.InvalidArgument, lambda: setattr(scene, "rect_lights", [bad]))
+            self.assertEqual(len(scene.rect_lights), 1)
+            self.error(mvx.ErrorCode.InvalidArgument, lambda: setattr(scene, "point_lights", [point] * 7))
+            self.assertEqual(len(scene.point_lights), 1)
+            scene.local_shadow_resolution = 256
+            self.error(mvx.ErrorCode.InvalidArgument, lambda: setattr(scene, "local_shadow_resolution", 777))
+            path = Path(directory) / "Lighting.mvxscene.json"
+            scene.save(path)
+            self.assertEqual(json.loads(path.read_text())["version"], 13)
+            scene.rect_lights = []
+            scene.load(path)
+            self.assertEqual(scene.local_shadow_resolution, 256)
+            self.assertTrue(scene.point_lights[0].shadow.enabled)
+            self.assertEqual(len(scene.rect_lights), 1)
+
     def test_scene_material_and_unicode(self):
         with tempfile.TemporaryDirectory(prefix="minvex 한글 ") as folder:
             path = Path(folder) / "모델.glb"

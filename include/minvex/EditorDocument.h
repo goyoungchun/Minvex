@@ -56,7 +56,10 @@ public:
     Result<void> ClearMorphWeights(ObjectId object, JointId node);
     Result<void> SetCamera(const Camera& camera);
     Result<void> SetLight(const DirectionalLight& light);
+    Result<void> SetAmbientLight(const AmbientLight& light);
+    Result<void> SetLocalShadowResolution(int resolution);
     Result<void> SetLocalLights(std::vector<PointLight> points,std::vector<SpotLight> spots);
+    Result<void> SetLocalLights(std::vector<PointLight> points,std::vector<SpotLight> spots,std::vector<RectLight> rects);
     Result<void> PlayAnimation(ObjectId object, std::size_t clip);
     Result<void> CrossFadeAnimation(ObjectId object, std::size_t clip, double durationSeconds = .3);
     Result<void> PlayBlendTree(ObjectId object, BlendTreeHandle tree, bool restart = true);

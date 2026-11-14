@@ -9,6 +9,7 @@ namespace lv::detail {
 class GraphicsTelemetry;
 class DebugRenderer;
 class UiRenderer;
+class LocalShadowAtlas;
 class RenderSurface final {
 public:
     RenderSurface();
@@ -49,6 +50,7 @@ private:
     std::unique_ptr<Presenter> presenter_;
     std::unique_ptr<SceneRenderer> renderer_;
     std::unique_ptr<ShadowTargets> shadow_;
+    std::unique_ptr<LocalShadowAtlas> localShadow_;
     std::unique_ptr<GraphicsTelemetry> telemetry_;
     std::unique_ptr<DebugRenderer> debugRenderer_;
     std::unique_ptr<DebugPreview> debugPreview_;

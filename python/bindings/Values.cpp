@@ -68,6 +68,12 @@ void BindValues(py::module_& m) {
         .def_readwrite("color",&lv::DirectionalLight::Color)
         .def_readwrite("intensity",&lv::DirectionalLight::Intensity)
         .def_readwrite("ambient",&lv::DirectionalLight::Ambient);
+    py::enum_<lv::LocalShadowFilter>(m,"LocalShadowFilter").value("Hard",lv::LocalShadowFilter::Hard).value("Pcf",lv::LocalShadowFilter::Pcf);
+    py::class_<lv::AmbientLight>(m,"AmbientLight").def(py::init<>()).def_readwrite("color",&lv::AmbientLight::Color).def_readwrite("intensity",&lv::AmbientLight::Intensity);
+    py::class_<lv::LocalShadowSettings>(m,"LocalShadowSettings").def(py::init<>()).def_readwrite("enabled",&lv::LocalShadowSettings::Enabled).def_readwrite("filter",&lv::LocalShadowSettings::Filter).def_readwrite("near_plane",&lv::LocalShadowSettings::NearPlane).def_readwrite("depth_bias",&lv::LocalShadowSettings::DepthBias).def_readwrite("slope_bias",&lv::LocalShadowSettings::SlopeBias);
+    py::class_<lv::PointLight>(m,"PointLight").def(py::init<>()).def_readwrite("position",&lv::PointLight::Position).def_readwrite("color",&lv::PointLight::Color).def_readwrite("intensity",&lv::PointLight::Intensity).def_readwrite("range",&lv::PointLight::Range).def_readwrite("shadow",&lv::PointLight::Shadow);
+    py::class_<lv::SpotLight>(m,"SpotLight").def(py::init<>()).def_readwrite("position",&lv::SpotLight::Position).def_readwrite("direction",&lv::SpotLight::Direction).def_readwrite("color",&lv::SpotLight::Color).def_readwrite("intensity",&lv::SpotLight::Intensity).def_readwrite("range",&lv::SpotLight::Range).def_readwrite("inner_cone_radians",&lv::SpotLight::InnerConeRadians).def_readwrite("outer_cone_radians",&lv::SpotLight::OuterConeRadians).def_readwrite("shadow",&lv::SpotLight::Shadow);
+    py::class_<lv::RectLight>(m,"RectLight").def(py::init<>()).def_readwrite("position",&lv::RectLight::Position).def_readwrite("direction",&lv::RectLight::Direction).def_readwrite("up",&lv::RectLight::Up).def_readwrite("color",&lv::RectLight::Color).def_readwrite("intensity",&lv::RectLight::Intensity).def_readwrite("range",&lv::RectLight::Range).def_readwrite("width",&lv::RectLight::Width).def_readwrite("height",&lv::RectLight::Height).def_readwrite("two_sided",&lv::RectLight::TwoSided);
     py::class_<lv::QualityOverrides>(m,"QualityOverrides").def(py::init<>())
         .def_readwrite("resolution",&lv::QualityOverrides::Resolution)
         .def_readwrite("resolution_scale",&lv::QualityOverrides::ResolutionScale)
@@ -135,7 +141,9 @@ void BindValues(py::module_& m) {
         .def_readonly("hdr_sample_counts",&lv::QualityCapabilities::HdrSampleCounts)
         .def_readonly("render_target_budget_bytes",&lv::QualityCapabilities::RenderTargetBudgetBytes)
         .def_readonly("bc3_textures",&lv::QualityCapabilities::Bc3Textures)
-        .def_readonly("pbr_lighting",&lv::QualityCapabilities::PbrLighting);
+        .def_readonly("pbr_lighting",&lv::QualityCapabilities::PbrLighting)
+        .def_readonly("rect_area_lighting",&lv::QualityCapabilities::RectAreaLighting)
+        .def_readonly("local_shadow_mapping",&lv::QualityCapabilities::LocalShadowMapping);
     py::class_<lv::QualityProfile>(m,"QualityProfile").def(py::init<>())
         .def_readwrite("name",&lv::QualityProfile::Name)
         .def_readwrite("base",&lv::QualityProfile::Base)

@@ -1,0 +1,48 @@
+name: Minvex release candidate
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Source version to verify
+        required: true
+        default: '1.0.0'
+permissions:
+  contents: read
+jobs:
+  sdk:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify release metadata and vendored sources
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: cmake "-DEXPECTED_VERSION=$env:EXPECTED_VERSION" -P cmake/VerifyReleaseVersion.cmake
+        shell: pwsh
+      - name: Configure the official SDK architecture
+        shell: pwsh
+        run: |
+          $options = @('-S', '.', '-B', 'out/release', '-DBUILD_TESTING=ON', '-DCMAKE_BUILD_TYPE=Release')
+          if ($IsMacOS) {
+            if ((uname -m) -ne 'arm64') { throw 'Official macOS SDK requires an Apple Silicon host.' }
+            $options += '-DCMAKE_OSX_ARCHITECTURES=arm64'
+          } else { $options += @('-A', 'x64') }
+          cmake @options
+          exit $LASTEXITCODE
+      - name: Build SDK and shaders
+        run: cmake --build out/release --config Release --parallel 4
+      - name: Run CPU contracts
+        run: ctest --test-dir out/release -C Release --output-on-failure --output-junit release-cpu.xml
+      - name: Verify real archive, relocation and consumers
+        run: cmake -DBUILD_DIR=out/release -DCONFIG=Release -DPACKAGE=ON -P cmake/VerifySdk.cmake
+      - name: Retain candidate SDKs and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: Minvex-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}-candidate
+          path: |
+            out/release/sdk-check-*/packages/*
+            out/release/release-cpu.xml
+          if-no-files-found: error

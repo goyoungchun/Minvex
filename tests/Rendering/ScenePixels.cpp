@@ -366,7 +366,8 @@ void RunEnhancements() {
     scene.SpotLights.clear();scene.Sun.Intensity=1;scene.Sun.Direction={.6f,0,-1};auto caster=EnhancementPlane(.25f);lv::Transform placed;placed.Position={-.4f,0,.7f};const auto casterId=scene.AddModel(caster,placed);
     auto unshadowed=render();p.Overrides.Shadow=lv::ShadowMode::Basic;p.Overrides.ShadowResolution=512;apply();auto hard=render();p.Overrides.Shadow=lv::ShadowMode::Pcf;apply();auto soft=render();
     std::size_t occluded=0,filtered=0;for (int y=38;y<90;++y) {for (int x=60;x<95;++x) {const auto i=y*Size+x;if (unshadowed[i][0] > 180 && hard[i][0] < 50) {++occluded;}if (hard[i][0] != soft[i][0] && soft[i][0] > 10 && soft[i][0] < 210) {++filtered;}}}
-    Check(occluded > 5 && surface.Stats().LastShadowDrawCalls == 2,"directional shadow pass darkens receiver pixels behind an occluder");
+    Check(occluded > 5,"directional shadow pass darkens receiver pixels behind an occluder");
+    Check(surface.Stats().LastShadowDrawCalls==0,"changing only the Sun filter reuses its unchanged depth map");
     Check(filtered > 0,"3x3 PCF produces intermediate edge visibility compared with Basic shadow");
     auto masked=std::make_shared<lv::ModelAsset>(*caster);masked->Materials[0].AlphaCutoff=.5f;masked->Materials[0].BaseColor[3]=0;scene.SetModel(casterId,masked);auto transparent=render();std::size_t lit=0;for (std::size_t i=0;i<hard.size();++i) {if (hard[i][0] < 50 && transparent[i][0] > 180) {++lit;}}
     Check(lit > 10,"alpha-masked geometry is discarded in shadow and color passes");

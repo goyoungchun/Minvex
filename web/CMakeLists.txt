@@ -16,7 +16,7 @@ install(TARGETS minvex_web RUNTIME DESTINATION web COMPONENT web)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/minvex-native.wasm" minvex.js index.html DESTINATION web COMPONENT web)
 install(FILES "${sokol_SOURCE_DIR}/LICENSE" DESTINATION web/licenses/sokol COMPONENT web)
 install(FILES "${PROJECT_SOURCE_DIR}/third_party/stb/stb_image.h" DESTINATION web/licenses/stb COMPONENT web)
-foreach(dependency cgltf json meshoptimizer tinyobjloader ufbx)
+foreach(dependency cgltf json meshoptimizer tinyobjloader ufbx ltc)
     install(DIRECTORY "${PROJECT_SOURCE_DIR}/third_party/${dependency}/" DESTINATION "web/licenses/${dependency}"
         COMPONENT web FILES_MATCHING PATTERN "LICENSE*")
 endforeach()

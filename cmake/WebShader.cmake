@@ -7,7 +7,7 @@ foreach(line IN LISTS lines)
         set(skip ON)
     elseif(skip AND line STREQUAL "@end")
         set(skip OFF)
-    elseif(NOT skip AND NOT line MATCHES "^@program morph_")
+    elseif(NOT skip AND NOT line MATCHES "^@program (lit_)?morph_")
         string(REPLACE "joint_matrices[128]" "joint_matrices[48]" line "${line}")
         # The pinned SPIRV-Cross flattener emits signed offset literals; cast
         # joint indices before flattening to keep GLSL ES integer types valid.

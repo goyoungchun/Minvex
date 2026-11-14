@@ -1,4 +1,5 @@
 #include "NativeText.h"
+#include "platform/FrameProfiling.h"
 #include <dwrite_1.h>
 #include <d2d1.h>
 #include <wincodec.h>
@@ -44,12 +45,57 @@ struct Collection {
     ~Collection() {Fonts.Reset();if (Custom) {Factory->UnregisterFontCollectionLoader(Custom.Get());}}
 };
 std::wstring Family(IDWriteFontCollection* fonts,UINT32 index) {ComPtr<IDWriteFontFamily> f;Check(fonts->GetFontFamily(index,&f));ComPtr<IDWriteLocalizedStrings> names;Check(f->GetFamilyNames(&names));UINT32 i=0;BOOL found=FALSE;names->FindLocaleName(L"en-us",&i,&found);if (!found) {i=0;}UINT32 length=0;Check(names->GetStringLength(i,&length));std::wstring result(length+1,L'\0');Check(names->GetString(i,result.data(),length+1));result.resize(length);return result;}
-struct ComApartment {bool Release=false;ComApartment() {const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if (hr!=RPC_E_CHANGED_MODE) {Check(hr);Release=true;}}~ComApartment() {if (Release) {CoUninitialize();}}};
+// Native windows/file dialogs use STA. Respect an existing host apartment of
+// either kind, and balance only the initialization owned by this context.
+struct ComApartment {bool Release=false;ComApartment() {const auto hr=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);if (hr!=RPC_E_CHANGED_MODE) {Check(hr);Release=true;}}~ComApartment() {if (Release) {CoUninitialize();}}};
 }
 std::vector<UiFont> NativeFonts(const std::filesystem::path& file) {Collection c(file);std::vector<UiFont> out;for (UINT32 i=0;i<c.Fonts->GetFontFamilyCount();++i) {out.push_back({Narrow(Family(c.Fonts.Get(),i).c_str()),file});}return out;}
 namespace {
-struct TextData {
+struct TextSurface {
+    int Width=0,Height=0;
+    std::uint64_t Used=0;
+    ComPtr<IWICBitmap> Bitmap;
+    ComPtr<ID2D1RenderTarget> Target;
+};
+struct WindowsTextContext final:NativeTextContext {
+    ComApartment Apartment;
     Collection System{{}};
+    ComPtr<IWICImagingFactory> Wic;
+    ComPtr<ID2D1Factory> D2d;
+    std::wstring DefaultFamily;
+    std::vector<std::shared_ptr<TextSurface>> Surfaces;
+    std::uint64_t Serial=0;
+    WindowsTextContext() {
+        NONCLIENTMETRICSW metrics{};metrics.cbSize=sizeof(metrics);
+        DefaultFamily=SystemParametersInfoW(SPI_GETNONCLIENTMETRICS,sizeof(metrics),&metrics,0) ? metrics.lfMessageFont.lfFaceName:L"Segoe UI";
+    }
+    std::shared_ptr<TextSurface> Surface(int width,int height) {
+        for (auto& surface:Surfaces) {if (surface->Width==width&&surface->Height==height) {surface->Used=++Serial;return surface;}}
+        ProfileScope profileTarget(FramePhase::NativeTarget);
+        if (!Wic) {Check(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&Wic)));}
+        if (!D2d) {Check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,D2d.GetAddressOf()));}
+        auto surface=std::make_shared<TextSurface>();surface->Width=width;surface->Height=height;surface->Used=++Serial;
+        Check(Wic->CreateBitmap(width,height,GUID_WICPixelFormat32bppPBGRA,WICBitmapCacheOnLoad,&surface->Bitmap));
+        const auto props=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
+        Check(D2d->CreateWicBitmapRenderTarget(surface->Bitmap.Get(),props,&surface->Target));
+        const auto bytes=std::uint64_t(width)*height*4;
+        if (bytes<=16*1024*1024) {
+            auto retained=bytes;for (const auto& s:Surfaces) {retained+=std::uint64_t(s->Width)*s->Height*4;}
+            while (!Surfaces.empty()&&(Surfaces.size()>=4||retained>16*1024*1024)) {
+                const auto oldest=std::min_element(Surfaces.begin(),Surfaces.end(),[](const auto& a,const auto& b){return a->Used<b->Used;});
+                retained-=std::uint64_t((*oldest)->Width)*(*oldest)->Height*4;Surfaces.erase(oldest);
+            }
+            Surfaces.push_back(surface);
+        }
+        return surface;
+    }
+};
+WindowsTextContext& Context(NativeTextContextSlot* stored,NativeTextContextSlot& temporary) {
+    auto& slot=stored ? *stored:temporary;if (!slot) {slot=std::make_unique<WindowsTextContext>();}return static_cast<WindowsTextContext&>(*slot);
+}
+struct TextData {
+    WindowsTextContext& Context;
+    Collection& System;
     std::map<std::filesystem::path,std::unique_ptr<Collection>> Files;
     ComPtr<IDWriteTextLayout> Layout;
     std::vector<NativeRun> Runs;
@@ -59,11 +105,10 @@ struct TextData {
         auto it=Files.find(file);if (it==Files.end()) {it=Files.emplace(file,std::make_unique<Collection>(file)).first;}return it->second->Fonts.Get();
     }
     std::wstring Name(const UiTextStyle& t,IDWriteFontCollection* fonts) {
-        NONCLIENTMETRICSW metrics{};metrics.cbSize=sizeof(metrics);const bool system=SystemParametersInfoW(SPI_GETNONCLIENTMETRICS,sizeof(metrics),&metrics,0)!=0;
-        const auto name=t.Family.empty() ? (t.FontFile.empty() ? std::wstring(system ? metrics.lfMessageFont.lfFaceName:L"Segoe UI"):Family(fonts,0)):Wide(t.Family);
+        const auto name=t.Family.empty() ? (t.FontFile.empty() ? Context.DefaultFamily:Family(fonts,0)):Wide(t.Family);
         UINT32 index=0;BOOL exists=FALSE;Check(fonts->FindFamilyName(name.c_str(),&index,&exists));if (!exists) {throw std::invalid_argument("Requested font family is unavailable in the selected system/file collection.");}return name;
     }
-    TextData(const UiElement& e,const std::filesystem::path& directory,float width,float height,const UiColor& color,bool measure=false) {
+    TextData(WindowsTextContext& context,const UiElement& e,const std::filesystem::path& directory,float width,float height,const UiColor& color,bool measure=false):Context(context),System(context.System) {
         const auto& t=e.Typography;auto* fonts=Fonts(t,directory);const auto family=Name(t,fonts);ComPtr<IDWriteTextFormat> format;
         Check(System.Factory->CreateTextFormat(family.c_str(),fonts,static_cast<DWRITE_FONT_WEIGHT>(t.Weight),t.Italic ? DWRITE_FONT_STYLE_ITALIC:DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,t.Size,L"",&format));
         Check(format->SetTextAlignment(measure ? DWRITE_TEXT_ALIGNMENT_LEADING:t.Horizontal==UiAlign::Start ? DWRITE_TEXT_ALIGNMENT_LEADING:t.Horizontal==UiAlign::Center ? DWRITE_TEXT_ALIGNMENT_CENTER:DWRITE_TEXT_ALIGNMENT_TRAILING));
@@ -79,16 +124,16 @@ struct TextData {
     }
 };
 }
-std::array<float,2> NativeMeasure(const UiElement& e,const std::filesystem::path& directory,float width) {
-    TextData text(e,directory,width,65536,{1,1,1,1},true);DWRITE_TEXT_METRICS metrics{};Check(text.Layout->GetMetrics(&metrics));const auto& p=e.Typography.Padding;return {std::ceil(metrics.widthIncludingTrailingWhitespace+p[0]+p[2]),std::ceil(metrics.height+p[1]+p[3])};
+std::array<float,2> NativeMeasure(const UiElement& e,const std::filesystem::path& directory,float width,NativeTextContextSlot* stored) {
+    NativeTextContextSlot temporary;auto& context=Context(stored,temporary);TextData text(context,e,directory,width,65536,{1,1,1,1},true);DWRITE_TEXT_METRICS metrics{};Check(text.Layout->GetMetrics(&metrics));const auto& p=e.Typography.Padding;return {std::ceil(metrics.widthIncludingTrailingWhitespace+p[0]+p[2]),std::ceil(metrics.height+p[1]+p[3])};
 }
-std::vector<std::uint8_t> NativeText(const UiElement& e,const std::filesystem::path& directory,int width,int height,float scale,const UiColor& color) {
-    ComApartment apartment;TextData text(e,directory,e.Layout.Width,e.Layout.Height,color);const auto& t=e.Typography;
-    ComPtr<IWICImagingFactory> wic;Check(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&wic)));ComPtr<IWICBitmap> bitmap;Check(wic->CreateBitmap(width,height,GUID_WICPixelFormat32bppPBGRA,WICBitmapCacheOnLoad,&bitmap));
-    ComPtr<ID2D1Factory> d2d;Check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,d2d.GetAddressOf()));ComPtr<ID2D1RenderTarget> target;const auto props=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));Check(d2d->CreateWicBitmapRenderTarget(bitmap.Get(),props,&target));
+std::vector<std::uint8_t> NativeText(const UiElement& e,const std::filesystem::path& directory,int width,int height,float scale,const UiColor& color,NativeTextContextSlot* stored) {
+    NativeTextContextSlot temporary;auto& context=Context(stored,temporary);
+    auto text=[&] {ProfileScope profileLayout(FramePhase::NativeLayout);return TextData(context,e,directory,e.Layout.Width,e.Layout.Height,color);}();const auto& t=e.Typography;
+    auto surface=context.Surface(width,height);auto& bitmap=surface->Bitmap;auto& target=surface->Target;
     ComPtr<ID2D1SolidColorBrush> brush;Check(target->CreateSolidColorBrush(D2D1::ColorF(color[0],color[1],color[2],color[3]),&brush));
     for (std::size_t i=0;i<text.Runs.size();++i) {if (!text.Ranges[i].length) {continue;}const auto c=text.Runs[i].Color;ComPtr<ID2D1SolidColorBrush> effect;Check(target->CreateSolidColorBrush(D2D1::ColorF(c[0],c[1],c[2],c[3]),&effect));Check(text.Layout->SetDrawingEffect(effect.Get(),text.Ranges[i]));}
-    target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);target->SetTransform(D2D1::Matrix3x2F::Scale(scale,scale));target->BeginDraw();target->Clear(D2D1::ColorF(0,0,0,0));target->PushAxisAlignedClip(D2D1::RectF(t.Padding[0],t.Padding[1],e.Layout.Width-t.Padding[2],e.Layout.Height-t.Padding[3]),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);target->DrawTextLayout(D2D1::Point2F(t.Padding[0],t.Padding[1]),text.Layout.Get(),brush.Get(),D2D1_DRAW_TEXT_OPTIONS_CLIP);target->PopAxisAlignedClip();Check(target->EndDraw());
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width)*height*4);Check(bitmap->CopyPixels(nullptr,width*4,static_cast<UINT>(pixels.size()),pixels.data()));for (std::size_t i=0;i<pixels.size();i+=4) {std::swap(pixels[i],pixels[i+2]);}return pixels;
+    {ProfileScope profileDraw(FramePhase::NativeDraw);target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);target->SetTransform(D2D1::Matrix3x2F::Scale(scale,scale));target->BeginDraw();target->Clear(D2D1::ColorF(0,0,0,0));target->PushAxisAlignedClip(D2D1::RectF(t.Padding[0],t.Padding[1],e.Layout.Width-t.Padding[2],e.Layout.Height-t.Padding[3]),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);target->DrawTextLayout(D2D1::Point2F(t.Padding[0],t.Padding[1]),text.Layout.Get(),brush.Get(),D2D1_DRAW_TEXT_OPTIONS_CLIP);target->PopAxisAlignedClip();Check(target->EndDraw());}
+    ProfileScope profileCopy(FramePhase::NativeCopy);std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width)*height*4);Check(bitmap->CopyPixels(nullptr,width*4,static_cast<UINT>(pixels.size()),pixels.data()));for (std::size_t i=0;i<pixels.size();i+=4) {std::swap(pixels[i],pixels[i+2]);}return pixels;
 }
 }

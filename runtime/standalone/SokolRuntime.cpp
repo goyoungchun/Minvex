@@ -2,6 +2,7 @@
 #include "RuntimePlatform.h"
 #include "renderer/RenderSurface.h"
 #include "platform/GraphicsSession.h"
+#include "platform/FrameProfiling.h"
 
 #include <sokol_gfx.h>
 #include <sokol_glue.h>
@@ -13,15 +14,54 @@
 #include <cstring>
 #include <thread>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace lv::detail {
 namespace {
 std::atomic_bool standaloneUsed{false};
+
+class FrameWait {
+public:
+    FrameWait() = default;
+    FrameWait(const FrameWait&) = delete;
+    FrameWait& operator=(const FrameWait&) = delete;
+    ~FrameWait() {
+#if defined(_WIN32)
+        if (timer_) { CloseHandle(timer_); }
+#endif
+    }
+    void Wait(std::chrono::milliseconds delay) noexcept {
+#if defined(_WIN32)
+        // Sleep(1) can wait a full coarse Windows timer tick, producing
+        // alternating 31/47 ms frames at a 30 FPS cap. A private high-resolution
+        // timer avoids changing the process/system periodic timer resolution.
+        if (!attempted_) {
+            attempted_ = true;
+            timer_ = CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_MODIFY_STATE | SYNCHRONIZE);
+        }
+        if (timer_) {
+            LARGE_INTEGER due{};due.QuadPart = -delay.count() * 10000;
+            if (SetWaitableTimer(timer_,&due,0,nullptr,nullptr,FALSE) && WaitForSingleObject(timer_,INFINITE) == WAIT_OBJECT_0) { return; }
+        }
+#endif
+        // Older Windows versions and other platforms retain their native wait.
+        std::this_thread::sleep_for(delay);
+    }
+private:
+#if defined(_WIN32)
+    HANDLE timer_ = nullptr;
+    bool attempted_ = false;
+#endif
+};
 
 struct Runtime {
     Viewer& Facade;
     ViewerState& State;
     const ViewerRunOptions& Options;
     RenderSurface Surface;
+    FrameWait Wait;
     double LastUpdate = 0;
     std::uint64_t Frames = 0;
     bool Initialized = false, Failed = false, InPass = false;
@@ -93,6 +133,7 @@ void Frame(void* user) noexcept {
     if (runtime.Stop()) { sapp_quit(); return; }
     const int width = sapp_width(), height = sapp_height();
     if (width <= 0 || height <= 0) { return; }
+    ProfileFrame profileFrame(runtime.Frames);
     try {
         const auto dpi = sapp_dpi_scale();
         runtime.State.Width = std::max(1,static_cast<int>(std::lround(static_cast<float>(width)/dpi)));
@@ -102,17 +143,18 @@ void Frame(void* user) noexcept {
         const auto now=RenderClockSeconds();
         if (runtime.State.HotReload) {(void)runtime.Facade.PollHotReload(now);}
         runtime.Surface.SetUi(&runtime.State.Ui,dpi);
-        if (!runtime.Surface.Due(now)) {std::this_thread::sleep_for(std::chrono::milliseconds(1));return;}
+        if (!runtime.Surface.Due(now)) {runtime.Wait.Wait(std::chrono::milliseconds(1));return;}
         const auto elapsed=now-runtime.LastUpdate;runtime.LastUpdate=now;
         const ViewerFrameInfo info{runtime.Frames,std::isfinite(elapsed) ? std::clamp(elapsed,0.0,0.25) : 0.0,width,height};
         if (runtime.Options.AdvanceAnimations) { runtime.State.World.UpdateAnimations(info.DeltaTimeSeconds); }
         if (runtime.Options.OnFrame) {
+            ProfileScope profileCallback(FramePhase::Callback);
             try { runtime.Options.OnFrame(runtime.Facade,info); }
             catch (...) { runtime.Capture(ErrorCode::CallbackFailure,"Handle exceptions inside OnFrame or return control without throwing."); }
         }
         if (runtime.Stop()) { sapp_quit(); return; }
         const bool submitted=runtime.Surface.Render(runtime.State.World,now,runtime.Options.FrameLimit != 0 || bool(runtime.Options.OnFrame),runtime.State.Options.ClearColor);
-        if (!submitted) {std::this_thread::sleep_for(std::chrono::milliseconds(8));return;}
+        if (!submitted) {runtime.Wait.Wait(std::chrono::milliseconds(8));return;}
         sg_pass pass{};
         pass.swapchain = sglue_swapchain();
         pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
@@ -122,7 +164,7 @@ void Frame(void* user) noexcept {
         sg_begin_pass(pass); runtime.InPass = true;
         runtime.Surface.Present();
         sg_end_pass(); runtime.InPass = false;
-        sg_commit();
+        {ProfileScope profileCommit(FramePhase::Commit);sg_commit();}
         ++runtime.Frames;
         if (runtime.Options.FrameLimit && runtime.Frames >= runtime.Options.FrameLimit) { runtime.State.CloseRequested.store(true); }
         if (runtime.Stop()) { sapp_quit(); }
@@ -216,6 +258,7 @@ Result<void> RunStandalone(Viewer& viewer, ViewerState& state, const ViewerRunOp
         standaloneUsed.store(false);
         return Result<void>::Failure({ErrorCode::InvalidState,"An existing application/graphics context already owns the standalone runtime.","Use EmbeddedRenderer for a compatible native Host integration.",{}});
     }
+    FrameProfile frameProfile;
     Runtime runtime{viewer,state,options};
     state.ApplyQuality=[&](const QualityProfile& profile) {
         if (!sg_isvalid()) {QualityState next;next.Requested=profile;next.RequestedSettings=ExpandQuality(profile).Value();state.Quality=std::move(next);return Result<void>::Success();}

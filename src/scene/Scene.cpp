@@ -47,14 +47,30 @@ ObjectId Scene::CreateObject(std::string name, ObjectId parent) {
 
 void PointLight::Validate() const {
     if (!std::isfinite(Position.X) || !std::isfinite(Position.Y) || !std::isfinite(Position.Z) || !std::isfinite(Color.X) || !std::isfinite(Color.Y) || !std::isfinite(Color.Z) || Color.X < 0 || Color.Y < 0 || Color.Z < 0 || !std::isfinite(Intensity) || Intensity < 0 || !std::isfinite(Range) || Range <= 0) {throw std::invalid_argument("Local lights require finite position, nonnegative color/intensity and positive range.");}
+    Shadow.Validate(Range);
+}
+void AmbientLight::Validate() const {
+    if (!std::isfinite(Intensity)||Intensity<0||!std::isfinite(Color.X)||!std::isfinite(Color.Y)||!std::isfinite(Color.Z)||Color.X<0||Color.Y<0||Color.Z<0) {throw std::invalid_argument("Ambient light requires finite nonnegative color and intensity.");}
+}
+void LocalShadowSettings::Validate(float range) const {
+    if ((Filter!=LocalShadowFilter::Hard&&Filter!=LocalShadowFilter::Pcf)||!std::isfinite(NearPlane)||NearPlane<=0||!std::isfinite(DepthBias)||DepthBias<0||!std::isfinite(SlopeBias)||SlopeBias<0||(Enabled&&NearPlane>=range)) {throw std::invalid_argument("Local shadows require a known filter, 0 < near < range and nonnegative finite world-space biases.");}
 }
 void SpotLight::Validate() const {
     PointLight{Position,Color,Intensity,Range}.Validate();const auto length=std::hypot(double(Direction.X),double(Direction.Y),double(Direction.Z));
     if (!std::isfinite(length) || length == 0 || !std::isfinite(InnerConeRadians) || !std::isfinite(OuterConeRadians) || InnerConeRadians < 0 || InnerConeRadians > OuterConeRadians || OuterConeRadians <= 0 || OuterConeRadians >= 1.570796327f) {throw std::invalid_argument("Spot lights require nonzero direction and 0 <= inner <= outer < pi/2 (outer > 0).");}
+    Shadow.Validate(Range);
+}
+void RectLight::Validate() const {
+    PointLight{Position,Color,Intensity,Range}.Validate();
+    const double d=std::hypot(double(Direction.X),double(Direction.Y),double(Direction.Z)),u=std::hypot(double(Up.X),double(Up.Y),double(Up.Z));
+    const double x=double(Direction.Y)*Up.Z-double(Direction.Z)*Up.Y,y=double(Direction.Z)*Up.X-double(Direction.X)*Up.Z,z=double(Direction.X)*Up.Y-double(Direction.Y)*Up.X;
+    if (!std::isfinite(d)||!std::isfinite(u)||d==0||u==0||std::hypot(x,y,z)<=d*u*1e-6||!std::isfinite(Width)||!std::isfinite(Height)||Width<=0||Height<=0||Width>1e6f||Height>1e6f) {throw std::invalid_argument("Rect lights require independent finite direction/up vectors and dimensions in (0, 1000000].");}
 }
 void Scene::ValidateLighting() const {
-    Sun.Validate();if (PointLights.size()+SpotLights.size() > MaxLocalLights) {throw std::invalid_argument("A Scene supports at most 8 local lights.");}
-    for (const auto& l:PointLights) {l.Validate();}for (const auto& l:SpotLights) {l.Validate();}
+    if (LocalShadowResolution!=128&&LocalShadowResolution!=256&&LocalShadowResolution!=512&&LocalShadowResolution!=1024) {throw std::invalid_argument("Local shadow resolution must be 128, 256, 512 or 1024.");}
+    Sun.Validate();Ambient.Validate();if (PointLights.size()+SpotLights.size()+RectLights.size()>MaxLocalLights||RectLights.size()>MaxRectLights) {throw std::invalid_argument("A Scene supports at most 8 local lights, including at most 4 rectangle lights.");}
+    std::size_t shadows=0;for (const auto& l:PointLights) {l.Validate();shadows+=l.Shadow.Enabled;}for (const auto& l:SpotLights) {l.Validate();shadows+=l.Shadow.Enabled;}for (const auto& l:RectLights) {l.Validate();}
+    if (shadows>MaxShadowedLocalLights) {throw std::invalid_argument("A Scene supports at most 4 shadowed local lights.");}
 }
 
 ObjectId Scene::AddModel(ModelHandle model, const Transform& transform, ObjectId parent) {

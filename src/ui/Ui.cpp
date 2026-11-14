@@ -8,6 +8,7 @@
 #include <thread>
 #include <cctype>
 #include <deque>
+#include <cstring>
 
 namespace lv {
 namespace {
@@ -75,6 +76,70 @@ void Blend(std::uint8_t* pixel,const UiColor& c,float coverage) {
 void Composite(std::uint8_t* target,const std::uint8_t* source,float opacity) {
     const float alpha=source[3]/255.0f*opacity;for (int k=0;k<4;++k) {target[k]=static_cast<std::uint8_t>(std::lround(source[k]*opacity+target[k]*(1-alpha)));}
 }
+struct PixelRect {
+    int Left=0,Top=0,Right=0,Bottom=0;
+    bool Empty() const {return Left>=Right||Top>=Bottom;}
+    bool operator==(const PixelRect&) const = default;
+};
+PixelRect Intersect(PixelRect a,PixelRect b) {return {std::max(a.Left,b.Left),std::max(a.Top,b.Top),std::min(a.Right,b.Right),std::min(a.Bottom,b.Bottom)};}
+void Include(PixelRect& area,PixelRect bounds) {
+    if (bounds.Empty()) {return;}
+    if (area.Empty()) {area=bounds;return;}
+    area={std::min(area.Left,bounds.Left),std::min(area.Top,bounds.Top),std::max(area.Right,bounds.Right),std::max(area.Bottom,bounds.Bottom)};
+}
+struct PaintClip {
+    UiRect Rect;
+    std::array<float,6> Transform{1,0,0,1,0,0};
+    bool operator==(const PaintClip&) const = default;
+};
+struct PaintItem {
+    UiElement Element;
+    UiStyle Style;
+    std::array<float,6> Transform;
+    std::vector<PaintClip> Clips;
+    PixelRect Bounds;
+    bool Visible=false;
+    bool operator==(const PaintItem&) const = default;
+};
+constexpr std::size_t RasterCacheBudget=32*1024*1024;
+std::size_t ElementBytes(const UiElement& e) {
+    std::size_t bytes=sizeof(e)+e.Name.size()+e.Text.size()+e.Typography.Family.size()+e.Typography.FontFile.native().size()*sizeof(std::filesystem::path::value_type);
+    for (const auto& r:e.Runs) {bytes+=sizeof(r)+r.Text.size()+(r.Family ? r.Family->size():0)+(r.FontFile ? r.FontFile->native().size()*sizeof(std::filesystem::path::value_type):0);}
+    return bytes;
+}
+struct RasterCache {
+    int Width=0,Height=0;
+    float Scale=0;
+    std::uint64_t Version=0;
+    std::filesystem::path Directory;
+    std::vector<PaintItem> Items;
+    std::vector<std::uint8_t> Pixels;
+};
+PixelRect PaintBounds(const Geometry& g,const UiStyle& style,int width,int height,float scale) {
+    const float shadowPad=style.ShadowBlur*3+std::max(std::abs(style.ShadowX),std::abs(style.ShadowY))+2;
+    // An invisible shadow must not expand damage into neighboring elements.
+    // Outside this AA fringe both fill and border have zero coverage; retaining
+    // the old bound as an upper limit also preserves extreme-scale clipping.
+    const float pad=style.Shadow[3]>0 ? shadowPad:std::min(shadowPad,.5f/(scale*std::min(g.SX,g.SY)));
+    float minX=static_cast<float>(width),minY=static_cast<float>(height),maxX=0,maxY=0;
+    for (auto c:std::array<std::array<float,2>,4>{{{-pad,-pad},{g.W+pad,-pad},{g.W+pad,g.H+pad},{-pad,g.H+pad}}}) {
+        const auto q=g.World(c[0],c[1]);minX=std::min(minX,q[0]*scale);minY=std::min(minY,q[1]*scale);maxX=std::max(maxX,q[0]*scale);maxY=std::max(maxY,q[1]*scale);
+    }
+    return {static_cast<int>(std::clamp(std::floor(minX),0.0f,static_cast<float>(width))),static_cast<int>(std::clamp(std::floor(minY),0.0f,static_cast<float>(height))),
+        static_cast<int>(std::clamp(std::ceil(maxX),0.0f,static_cast<float>(width))),static_cast<int>(std::clamp(std::ceil(maxY),0.0f,static_cast<float>(height)))};
+}
+std::vector<PaintClip> PaintClips(const std::vector<detail::UiResolved>& resolved,std::size_t index) {
+    std::vector<PaintClip> clips;
+    for (int i=static_cast<int>(index);i>=0;i=resolved[static_cast<std::size_t>(i)].Parent) {
+        const auto& r=resolved[static_cast<std::size_t>(i)];
+        if (r.Element.Clip) {clips.push_back({*r.Element.Clip});}
+        if (i!=static_cast<int>(index)&&r.Element.Container.Overflow!=UiOverflow::Visible) {
+            const auto& p=r.Element.Container.Padding;
+            clips.push_back({{p[0],p[1],r.Box.Width-p[0]-p[2],r.Box.Height-p[1]-p[3]},r.Box.Transform});
+        }
+    }
+    return clips;
+}
 using Json=nlohmann::json;
 std::string PathText(const std::filesystem::path& p) {const auto s=p.generic_u8string();return {s.begin(),s.end()};}
 Json StyleJson(const UiStyle& s) {return {{"text",s.Text},{"fill",s.Fill},{"radius",s.Radius},{"border",s.Border},{"shadow",s.Shadow},{"borderWidth",s.BorderWidth},{"shadowX",s.ShadowX},{"shadowY",s.ShadowY},{"shadowBlur",s.ShadowBlur},{"opacity",s.Opacity}};}
@@ -123,11 +188,13 @@ struct UiCanvas::Impl {
     mutable std::uint64_t CachedEpoch=0;
     mutable float CachedWidth=-1,CachedHeight=-1;
     mutable std::vector<detail::UiResolved> CachedLayout;
+    mutable std::optional<RasterCache> Raster;
+    mutable detail::NativeTextContextSlot TextContext;
     auto Find(UiId id) {return std::find_if(Items.begin(),Items.end(),[=](const auto& e){return e.Id==id;});}
     auto Find(UiId id) const {return std::find_if(Items.begin(),Items.end(),[=](const auto& e){return e.Id==id;});}
-    const std::vector<detail::UiResolved>& Resolve(float width,float height) const {if (CachedEpoch!=LayoutEpoch||CachedWidth!=width||CachedHeight!=height) {auto candidate=detail::BuildUiLayout(Items,Directory,width,height,Scroll);CachedLayout=std::move(candidate);CachedWidth=width;CachedHeight=height;CachedEpoch=LayoutEpoch;}return CachedLayout;}
+    const std::vector<detail::UiResolved>& Resolve(float width,float height) const {if (CachedEpoch!=LayoutEpoch||CachedWidth!=width||CachedHeight!=height) {auto candidate=detail::BuildUiLayout(Items,Directory,width,height,Scroll,&TextContext);CachedLayout=std::move(candidate);CachedWidth=width;CachedHeight=height;CachedEpoch=LayoutEpoch;}return CachedLayout;}
     Snapshot CaptureState() const {return {Items,Directory,State};}
-    static std::size_t Bytes(const Snapshot& s) {std::size_t n=sizeof(s)+s.Directory.native().size()*sizeof(std::filesystem::path::value_type);for (const auto& e:s.Items) {n+=sizeof(e)+e.Name.size()+e.Text.size()+e.Typography.Family.size()+e.Typography.FontFile.native().size()*sizeof(std::filesystem::path::value_type);for (const auto& r:e.Runs) {n+=sizeof(r)+r.Text.size()+(r.Family ? r.Family->size():0)+(r.FontFile ? r.FontFile->native().size()*sizeof(std::filesystem::path::value_type):0);}}return n;}
+    static std::size_t Bytes(const Snapshot& s) {std::size_t n=sizeof(s)+s.Directory.native().size()*sizeof(std::filesystem::path::value_type);for (const auto& e:s.Items) {n+=ElementBytes(e);}return n;}
     void Trim() {std::size_t bytes=Group ? Bytes(*Group):0;for (const auto& s:Past) {bytes+=Bytes(s);}for (const auto& s:Future) {bytes+=Bytes(s);}while (Past.size()+Future.size()>128||bytes>32*1024*1024) {if (!Past.empty()) {bytes-=Bytes(Past.front());Past.pop_front();}else if (!Future.empty()) {bytes-=Bytes(Future.front());Future.pop_front();}else {break;}}}
     void ResetInput() {Events.clear();Hover=Capture=Focus=KeyCapture=0;Scroll.clear();}
     bool Active(UiId id,bool button=false) const {auto it=Find(id);if (it==Items.end()||(button&&it->Kind!=UiKind::Button)) {return false;}for (;;) {if (!it->Visible||!it->Enabled) {return false;}if (!it->Parent) {return true;}it=Find(it->Parent);if (it==Items.end()) {return false;}}}
@@ -135,11 +202,13 @@ struct UiCanvas::Impl {
         if (items==Items&&directory==Directory) {return false;}detail::ValidateUiTree(items);
         Snapshot next{std::move(items),std::move(directory),Serial+1};if (Bytes(next)>32*1024*1024) {throw UiBudgetExceeded("UI content exceeds the 32 MiB snapshot budget.");}
         if (!Group) {Past.push_back(CaptureState());Future.clear();}
+        if (Directory!=next.Directory||next.Items.empty()) {TextContext.reset();}
         Items=std::move(next.Items);Directory=std::move(next.Directory);State=++Serial;++Version;++LayoutEpoch;
+        if (Items.empty()) {Raster.reset();}
         if (!Active(Hover)) {Hover=0;}if (!Active(Capture)) {Capture=0;}if (!Active(Focus,true)) {Focus=0;}if (!Active(KeyCapture,true)) {KeyCapture=0;}
         std::erase_if(Events,[&](UiId id){return !Active(id,true);});std::erase_if(Scroll,[&](const auto& pair){return Find(pair.first)==Items.end();});Trim();return true;
     }
-    void Restore(Snapshot state) {Items=std::move(state.Items);Directory=std::move(state.Directory);State=state.State;ResetInput();++Version;++LayoutEpoch;}
+    void Restore(Snapshot state) {if (Directory!=state.Directory||state.Items.empty()) {TextContext.reset();}Items=std::move(state.Items);Directory=std::move(state.Directory);State=state.State;ResetInput();++Version;++LayoutEpoch;}
     bool Ready() const {return Owner==std::this_thread::get_id();}
     const UiStyle& Style(const UiElement& e) const {
         if (!e.Enabled&&e.Disabled) {return *e.Disabled;}if ((Capture==e.Id||KeyCapture==e.Id)&&e.Pressed) {return *e.Pressed;}if (Hover==e.Id&&e.Hover) {return *e.Hover;}if (Focus==e.Id&&e.Focused) {return *e.Focused;}return e.Normal;
@@ -211,7 +280,7 @@ Result<std::vector<UiFont>> UiCanvas::Fonts(bool system) const {
     }catch (...) {return Result<std::vector<UiFont>>::Failure(ErrorFromException(ErrorCode::InvalidData,impl_->Directory));}
 #endif
 }
-Result<void> UiCanvas::RefreshFonts() {if (!impl_->Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}++impl_->Version;++impl_->LayoutEpoch;return Result<void>::Success();}
+Result<void> UiCanvas::RefreshFonts() {if (!impl_->Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}impl_->Raster.reset();impl_->TextContext.reset();++impl_->Version;++impl_->LayoutEpoch;return Result<void>::Success();}
 Result<void> UiCanvas::Save(const std::filesystem::path& path) const {
     if (!impl_->Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}
     if (impl_->Group) {return Fail<void>(ErrorCode::InvalidState,"Commit or cancel the UI edit before saving.");}
@@ -231,28 +300,52 @@ Result<std::vector<std::uint8_t>> UiCanvas::Rasterize(int width,int height,float
     const auto& p=*impl_;if (!p.Ready()) {return Fail<std::vector<std::uint8_t>>(ErrorCode::WrongThread,"UI accessed from another thread.");}
     try {
         Require(width>=1&&height>=1&&width<=4096&&height<=4096,"UI raster dimensions must be 1..4096.");Range(scale,.25f,4);
-        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width)*height*4);const auto& resolved=p.Resolve(width/scale,height/scale);
+        const auto directory=std::filesystem::absolute(p.Directory).lexically_normal();
+        const bool reuse=p.Raster&&p.Raster->Width==width&&p.Raster->Height==height&&p.Raster->Scale==scale&&p.Raster->Directory==directory;
+        if (reuse&&p.Raster->Version==p.Version) {return Result<std::vector<std::uint8_t>>::Success(p.Raster->Pixels);}
+        const auto& resolved=p.Resolve(width/scale,height/scale);
+        std::vector<PaintItem> items;items.reserve(resolved.size());
+        std::vector<bool> changed;changed.reserve(resolved.size());
+        PixelRect damage=reuse ? PixelRect{}:PixelRect{0,0,width,height};
+        std::size_t cacheBytes=sizeof(RasterCache)+static_cast<std::size_t>(width)*height*4+directory.native().size()*sizeof(std::filesystem::path::value_type);
         for (std::size_t index=0;index<resolved.size();++index) {
-            const auto& r=resolved[index];if (!r.Box.Visible) {continue;}auto e=r.Element;e.Enabled=r.Box.Enabled;const auto& s=p.Style(e);if (s.Opacity==0) {continue;}const Geometry g(r.Box);
+            const auto& r=resolved[index];PaintItem item;item.Element=r.Element;item.Element.Enabled=r.Box.Enabled;item.Style=p.Style(item.Element);item.Transform=r.Box.Transform;item.Visible=r.Box.Visible&&item.Style.Opacity>0;
+            if (item.Visible) {item.Bounds=PaintBounds(Geometry(r.Box),item.Style,width,height,scale);item.Clips=PaintClips(resolved,index);}
+            const bool different=!reuse||index>=p.Raster->Items.size()||item!=p.Raster->Items[index];
+            if (different) {Include(damage,item.Bounds);if (reuse&&index<p.Raster->Items.size()) {Include(damage,p.Raster->Items[index].Bounds);}}
+            cacheBytes+=sizeof(PaintItem)-sizeof(UiElement)+ElementBytes(item.Element)+item.Clips.capacity()*sizeof(PaintClip);
+            changed.push_back(different);items.push_back(std::move(item));
+        }
+        if (reuse) {for (std::size_t i=items.size();i<p.Raster->Items.size();++i) {Include(damage,p.Raster->Items[i].Bounds);}}
+        // Work on a copy so a failed font/raster operation cannot publish a
+        // partly repaired image or metadata for the next call.
+        auto pixels=reuse ? p.Raster->Pixels:std::vector<std::uint8_t>(static_cast<std::size_t>(width)*height*4);
+        if (reuse&&!damage.Empty()) {for (int y=damage.Top;y<damage.Bottom;++y) {std::memset(pixels.data()+(static_cast<std::size_t>(y)*width+damage.Left)*4,0,static_cast<std::size_t>(damage.Right-damage.Left)*4);}}
+        for (std::size_t index=0;index<resolved.size();++index) {
+            const auto& item=items[index];if (!item.Visible) {continue;}
+            const auto& r=resolved[index];const auto& e=item.Element;const auto& s=item.Style;const Geometry g(r.Box);
             const int tw=std::max(1,static_cast<int>(std::ceil(g.W*scale))),th=std::max(1,static_cast<int>(std::ceil(g.H*scale)));
             Require(tw<=4096&&th<=4096,"Text bitmap exceeds 4096 pixels; reduce element size or DPI.");
+            const auto area=Intersect(item.Bounds,damage);
+            // Changed offscreen text still validates its font and bitmap limits,
+            // matching an uncached raster. Unchanged distant elements are free.
+            if (area.Empty()&&!changed[index]) {continue;}
 #if !defined(_WIN32) && !defined(__APPLE__)
             if (e.Kind!=UiKind::Panel&&detail::HasText(e)) {return Fail<std::vector<std::uint8_t>>(ErrorCode::UnsupportedFeature,"Native text requires Windows or macOS.");}
 #endif
-            auto text=e.Kind!=UiKind::Panel&&detail::HasText(e) ? detail::NativeText(e,p.Directory,tw,th,scale,s.Text):std::vector<std::uint8_t>{};
-            const float pad=s.ShadowBlur*3+std::max(std::abs(s.ShadowX),std::abs(s.ShadowY))+2;
-            float minX=static_cast<float>(width),minY=static_cast<float>(height),maxX=0,maxY=0;for (auto c:std::array<std::array<float,2>,4>{{{-pad,-pad},{g.W+pad,-pad},{g.W+pad,g.H+pad},{-pad,g.H+pad}}}) {const auto q=g.World(c[0],c[1]);minX=std::min(minX,q[0]*scale);minY=std::min(minY,q[1]*scale);maxX=std::max(maxX,q[0]*scale);maxY=std::max(maxY,q[1]*scale);}
-            const int x0=static_cast<int>(std::clamp(std::floor(minX),0.0f,static_cast<float>(width))),x1=static_cast<int>(std::clamp(std::ceil(maxX),0.0f,static_cast<float>(width)));
-            const int y0=static_cast<int>(std::clamp(std::floor(minY),0.0f,static_cast<float>(height))),y1=static_cast<int>(std::clamp(std::ceil(maxY),0.0f,static_cast<float>(height)));
+            auto text=e.Kind!=UiKind::Panel&&detail::HasText(e) ? detail::NativeText(e,p.Directory,tw,th,scale,s.Text,&p.TextContext):std::vector<std::uint8_t>{};
             const float aa=1/(scale*std::min(g.SX,g.SY));
-            for (int y=y0;y<y1;++y) {for (int x=x0;x<x1;++x) {const float wx=(x+.5f)/scale,wy=(y+.5f)/scale;if (detail::UiClipped(resolved,index,wx,wy)) {continue;}const auto xy=g.Local(wx,wy);const float lx=xy[0],ly=xy[1];auto* target=pixels.data()+(static_cast<std::size_t>(y)*width+x)*4;std::uint8_t layer[4]{};auto* dst=layer;
+            for (int y=area.Top;y<area.Bottom;++y) {for (int x=area.Left;x<area.Right;++x) {const float wx=(x+.5f)/scale,wy=(y+.5f)/scale;if (detail::UiClipped(resolved,index,wx,wy)) {continue;}const auto xy=g.Local(wx,wy);const float lx=xy[0],ly=xy[1];auto* target=pixels.data()+(static_cast<std::size_t>(y)*width+x)*4;std::uint8_t layer[4]{};auto* dst=layer;
                 if (s.Shadow[3]>0) {const float sd=Distance(lx-s.ShadowX,ly-s.ShadowY,g.W,g.H,s.Radius);const float coverage=s.ShadowBlur>0 ? .5f*std::erfc(sd/(s.ShadowBlur*.70710678f)):std::clamp(.5f-sd/aa,0.0f,1.0f);Blend(dst,s.Shadow,coverage);}
                 const float distance=Distance(lx,ly,g.W,g.H,s.Radius),coverage=std::clamp(.5f-distance/aa,0.0f,1.0f);if (coverage<=0) {Composite(target,layer,s.Opacity);continue;}
                 const float u=std::clamp(lx/g.W,0.0f,1.0f),v=std::clamp(ly/g.H,0.0f,1.0f);UiColor fill;for (int k=0;k<4;++k) {fill[k]=std::lerp(std::lerp(s.Fill[0][k],s.Fill[1][k],u),std::lerp(s.Fill[3][k],s.Fill[2][k],u),v);}Blend(dst,fill,coverage);
                 if (s.BorderWidth>0) {Blend(dst,s.Border,std::clamp((distance+s.BorderWidth)/aa+.5f,0.0f,1.0f)*coverage);}
                 if (!text.empty()&&lx>=0&&ly>=0&&lx<g.W&&ly<g.H) {const int tx=std::clamp(static_cast<int>(lx*scale),0,tw-1),ty=std::clamp(static_cast<int>(ly*scale),0,th-1);Composite(dst,text.data()+(static_cast<std::size_t>(ty)*tw+tx)*4,coverage);}Composite(target,layer,s.Opacity);
             }}
-        }return Result<std::vector<std::uint8_t>>::Success(std::move(pixels));
+        }
+        if (!items.empty()&&cacheBytes<=RasterCacheBudget) {p.Raster=RasterCache{width,height,scale,p.Version,directory,std::move(items),pixels};}
+        else {p.Raster.reset();}
+        return Result<std::vector<std::uint8_t>>::Success(std::move(pixels));
     }catch (...) {return Result<std::vector<std::uint8_t>>::Failure(ErrorFromException(ErrorCode::InvalidData));}
 }
 } // namespace lv
