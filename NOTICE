@@ -1,0 +1,10 @@
+Minvex
+Copyright 2026 Minvex contributors
+
+Minvex project-authored code is licensed under the Apache License, Version 2.0.
+See the accompanying LICENSE file for the license terms.
+
+Third-party components and externally sourced assets retain their respective
+copyrights and licenses. This notice does not relicense those works. Refer to
+their source notices, third_party/versions.json in the source tree, and the
+dependency license files included with each distribution.

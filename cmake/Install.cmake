@@ -39,6 +39,7 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/MinvexConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/MinvexConfigVersion.cmake" DESTINATION "${_sdk_config_dir}")
 
 set(_sdk_share "${CMAKE_INSTALL_DATADIR}/minvex")
+install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" "${PROJECT_SOURCE_DIR}/NOTICE" DESTINATION .)
 install(DIRECTORY examples/SdkConsumer DESTINATION "${_sdk_share}/examples")
 install(FILES examples/EmbeddedViewer/MainD3D11.cpp examples/EmbeddedViewer/MainMetal.mm
     DESTINATION "${_sdk_share}/examples/EmbeddedViewer")
@@ -81,6 +82,7 @@ set(CPACK_PACKAGE_NAME Minvex)
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Minvex static C++20 SDK")
 set(CPACK_PACKAGE_VENDOR Minvex)
+set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
 set(_sdk_package_base "Minvex-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}-${MINVEX_PACKAGE_FLAVOR}-${CMAKE_CXX_COMPILER_ID}")
 set(CPACK_PACKAGE_FILE_NAME "${_sdk_package_base}-${CMAKE_BUILD_TYPE}")
 configure_file("${CMAKE_CURRENT_LIST_DIR}/CPackOptions.cmake.in" "${CMAKE_CURRENT_BINARY_DIR}/MinvexCPackOptions.cmake" @ONLY)

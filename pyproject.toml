@@ -7,6 +7,8 @@ name = "minvex"
 version = "1.0.0"
 description = "Lightweight C++20 3D graphics and animation SDK for Python"
 requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"
@@ -14,7 +16,8 @@ wheel.packages = ["python/minvex"]
 build-dir = "out/python/{wheel_tag}"
 build.targets = ["minvex_python"]
 install.components = ["python"]
-sdist.exclude = ["out/**", ".vs/**", ".minvex-editor.*", "docs/**", "AGENTS.md"]
+sdist.exclude = ["out/**", ".vs/**", ".minvex-editor.*", "docs/**", "README.md", "AGENTS.md"]
+sdist.include = ["LICENSE", "NOTICE"]
 
 [tool.scikit-build.cmake.define]
 # Always reset the wheel default, including after a cached CPU-only build.

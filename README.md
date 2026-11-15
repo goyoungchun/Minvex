@@ -87,9 +87,10 @@ cmake --build build
 
 ## 실행 요구사항
 
-| 항목 | 사양 |
-|---|---|
-| **Windows** | x64, DirectX 11 Feature Level 11_0 이상 |
-| **macOS** | Apple Silicon arm64, Metal (Preview). Intel Mac은 공식 지원 대상에 포함되지 않음 |
-| **메모리** | 모델·텍스처·인스턴스 수와 렌더링 품질에 따라 달라짐 |
-| **개발 도구** | CMake 3.24+, C++20 컴파일러, Ninja, 플랫폼 SDK |
+| 항목          | 사양                                                                 |
+| ----------- | ------------------------------------------------------------------ |
+| **Windows** | x64, DirectX 11 Feature Level 11_0 이상                              |
+| **macOS**   | Apple Silicon arm64, Metal (Preview). Intel Mac은 공식 지원 대상에 포함되지 않음 |
+| **메모리**     | 4GB                                                                |
+| **개발 도구**   | CMake 3.24+, C++20 컴파일러, Ninja, 플랫폼 SDK                            |
+

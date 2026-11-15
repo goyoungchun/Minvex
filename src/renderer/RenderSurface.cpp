@@ -132,6 +132,7 @@ Result<void> RenderSurface::ApplyQuality(const QualityProfile& profile,const Sce
         if (!targets_) {next.RenderWidth=next.RenderHeight=0;}
         state_=std::move(next);outputWidth_=width;outputHeight_=height;failedWidth_=failedHeight_=-1;scheduler_.Invalidate();return Result<void>::Success();
     } catch (const std::bad_alloc& e) {return Fail({ErrorCode::InsufficientResource,e.what(),"Reduce quality and retry; previous resources are retained.",{}});}
+    catch (const std::invalid_argument& e) {return Fail({ErrorCode::InvalidArgument,e.what(),"Check Scene lighting, material and transform inputs; previous settings/resources are retained.",{}});}
     catch (const std::exception& e) {return Fail({ErrorCode::Rendering,e.what(),"Quality application failed; previous settings/resources are retained.",{}});}
 }
 Result<void> RenderSurface::Resize(const Scene& scene,int width,int height) {

@@ -1,30 +1,21 @@
 #include "TestHarness.h"
 #include "OptimizationFixture.h"
-#include <minvex/EmbeddedRenderer.h>
-#include <d3d11.h>
-#include <wrl/client.h>
+#include "GraphicsTestTarget.h"
 #include <cstring>
 #include <iomanip>
 using namespace test;
-using Microsoft::WRL::ComPtr;
 namespace {
 struct Harness {
     int Width,Height;
-    ComPtr<ID3D11Device> Device;ComPtr<ID3D11DeviceContext> Context;
-    ComPtr<ID3D11Texture2D> Texture,Staging;
+    GraphicsTestTarget Target;
     lv::EmbeddedRenderer Renderer;lv::Scene Scene;
-    Harness(int width=320,int height=240):Width(width),Height(height) {
-        D3D_FEATURE_LEVEL level;if (FAILED(D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,0,nullptr,0,D3D11_SDK_VERSION,&Device,&level,&Context))) {throw std::runtime_error("D3D11 unavailable");}
-        D3D11_TEXTURE2D_DESC d{};d.Width=width;d.Height=height;d.MipLevels=d.ArraySize=1;d.SampleDesc.Count=1;d.Format=DXGI_FORMAT_R8G8B8A8_UNORM;d.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
-        if (FAILED(Device->CreateTexture2D(&d,nullptr,&Texture))) {throw std::runtime_error("Cannot create test target");}
-        d.BindFlags=0;d.Usage=D3D11_USAGE_STAGING;d.CPUAccessFlags=D3D11_CPU_ACCESS_READ;Device->CreateTexture2D(&d,nullptr,&Staging);
-        lv::HostGraphicsContext host;host.Backend=lv::GraphicsBackend::D3D11;host.Device=Device.Get();host.ImmediateContext=Context.Get();host.ColorFormat=lv::EmbeddedColorFormat::Rgba8;
+    Harness(int width=320,int height=240):Width(width),Height(height),Target(width,height) {
         lv::EmbeddedOptions options;options.Quality=lv::MakeQualityProfile(lv::QualityPreset::Low);options.Quality.Overrides.TargetFps=0;options.Quality.Overrides.OnDemand=lv::OnDemandMode::Off;options.Quality.Overrides.FrustumCulling=false;
-        Renderer.Initialize(host,options).Value();Scene.MainCamera.Position={0,0,3};Scene.MainCamera.Target={};Scene.MainCamera.Projection=lv::CameraProjection::Orthographic;Scene.MainCamera.OrthographicHeight=2.5f;
+        Renderer.Initialize(Target.Context(),options).Value();Scene.MainCamera.Position={0,0,3};Scene.MainCamera.Target={};Scene.MainCamera.Projection=lv::CameraProjection::Orthographic;Scene.MainCamera.OrthographicHeight=2.5f;
     }
-    void Render() {lv::EmbeddedFrameOptions frame;frame.ClearColor={0,0,0,1};frame.ForceRedraw=true;Renderer.Render(Scene,{Texture.Get(),nullptr,Width,Height},frame).Value();}
+    void Render() {GraphicsScope([&]{lv::EmbeddedFrameOptions frame;frame.ClearColor={0,0,0,1};frame.ForceRedraw=true;Renderer.Render(Scene,Target.Target(),frame).Value();});}
     void Clear() {const auto ids=Scene.ObjectIds();for(auto id:ids){if(Scene.Contains(id)){Scene.RemoveObject(id);}}}
-    std::vector<std::uint8_t> Pixels() {Context->CopyResource(Staging.Get(),Texture.Get());D3D11_MAPPED_SUBRESOURCE map{};if (FAILED(Context->Map(Staging.Get(),0,D3D11_MAP_READ,0,&map))) {throw std::runtime_error("Readback failed");}std::vector<std::uint8_t> pixels(Width*Height*4);for (int y=0;y<Height;++y) {std::memcpy(pixels.data()+static_cast<std::size_t>(y)*Width*4,static_cast<std::uint8_t*>(map.pData)+y*map.RowPitch,Width*4);}Context->Unmap(Staging.Get(),0);return pixels;}
+    std::vector<std::uint8_t> Pixels() {return Target.Pixels(Renderer);}
     lv::DebugResource Resource(const char* name) {const auto info=Renderer.GetRenderDebugInfo().Value();const auto it=std::find_if(info.Resources.begin(),info.Resources.end(),[&](const auto& r){return r.Name==name;});if(it==info.Resources.end()){throw std::runtime_error(std::string("Missing resource: ")+name);}return *it;}
     ~Harness(){if(Renderer.IsInitialized()){Renderer.Shutdown().Value();}}
 };
@@ -82,4 +73,4 @@ void Benchmark(const std::string& mode,const char* output) {
     std::printf("%s: completed %.3f ms/frame\n",mode.c_str(),completed/frames);
 }
 }
-int main(int argc,char** argv) {try {if(argc==3){Benchmark(argv[1],argv[2]);}else{Correctness();}}catch(const std::exception& e){Check(false,e.what());}return Finish();}
+int main(int argc,char** argv) {return GraphicsScope([&]{try {if(argc==3){Benchmark(argv[1],argv[2]);}else{Correctness();}}catch(const std::exception& e){Check(false,e.what());}return Finish();});}

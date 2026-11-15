@@ -1,6 +1,10 @@
 {
   "format": "MinvexSdk",
   "version": "@PROJECT_VERSION@",
+  "license": "Apache-2.0",
+  "licenseScope": "Minvex project-authored code; third-party works retain their own licenses.",
+  "licenseFiles": ["LICENSE", "NOTICE"],
+  "licenseFilesRelativeTo": "SDK prefix",
   "flavor": "@MINVEX_PACKAGE_FLAVOR@",
   "system": "@CMAKE_SYSTEM_NAME@",
   "processor": "@CMAKE_SYSTEM_PROCESSOR@",

@@ -1,25 +1,21 @@
 #include "TestHarness.h"
-#include <minvex/EmbeddedRenderer.h>
-#include <d3d11.h>
-#include <wrl/client.h>
+#include "GraphicsTestTarget.h"
 #include <cstring>
 #include <numeric>
 #include <iomanip>
 using namespace test;
-using Microsoft::WRL::ComPtr;
 namespace {
 struct Host {
     int W,H;
-    ComPtr<ID3D11Device> Device;ComPtr<ID3D11DeviceContext> Context;ComPtr<ID3D11Texture2D> Target,Staging;
+    GraphicsTestTarget Target;
     lv::EmbeddedRenderer Renderer;lv::Scene Scene;
     lv::QualityProfile Quality=lv::MakeQualityProfile(lv::QualityPreset::Low);
-    Host(int width=320,int height=240):W(width),H(height){D3D_FEATURE_LEVEL level;if(FAILED(D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,0,nullptr,0,D3D11_SDK_VERSION,&Device,&level,&Context))){throw std::runtime_error("D3D11 unavailable");}
-        D3D11_TEXTURE2D_DESC d{};d.Width=W;d.Height=H;d.MipLevels=d.ArraySize=1;d.SampleDesc.Count=1;d.Format=DXGI_FORMAT_R8G8B8A8_UNORM;d.BindFlags=D3D11_BIND_RENDER_TARGET;Device->CreateTexture2D(&d,nullptr,&Target);d.BindFlags=0;d.Usage=D3D11_USAGE_STAGING;d.CPUAccessFlags=D3D11_CPU_ACCESS_READ;Device->CreateTexture2D(&d,nullptr,&Staging);
+    Host(int width=320,int height=240):W(width),H(height),Target(width,height){
         Quality.Overrides.Lighting=lv::LightingMode::Advanced;Quality.Overrides.TargetFps=0;Quality.Overrides.OnDemand=lv::OnDemandMode::Off;Quality.Overrides.Instancing=false;Quality.Overrides.Shadow=lv::ShadowMode::Basic;
-        lv::HostGraphicsContext host;host.Backend=lv::GraphicsBackend::D3D11;host.Device=Device.Get();host.ImmediateContext=Context.Get();host.ColorFormat=lv::EmbeddedColorFormat::Rgba8;lv::EmbeddedOptions o;o.Quality=Quality;Renderer.Initialize(host,o).Value();Scene.Sun.Intensity=Scene.Sun.Ambient=0;Scene.MainCamera.Position={0,0,6};Scene.MainCamera.Target={};Scene.MainCamera.Projection=lv::CameraProjection::Orthographic;Scene.MainCamera.OrthographicHeight=4;Scene.LocalShadowResolution=256;
+        lv::EmbeddedOptions o;o.Quality=Quality;Renderer.Initialize(Target.Context(),o).Value();Scene.Sun.Intensity=Scene.Sun.Ambient=0;Scene.MainCamera.Position={0,0,6};Scene.MainCamera.Target={};Scene.MainCamera.Projection=lv::CameraProjection::Orthographic;Scene.MainCamera.OrthographicHeight=4;Scene.LocalShadowResolution=256;
     }
-    auto Render(bool force=true){lv::EmbeddedFrameOptions f;f.ClearColor={0,0,0,1};f.ForceRedraw=force;return Renderer.Render(Scene,{Target.Get(),nullptr,W,H},f).Value();}
-    auto Pixels(){Context->CopyResource(Staging.Get(),Target.Get());D3D11_MAPPED_SUBRESOURCE m{};if(FAILED(Context->Map(Staging.Get(),0,D3D11_MAP_READ,0,&m))){throw std::runtime_error("Readback failed");}std::vector<std::uint8_t> p(W*H*4);for(int y=0;y<H;++y){std::memcpy(p.data()+y*W*4,static_cast<std::uint8_t*>(m.pData)+y*m.RowPitch,W*4);}Context->Unmap(Staging.Get(),0);return p;}
+    auto Render(bool force=true){return GraphicsScope([&]{lv::EmbeddedFrameOptions f;f.ClearColor={0,0,0,1};f.ForceRedraw=force;return Renderer.Render(Scene,Target.Target(),f).Value();});}
+    auto Pixels(){return Target.Pixels(Renderer);}
     std::uint64_t ShadowCalls(){const auto info=Renderer.GetRenderDebugInfo().Value();std::uint64_t calls=0;for(const auto& p:info.Passes){if(p.Name=="Sun shadow"||p.Name=="Local shadows"){calls+=p.DrawCalls;}}return calls;}
     lv::DebugResource Resource(const char* name){const auto info=Renderer.GetRenderDebugInfo().Value();for(const auto& r:info.Resources){if(r.Name==name){return r;}}throw std::runtime_error(std::string("Missing ")+name);}
     ~Host(){if(Renderer.IsInitialized()){Renderer.Shutdown().Value();}}
@@ -53,7 +49,7 @@ void Benchmark(const char* output){
     for(int mode=0;mode<4;++mode){for(auto& p:h.Scene.PointLights){p.Shadow.Enabled=mode>0;}unsigned frame=0;const auto render=[&]{if(mode>=2){const int lights=mode==2 ? 1:4;for(int i=0;i<lights;++i){h.Scene.PointLights[i].Position.X=(i&1 ? 3.0f:-3.0f)+std::sin(float(frame)*.02f)*.5f;}}++frame;h.Render();};const auto warm=std::chrono::steady_clock::now();do{render();}while(frame<120||std::chrono::steady_clock::now()-warm<std::chrono::seconds(1));h.Renderer.WaitIdle().Value();const auto start=std::chrono::steady_clock::now();for(int f=0;f<600;++f){render();}h.Renderer.WaitIdle().Value();const double mean=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()/600;const auto calls=h.ShadowCalls();const auto telemetry=h.Renderer.GetTelemetry().Value();const char* names[]={"no-local-shadows","static-cached","one-moving-point","four-moving-points"};if(mode){out<<',';}out<<"{\"name\":\""<<names[mode]<<"\",\"completedMeanMs\":"<<mean<<",\"lastFrameShadowDrawCalls\":"<<double(calls)<<",\"logicalBytes\":"<<telemetry.Resident.TotalBytes<<'}';std::printf("%s: %.3f ms, %.1f shadow calls/frame\n",names[mode],mean,double(calls));}
     out<<"]}\n";out.close();if(!out){throw std::runtime_error("Cannot save lighting benchmark");}
 }
-int main(int argc,char** argv){try{if(argc==2){Benchmark(argv[1]);return 0;}
+int RunLightingPixels(int argc,char** argv){try{if(argc==2){Benchmark(argv[1]);return 0;}
     Host h;const auto floor=h.Scene.AddModel(Floor());h.Render();const auto dark=h.Pixels();h.Scene.Ambient={{1,0,0},.4f};h.Render();const auto ambient=h.Pixels();Check(ambient[(120*320+160)*4]>100&&ambient[(120*320+160)*4+1]<5,"independent colored ambient produces real pixels with the Sun disabled");h.Scene.Ambient.Intensity=0;
     lv::PointLight point;point.Position={-1,1,3};point.Intensity=8;point.Range=10;h.Scene.PointLights={point};lv::Transform t;t.Position={0,0,1};const auto cube=h.Scene.AddModel(Model(lv::MakeCube()),t);h.Render();const auto lit=h.Pixels();h.Scene.PointLights[0].Shadow.Enabled=true;h.Render();const auto shadow=h.Pixels();Check(Changed(lit,shadow)>100&&Energy(shadow)<Energy(lit),"point shadows occlude the receiver");const float q=.70710678118f;
     for(const auto rotation:std::array<lv::Quaternion,6>{{{0,0,0,1},{0,q,0,q},{0,-q,0,q},{0,1,0,0},{q,0,0,q},{-q,0,0,q}}}) {
@@ -61,6 +57,13 @@ int main(int argc,char** argv){try{if(argc==2){Benchmark(argv[1]);return 0;}
     }
     h.Scene.SetTransform(floor,{});h.Scene.SetTransform(cube,t);h.Scene.MainCamera.Position={0,0,6};h.Scene.MainCamera.Up={0,1,0};h.Scene.PointLights[0].Position=point.Position;h.Render();
     const auto atlas=h.Resource("Local shadow atlas");h.Render();Check(h.ShadowCalls()==0&&h.Pixels()==shadow,"unchanged Sun and point shadow maps are reused");
+    const auto validQuality=h.Renderer.GetQuality().Value();
+    h.Scene.PointLights[0].Range=-1;const auto badLight=h.Renderer.SetQuality(h.Quality,h.Scene);h.Scene.PointLights[0].Range=point.Range;
+    Check(!badLight&&badLight.Error().Code==lv::ErrorCode::InvalidArgument,"quality application reports invalid lighting as an input error");
+    h.Scene.LocalShadowResolution=777;const auto badResolution=h.Renderer.SetQuality(h.Quality,h.Scene);h.Scene.LocalShadowResolution=256;
+    Check(!badResolution&&badResolution.Error().Code==lv::ErrorCode::InvalidArgument,"quality application rejects invalid scene shadow resolution as an input error");
+    const auto afterFailure=h.Renderer.GetQuality().Value();h.Render();
+    Check(afterFailure.Requested==validQuality.Requested&&afterFailure.Effective==validQuality.Effective&&h.Resource("Local shadow atlas").Id==atlas.Id&&h.Pixels()==shadow,"invalid lighting leaves active quality, shadow allocation and pixels intact");
     h.Scene.PointLights[0].Color={.3f,1,.3f};h.Render();Check(h.ShadowCalls()==0&&Changed(shadow,h.Pixels())>100,"changing light color updates lighting without rebuilding shadows");h.Scene.MainCamera.Position.X=.2f;h.Render();Check(h.ShadowCalls()==0,"camera movement does not rebuild shadow maps");h.Scene.MainCamera.Position.X=0;
     t.Position.X=.5f;h.Scene.SetTransform(cube,t);h.Render();Check(h.ShadowCalls()>0&&h.Resource("Local shadow atlas").Id==atlas.Id,"moving a caster refreshes existing shadow resources");
     h.Quality.Overrides.Anisotropy=2;h.Renderer.SetQuality(h.Quality,h.Scene).Value();h.Render();Check(h.ShadowCalls()>0&&h.Resource("Local shadow atlas").Id==atlas.Id,"alpha sampling quality changes refresh shadow contents while preserving atlas allocation");
@@ -71,3 +74,4 @@ int main(int argc,char** argv){try{if(argc==2){Benchmark(argv[1]);return 0;}
     h.Quality.Overrides.OnDemand=lv::OnDemandMode::On;h.Renderer.SetQuality(h.Quality,h.Scene).Value();h.Render(false);Check(!h.Render(false).SceneRendered,"unchanged lighting keeps the On-Demand image");h.Scene.Ambient.Intensity=.1f;Check(h.Render(false).SceneRendered,"ambient edits invalidate On-Demand");h.Scene.RectLights[0].Position.X+=.5f;Check(h.Render(false).SceneRendered,"rectangle edits invalidate On-Demand");h.Scene.PointLights={point};h.Render(false);h.Scene.PointLights[0].Shadow.Enabled=true;Check(h.Render(false).SceneRendered,"local shadow enable invalidates On-Demand");
     CasterVariants(h);
 }catch(const std::exception& e){Check(false,e.what());}return Finish();}
+int main(int argc,char** argv){return GraphicsScope([&]{return RunLightingPixels(argc,argv);});}

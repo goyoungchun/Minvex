@@ -419,6 +419,8 @@ Windows Standalone은 사용 가능한 경우 전용 고정밀 대기 타이머�
 
 `Scene`는 `Sun`, 독립 `Ambient`, `PointLights / SpotLights / RectLights`와 `LocalShadowResolution`을 소유함. Scene과 같은 호출 스레드에서 수정하며 `ValidateLighting()`은 잘못된 값에 `std::invalid_argument`를 던짐. 렌더링·저장·Editor의 Result Facade도 이 검증을 수행함. 빛의 위치·방향은 world space이며 SceneObject의 부모/Animation을 자동으로 따르지 않음. 호스트가 frame callback에서 갱신할 수 있음.
 
+실행 중인 Viewer/Embedded의 품질 적용에 잘못된 Scene 조명 값을 전달하면 `InvalidArgument`이며 이전의 유효한 품질과 렌더링 자원을 유지함. 잘못된 입력을 수정한 뒤 다시 적용하거나 렌더링할 수 있음.
+
 | 타입 | 계약 |
 |---|---|
 | `AmbientLight` | `Color={1,1,1}`, `Intensity=0`. 전역 diffuse ambient이며 IBL·AO를 포함하지 않음. `Sun.Ambient`의 회색 계수와 더해짐. 독립 Ambient만 사용할 때는 `Sun.Ambient=0`으로 지정함 |
@@ -632,10 +634,14 @@ Scene v13는 v12 이하만 지원하는 이전 SDK reader로 읽을 수 없음. 
 
 Scene의 모델·텍스처 디렉터리 상대 참조는 실제 부모 디렉터리를 기준으로 계산함. macOS의 `/var` → `/private/var` 같은 디렉터리 링크나 Windows junction을 통해 저장·로드해도 같은 리소스를 가리키며, 프로젝트를 함께 옮길 수 있음.
 
-CPU-only 구성의 native 초기화·실행은 `UnsupportedFeature`를 반환함.
+## 라이선스와 배포 고지
+
+Minvex 자체 코드는 Apache-2.0을 적용함. SDK 설치 접두사 최상위의 `LICENSE`·`NOTICE`, Python wheel의 라이선스 메타데이터·파일, Web 설치 폴더의 `LICENSE`·`NOTICE`를 제공함. 외부 의존성과 외부 자산은 원래의 라이선스를 유지하며 이 선택으로 다시 라이선스하지 않음. 의존성별 원문과 `versions.json` 고지를 함께 확인함.
 
 ## 지원 범위
 
 이 문서는 SDK 1.0.0의 공개 API를 설명함. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고함.
+
+CPU-only 구성의 native 초기화·실행은 `UnsupportedFeature`를 반환함.
 
 Python wheel은 기본 renderer ON이며 CPU-only wheel은 `MINVEX_BUILD_RENDERER=OFF`로 구성함. Web은 Skin당 48 Joint·CPU Morph를 사용하며 Shadow/PCSS·HDR·BC3를 제공하지 않음. Asset Import는 문서화된 subset과 진단 경고를 따름. IBL·Emissive/Occlusion 렌더링·Alpha BLEND·Rect shadow는 지원하지 않음.
