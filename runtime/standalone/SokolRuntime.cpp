@@ -69,6 +69,9 @@ struct Runtime {
     char Message[2048]{};
     char Hint[512]{};
 
+    Runtime(Viewer& facade,ViewerState& state,const ViewerRunOptions& options)
+        : Facade(facade),State(state),Options(options) {}
+
     void Fail(ErrorCode code, const char* message, const char* hint) noexcept {
         if (!Failed) {
             Failed = true; Code = code;
@@ -133,7 +136,11 @@ void Frame(void* user) noexcept {
     if (runtime.Stop()) { sapp_quit(); return; }
     const int width = sapp_width(), height = sapp_height();
     if (width <= 0 || height <= 0) { return; }
+#if defined(MINVEX_FRAME_PROFILING)
+    ProfileFrame profileFrame(runtime.Frames,StandalonePresentationState());
+#else
     ProfileFrame profileFrame(runtime.Frames);
+#endif
     try {
         const auto dpi = sapp_dpi_scale();
         runtime.State.Width = std::max(1,static_cast<int>(std::lround(static_cast<float>(width)/dpi)));
@@ -156,13 +163,13 @@ void Frame(void* user) noexcept {
         const bool submitted=runtime.Surface.Render(runtime.State.World,now,runtime.Options.FrameLimit != 0 || bool(runtime.Options.OnFrame),runtime.State.Options.ClearColor);
         if (!submitted) {runtime.Wait.Wait(std::chrono::milliseconds(8));return;}
         sg_pass pass{};
-        pass.swapchain = sglue_swapchain();
+        pass.swapchain = [&] {ProfileScope profileAcquire(FramePhase::Acquire);return sglue_swapchain();}();
         pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
         const auto& color = runtime.State.Options.ClearColor;
         pass.action.colors[0].clear_value = {color[0],color[1],color[2],color[3]};
         pass.action.depth.load_action = SG_LOADACTION_CLEAR; pass.action.depth.clear_value = 1;
         sg_begin_pass(pass); runtime.InPass = true;
-        runtime.Surface.Present();
+        {ProfileScope profilePresent(FramePhase::Present);runtime.Surface.Present();}
         sg_end_pass(); runtime.InPass = false;
         {ProfileScope profileCommit(FramePhase::Commit);sg_commit();}
         ++runtime.Frames;
@@ -282,6 +289,9 @@ Result<void> RunStandalone(Viewer& viewer, ViewerState& state, const ViewerRunOp
     app.window_title = state.Options.Title.c_str(); app.sample_count = 1;
     app.high_dpi = state.Options.HighDpi; app.srgb = true;
     app.disable_vsync = !state.Options.VSync;
+    // The pinned Metal backend reads its own layer flag, not disable_vsync.
+    // Its CADisplayLink may still pace callbacks at the display refresh rate.
+    app.metal.disable_display_sync = !state.Options.VSync;
     app.logger.func = Log; app.logger.user_data = &runtime;
     RunStandaloneApplication(app);
     if (runtime.Failed) { return Result<void>::Failure({runtime.Code,runtime.Message,runtime.Hint,{}}); }

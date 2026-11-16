@@ -182,6 +182,8 @@ int main() {
 
 기본값은 1280×720, VSync·기본 입력·자동 Focus 활성화, Medium 품질임. `ViewerRunOptions::OnFrame`에서 Scene을 갱신할 수 있으며 Animation은 기본적으로 callback 전에 자동 진행함. 직접 진행하려면 `AdvanceAnimations=false`를 사용함.
 
+macOS Metal에서 `VSync=false`는 display sync 해제를 요청함. `OnFrame` 호출 빈도와 표시 FPS는 OS의 display callback 및 창 가림 상태의 영향을 받을 수 있으므로, 이 옵션만으로 주사율을 넘는 무제한 FPS를 보장하지 않음.
+
 Standalone·Editor의 기본 창 아이콘은 실행 파일에 포함되며 별도 이미지 파일이나 실행 디렉터리에 의존하지 않음.
 
 ### Animation / Cross-fade
@@ -586,7 +588,7 @@ Viewer마다 독립 Wasm module·Canvas를 사용하며 같은 Canvas의 중복 
 
 ## macOS Metal 실행 조건
 
-macOS Metal 경로는 **Apple Silicon arm64용 Preview**임. Intel Mac은 공식 지원 대상에 포함되지 않으며 최소 macOS 버전과 배포 타깃은 지정하지 않음.
+macOS Metal 경로는 **macOS 14.0 이상을 대상으로 한 Apple Silicon arm64용 Preview**임. macOS preset은 `arm64`·`CMAKE_OSX_DEPLOYMENT_TARGET=14.0`을 지정함. 최소 검증 대상은 M1·8GB Mac이며 해당 환경의 실기기 승인 전까지 정식 지원 완료를 의미하지 않음. Intel Mac은 후속 범위임.
 
 - **빌드:** `CMAKE_OSX_ARCHITECTURES=arm64`와 대상 환경에 맞는 macOS SDK·컴파일러·라이브러리를 사용함. 배포할 애플리케이션의 `CMAKE_OSX_DEPLOYMENT_TARGET`은 Host 프로젝트에서 설정함.
 - **셰이더:** Metal 라이브러리는 런타임에 컴파일함. MSL 언어 버전을 명시적으로 고정하지 않음.

@@ -50,14 +50,14 @@ struct LocalShadowSettings {
 struct PointLight {
     Vec3 Position{}, Color{1,1,1};
     float Intensity = 1, Range = 10;
-    LocalShadowSettings Shadow;
+    LocalShadowSettings Shadow{};
     void Validate() const;
 };
 struct SpotLight {
     Vec3 Position{}, Direction{0,-1,0}, Color{1,1,1};
     float Intensity = 1, Range = 10;
     float InnerConeRadians = .35f, OuterConeRadians = .7f;
-    LocalShadowSettings Shadow;
+    LocalShadowSettings Shadow{};
     void Validate() const;
 };
 struct RectLight {

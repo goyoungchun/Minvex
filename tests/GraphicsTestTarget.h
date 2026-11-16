@@ -5,6 +5,7 @@
 #if defined(_WIN32)
 #include <d3d11.h>
 #include <wrl/client.h>
+#undef GetObject
 #elif defined(__APPLE__)
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
@@ -38,19 +39,31 @@ public:
 #if defined(_WIN32)
         D3D_FEATURE_LEVEL level;
         if(FAILED(D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,0,nullptr,0,D3D11_SDK_VERSION,&device_,&level,&context_))){throw std::runtime_error("D3D11 device unavailable.");}
-        D3D11_TEXTURE2D_DESC d{};d.Width=width;d.Height=height;d.MipLevels=d.ArraySize=1;d.SampleDesc.Count=1;d.Format=DXGI_FORMAT_R8G8B8A8_UNORM;d.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
-        if(FAILED(device_->CreateTexture2D(&d,nullptr,&color_))){throw std::runtime_error("Cannot create test color target.");}
-        d.BindFlags=0;d.Usage=D3D11_USAGE_STAGING;d.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-        if(FAILED(device_->CreateTexture2D(&d,nullptr,&staging_))){throw std::runtime_error("Cannot create test staging target.");}
 #elif defined(__APPLE__)
         [NSApplication sharedApplication];
         device_=MTLCreateSystemDefaultDevice();if(!device_){throw std::runtime_error("Metal device unavailable.");}
-        auto d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:width height:height mipmapped:NO];
-        d.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead;d.storageMode=MTLStorageModePrivate;color_=[device_ newTextureWithDescriptor:d];
-        row_=(static_cast<NSUInteger>(width)*4+255)&~NSUInteger(255);
-        staging_=[device_ newBufferWithLength:row_*height options:MTLResourceStorageModeShared];
-        if(!color_||!staging_){throw std::runtime_error("Cannot create Metal test target/readback.");}
 #endif
+        Resize(width,height);
+    }
+    // Caller detaches and waits for GPU completion before replacing a target.
+    void Resize(int width,int height) {
+        if(width<1||height<1||width>8192||height>8192){throw std::invalid_argument("Invalid test target extent.");}
+#if defined(_WIN32)
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> color,staging;
+        D3D11_TEXTURE2D_DESC d{};d.Width=width;d.Height=height;d.MipLevels=d.ArraySize=1;d.SampleDesc.Count=1;d.Format=DXGI_FORMAT_R8G8B8A8_UNORM;d.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
+        if(FAILED(device_->CreateTexture2D(&d,nullptr,&color))){throw std::runtime_error("Cannot create test color target.");}
+        d.BindFlags=0;d.Usage=D3D11_USAGE_STAGING;d.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        if(FAILED(device_->CreateTexture2D(&d,nullptr,&staging))){throw std::runtime_error("Cannot create test staging target.");}
+        color_=std::move(color);staging_=std::move(staging);
+#elif defined(__APPLE__)
+        auto d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:width height:height mipmapped:NO];
+        d.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead;d.storageMode=MTLStorageModePrivate;auto color=[device_ newTextureWithDescriptor:d];
+        const auto row=(static_cast<NSUInteger>(width)*4+255)&~NSUInteger(255);
+        auto staging=[device_ newBufferWithLength:row*height options:MTLResourceStorageModeShared];
+        if(!color||!staging){throw std::runtime_error("Cannot create Metal test target/readback.");}
+        color_=color;staging_=staging;row_=row;
+#endif
+        width_=width;height_=height;
     }
     GraphicsTestTarget(const GraphicsTestTarget&)=delete;
     GraphicsTestTarget& operator=(const GraphicsTestTarget&)=delete;

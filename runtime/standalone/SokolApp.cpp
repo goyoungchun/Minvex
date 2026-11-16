@@ -69,4 +69,14 @@ void RunStandaloneApplication(const sapp_desc& description) {
 #endif
 }
 
+#if defined(MINVEX_FRAME_PROFILING)
+int StandalonePresentationState() noexcept {
+#if defined(__APPLE__) && defined(SOKOL_METAL)
+    return _sapp_macos_mtl_is_obscured() ? 0:1;
+#else
+    return -1;
+#endif
+}
+#endif
+
 } // namespace lv::detail

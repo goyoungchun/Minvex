@@ -8,6 +8,7 @@
   "flavor": "@MINVEX_PACKAGE_FLAVOR@",
   "system": "@CMAKE_SYSTEM_NAME@",
   "processor": "@CMAKE_SYSTEM_PROCESSOR@",
+  "macosDeploymentTarget": "@CMAKE_OSX_DEPLOYMENT_TARGET@",
   "compiler": "@CMAKE_CXX_COMPILER_ID@-@CMAKE_CXX_COMPILER_VERSION@",
   "pointerBytes": @CMAKE_SIZEOF_VOID_P@,
   "configuration": "$<CONFIG>",

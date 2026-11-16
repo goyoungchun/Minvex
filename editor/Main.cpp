@@ -49,6 +49,15 @@ struct Application {
 };
 void Require(bool valid, const char* message) { if (!valid) { throw std::runtime_error(message); } }
 template<typename T> void Require(const lv::Result<T>& result) { if (!result) { throw std::runtime_error(result.Error().Message); } }
+void RequireGizmoDrag(Application& app,const char* message) {
+    if (app.UI->Document.IsEditing() && ImGuizmo::IsUsing()) {return;}
+    const auto& g=*ImGui::GetCurrentContext();const auto& io=g.IO;
+    char detail[512];
+    std::snprintf(detail,sizeof(detail),"%s frame=%llu mouse=(%.2f,%.2f) target=(%.2f,%.2f) down=%d clicked=%d focusLost=%d active=%u hovered=%u window=%s queued=%d",
+        message,static_cast<unsigned long long>(app.Frames),io.MousePos.x,io.MousePos.y,app.GizmoCenter.x,app.GizmoCenter.y,
+        io.MouseDown[0],ImGui::IsMouseClicked(0),io.AppFocusLost,g.ActiveId,g.HoveredId,g.HoveredWindow ? g.HoveredWindow->Name:"none",g.InputEventsQueue.Size);
+    throw std::runtime_error(detail);
+}
 ImVec2 GizmoScreenPosition(Application& app) {
     const auto& ui=*app.UI;const auto area=ui.ViewportArea();
     const auto point=ui.Document.GetScene().GetWorldTransform(app.GizmoObject).TransformPoint({});
@@ -275,13 +284,13 @@ void SmokeAfterDraw(Application& app) {
         std::printf("Editor %s smoke: docked panels, shared offscreen rendering, resize/suspend/resume, save/reopen and unsaved guard passed.\n",app.AnimationSmoke ? "animation/pose" : "scene");
     }
     if (app.Frames == 9) {const auto area=ui.ViewportArea();Require(ui.GizmoVisible() && area[2]>10 && area[3]>10,"Transform Gizmo is not connected to the Viewport.");app.GizmoCenter={area[0]+area[2]*.5f,area[1]+area[3]*.5f};ImGui::GetIO().AddMousePosEvent(app.GizmoCenter.x,app.GizmoCenter.y);ImGui::GetIO().AddMouseButtonEvent(0,true);}
-    if (app.Frames == 10) {Require(doc.IsEditing() && ImGuizmo::IsUsing(),"Gizmo click did not begin a grouped edit.");ImGui::GetIO().AddMousePosEvent(app.GizmoCenter.x+40,app.GizmoCenter.y+20);}
+    if (app.Frames == 10) {RequireGizmoDrag(app,"Gizmo click did not begin a grouped edit.");ImGui::GetIO().AddMousePosEvent(app.GizmoCenter.x+40,app.GizmoCenter.y+20);}
     if (app.Frames == 11) {app.GizmoMoved=doc.GetScene().GetObject(app.GizmoObject).LocalTransform;Require(std::abs(app.GizmoMoved.Position.X)+std::abs(app.GizmoMoved.Position.Y)>.01f,"Gizmo drag did not update the selected transform.");ImGui::GetIO().AddMouseButtonEvent(0,false);}
     if (app.Frames == 12) {Require(!doc.IsEditing() && doc.CanUndo(),"Gizmo release did not commit its group.");Require(doc.Undo());Require(std::abs(doc.GetScene().GetObject(app.GizmoObject).LocalTransform.Position.X)<1e-5f,"Gizmo undo did not restore the original transform.");Require(doc.Redo());app.GizmoCenter=GizmoScreenPosition(app);ImGui::GetIO().AddMousePosEvent(app.GizmoCenter.x,app.GizmoCenter.y);}
     // Draw one released/hovered frame after Undo/Redo, then hit the actual
     // projected origin. The previous drag delta is not a stable screen target.
     if (app.Frames == 13) {app.GizmoCenter=GizmoScreenPosition(app);ImGui::GetIO().AddMousePosEvent(app.GizmoCenter.x,app.GizmoCenter.y);ImGui::GetIO().AddMouseButtonEvent(0,true);}
-    if (app.Frames == 14) {Require(doc.IsEditing() && ImGuizmo::IsUsing(),"Second Gizmo drag did not begin.");ImGui::GetIO().AddMousePosEvent(app.GizmoCenter.x+20,app.GizmoCenter.y+10);}
+    if (app.Frames == 14) {RequireGizmoDrag(app,"Second Gizmo drag did not begin.");ImGui::GetIO().AddMousePosEvent(app.GizmoCenter.x+20,app.GizmoCenter.y+10);}
     if (app.Frames == 15) {const auto moved=doc.GetScene().GetObject(app.GizmoObject).LocalTransform.Position;Require(std::abs(moved.X-app.GizmoMoved.Position.X)+std::abs(moved.Y-app.GizmoMoved.Position.Y)>.01f,"Second Gizmo drag did not update the transform.");ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape,true);}
     if (app.Frames == 16) {Require(!doc.IsEditing() && doc.GetScene().GetObject(app.GizmoObject).LocalTransform.Matrix().Elements == app.GizmoMoved.Matrix().Elements && doc.Selection() == app.GizmoObject,"Escape did not cancel the Gizmo without clearing selection.");ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape,false);ImGui::GetIO().AddMouseButtonEvent(0,false);}
     if (app.Frames == 17) {Require(ui.GizmoVisible(),"Perspective Gizmo is unavailable.");const auto point=GizmoScreenPosition(app);ImGui::GetIO().AddMousePosEvent(point.x,point.y);ImGui::GetIO().AddKeyEvent(ImGuiKey_E,true);}
@@ -377,7 +386,11 @@ void Event(const sapp_event* event, void* user) noexcept {
     if (!app.UI || app.Failed) { return; }
     try {
         if (event->type == SAPP_EVENTTYPE_QUIT_REQUESTED) { sapp_cancel_quit(); app.UI->RequestQuit(); return; }
-        if (app.Gui) { simgui_handle_event(event); }
+        // Scripted checks own the ImGui input queue. Native mouse/focus events
+        // arriving between injected move/release/press frames otherwise change
+        // the tested sequence according to window activation and OS timing.
+        // Interactive runs still receive every native event through Sokol.
+        if (app.Gui && !app.Smoke && !app.UiSmoke && !app.UiAdvanced) { simgui_handle_event(event); }
         if (event->type == SAPP_EVENTTYPE_FILES_DROPPED) {
             std::vector<std::filesystem::path> paths;
             for (int i = 0; i < sapp_get_num_dropped_files(); ++i) {

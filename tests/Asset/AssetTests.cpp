@@ -61,7 +61,13 @@ void TestImports() {
     Check(Near(matrix->ModelBounds.Min.X, 0) && Near(matrix->ModelBounds.Max.Y, 3.5f) && Near(matrix->ModelBounds.Max.Z, 3), "glTF matrix transforms affect imported bounds");
     const auto unicodePath = temp.Path / std::filesystem::path(u8"로봇.glb");
     std::filesystem::copy_file(Fixture("SharedBox.glb"), unicodePath);
-    Check(registry.LoadModel(unicodePath)->Parts.size() == 2, "Unicode model paths work on Windows");
+    const auto unicode=registry.LoadModel(unicodePath);
+    Check(unicode->Parts.size() == 2, "Unicode model paths work on the native filesystem");
+#if defined(__APPLE__)
+    const auto alias=temp.Path/std::filesystem::path(u8"로봇 별칭.glb");
+    std::filesystem::create_symlink(unicodePath.filename(),alias);
+    Check(registry.LoadModel(alias)==unicode,"relative symbolic-link paths share the canonical Unicode asset");
+#endif
     lv::AssetRegistry another;
     Check(another.LoadModel(Fixture("SharedBox.gltf"))->Id != gltf->Id, "asset IDs do not collide between registries");
     registry.Clear();

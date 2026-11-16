@@ -33,7 +33,7 @@ jobs:
           $options = @('-S', '.', '-B', 'out/release', '-DBUILD_TESTING=ON', '-DCMAKE_BUILD_TYPE=Release')
           if ($IsMacOS) {
             if ((uname -m) -ne 'arm64') { throw 'Official macOS SDK requires an Apple Silicon host.' }
-            $options += '-DCMAKE_OSX_ARCHITECTURES=arm64'
+            $options += @('-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0')
           } else { $options += @('-A', 'x64') }
           cmake @options
           exit $LASTEXITCODE
@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B "out/gpu-$BUILD_CONFIGURATION" -G Ninja \
-            "-DCMAKE_BUILD_TYPE=$BUILD_CONFIGURATION" -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            "-DCMAKE_BUILD_TYPE=$BUILD_CONFIGURATION" -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DBUILD_TESTING=ON -DMINVEX_ENABLE_RENDER_SMOKE_TEST=ON \
             -DMINVEX_ENABLE_EXTENDED_TESTS=ON -DMINVEX_BUILD_BENCHMARKS=ON
           cmake --build "out/gpu-$BUILD_CONFIGURATION" --parallel 4
@@ -95,6 +95,10 @@ jobs:
           done
           ctest --test-dir "out/gpu-$BUILD_CONFIGURATION" --parallel 1 --output-on-failure \
             --output-junit desktop-results.xml
+          "out/gpu-$BUILD_CONFIGURATION/minvex_lighting_pixels" --shader-variants \
+            "out/gpu-$BUILD_CONFIGURATION/shader-variants.json"
+          "out/gpu-$BUILD_CONFIGURATION/minvex_native_lifecycle" --cycles 100 --output \
+            "out/gpu-$BUILD_CONFIGURATION/lifecycle-100.json"
       - name: Retain desktop evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -103,5 +107,7 @@ jobs:
           path: |
             out/gpu-*/registered-tests.txt
             out/gpu-*/desktop-results.xml
+            out/gpu-*/shader-variants.json
+            out/gpu-*/lifecycle-100.json*
             out/gpu-*/Testing/Temporary/LastTest.log
           if-no-files-found: error

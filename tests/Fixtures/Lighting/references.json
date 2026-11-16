@@ -1,0 +1,27 @@
+{
+  "format": "MinvexLightingReference",
+  "version": 1,
+  "width": 128,
+  "height": 128,
+  "pixelFormat": "RGBA8",
+  "origin": "top-left",
+  "referenceBackend": "D3D11",
+  "tolerances": {
+    "rgbMeanAbsoluteError": 1.0,
+    "changedPixelFraction": 0.02,
+    "changedPixelChannelDelta": 24,
+    "alpha": "exact"
+  },
+  "sha256": {
+    "hdr-clipped.rgba": "71189f7fb6aed638640078fba3a35fda6c39c8962e74dcc75935aac948da9063",
+    "hdr-normal.rgba": "70eb492517cef240487f65d0264f9f63eeedcf9971302fedbeb4ff2b3c152746",
+    "hdr-tonemapped.rgba": "32da099b48ef8e305fa4d316b306cbb816e1cf87d492e20d0ed373fb5856b5a4",
+    "pcss-blockers.rgba": "cf69e4cb2d644ebe0ac677a17485aeeea2d2d9d23b5d5b81e26df90b1748d429",
+    "pcss-depth.rgba": "2370429721e376bb9d37826a94dbb596e334b208e1140674c3afffca18615954",
+    "pcss-far-radius.rgba": "7d13e03f0a62607c2a05b1cba7664de4ba9723af74202878b328d7d97c883c79",
+    "pcss-far.rgba": "f8801aa94ba360dc0818266858fcebb9d1b35cb8fded203426d90323f00b24e9",
+    "pcss-near-radius.rgba": "95679ff136937e71a7c402cdafd47da9741a7fb65bf9f9e50bfb0ac4fd4cc0c4",
+    "pcss-near.rgba": "fe1d216eaffa9644333be9365a4bcf463143348239792e1b2240e347cf4f7a5a",
+    "pcss-visibility.rgba": "f8801aa94ba360dc0818266858fcebb9d1b35cb8fded203426d90323f00b24e9"
+  }
+}

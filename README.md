@@ -34,10 +34,10 @@ cmake --build --preset windows-release --parallel 4
 ```
 
 ### macOS
-**Apple Silicon arm64 · Preview · CMake 3.24+, Xcode Command Line Tools, Ninja**
+**macOS 14.0+ 대상 Apple Silicon arm64 · Preview · CMake 3.24+, Xcode Command Line Tools, Ninja**
 
 ```sh
-cmake --preset macos-release -DCMAKE_OSX_ARCHITECTURES=arm64
+cmake --preset macos-release
 cmake --build --preset macos-release --parallel 4
 ./out/build/macos-release/bin/minvex_editor
 ```

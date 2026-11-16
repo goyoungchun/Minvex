@@ -98,6 +98,7 @@ SystemSample GraphicsTelemetry::Sample(double now,FrameMonitor& frames) {
     result.GpuMemoryUsage=g.GpuMemoryUsage;result.GpuMemoryBudget=g.GpuMemoryBudget;result.GpuNonLocalUsage=g.GpuNonLocalUsage;result.GpuNonLocalBudget=g.GpuNonLocalBudget;return result;
 }
 void GraphicsTelemetry::CollectGpu(FrameMonitor& frames) {
+    (void)frames;
 #if defined(_WIN32)
     auto& p=*impl_;if (!p.Timing || p.Active) {return;}
     std::array<Impl::Query*,4> ordered;for (std::size_t i=0;i<ordered.size();++i) {ordered[i]=&p.Queries[i];}
@@ -120,6 +121,7 @@ void GraphicsTelemetry::CollectGpu(FrameMonitor& frames) {
 #endif
 }
 void GraphicsTelemetry::BeginGpu(double now,FrameMonitor& frames) {
+    (void)now;
     CollectGpu(frames);
 #if defined(_WIN32)
     auto& p=*impl_;if (!p.Timing || p.Active) {return;}

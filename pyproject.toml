@@ -20,6 +20,7 @@ sdist.exclude = ["out/**", ".vs/**", ".minvex-editor.*", "docs/**", "README.md",
 sdist.include = ["LICENSE", "NOTICE"]
 
 [tool.scikit-build.cmake.define]
+CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
 # Always reset the wheel default, including after a cached CPU-only build.
 # Explicit -C cmake.define.MINVEX_BUILD_RENDERER=OFF still overrides this.
 MINVEX_BUILD_RENDERER = "ON"

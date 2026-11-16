@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.24)
 
+# Native macOS uses NSView's display link, available since macOS 14.
+# Pin the intended deployment floor before compiler/SDK detection.
+if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET AND NOT DEFINED ENV{MACOSX_DEPLOYMENT_TARGET})
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum Minvex macOS deployment version")
+endif()
+
+# Apple ld can resolve static archives without repeated occurrences. Let CMake
+# deduplicate the transitive SDK graph instead of silencing linker diagnostics.
+if(POLICY CMP0156)
+    cmake_policy(SET CMP0156 NEW)
+endif()
+if(POLICY CMP0179)
+    cmake_policy(SET CMP0179 NEW)
+endif()
+
 # Embed MSVC object debug information so relocated static Debug libraries do not
 # depend on compiler PDB files in the producer's checkout.
 if(POLICY CMP0141)
@@ -7,6 +22,9 @@ if(POLICY CMP0141)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
 endif()
 project(Minvex VERSION 1.0.0 LANGUAGES CXX)
+if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "14.0")
+    message(FATAL_ERROR "Minvex requires a macOS deployment target of 14.0 or later.")
+endif()
 if(MSVC)
     if(POLICY CMP0141)
         # Reconfigured pre-CMP0141 build trees may retain /Zi in their cache.

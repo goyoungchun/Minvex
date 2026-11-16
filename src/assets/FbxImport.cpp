@@ -126,7 +126,7 @@ primitive.HasSkinning=skinIndex.has_value();primitive.MaterialIndex=fallback;
                         if (vertex.num_weights>4) {reducedWeights=true;}
                     }
                     for (std::size_t t=0;t<shapes.size();++t) {const auto* shape=shapes[t];const auto vertex=source.vertex_indices[index];const auto offset=ufbx_get_blend_shape_offset_index(shape,vertex);Vec3 position{},normal{};
-                        if (offset!=UFBX_NO_INDEX) {const auto weight=shape->offset_weights.count ? shape->offset_weights[offset]:1.0;const auto p=shape->position_offsets[offset];position=Vector({p.x*weight,p.y*weight,p.z*weight});if (shape->normal_offsets.count) {const auto n=shape->normal_offsets[offset];normal=Vector({n.x*weight,n.y*weight,n.z*weight});}}
+                        if (offset!=UFBX_NO_INDEX) {const auto weight=shape->offset_weights.count ? shape->offset_weights[offset]:1.0;auto p=shape->position_offsets[offset];p.x*=weight;p.y*=weight;p.z*=weight;position=Vector(p);if (shape->normal_offsets.count) {auto n=shape->normal_offsets[offset];n.x*=weight;n.y*=weight;n.z*=weight;normal=Vector(n);}}
                         context.Reserve(sizeof(Vec3)*(shape->normal_offsets.count ? 2:1));primitive.MorphTargets[t].PositionDeltas.push_back(position);if (shape->normal_offsets.count) {primitive.MorphTargets[t].NormalDeltas.push_back(normal);}
                     }
                     primitive.Geometry.Indices.push_back(static_cast<std::uint32_t>(primitive.Geometry.Vertices.size()));primitive.Geometry.Vertices.push_back(v);

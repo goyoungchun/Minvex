@@ -15,6 +15,7 @@ int main(int argc, char** argv) {
     try {
         lv::ViewerRunOptions run; bool exercise = false, vsync = true;
         std::filesystem::path profilePath; std::optional<int> targetFps;
+        auto preset=lv::QualityPreset::Medium;
         for (int i = 1; i < argc; ++i) {
             const std::string_view argument = argv[i];
             if (argument == "--frames" && i + 1 < argc) {
@@ -23,15 +24,20 @@ int main(int argc, char** argv) {
             } else if (argument == "--exercise") { exercise = true; }
             else if (argument == "--no-vsync") { vsync = false; }
             else if (argument == "--profile" && i + 1 < argc) { profilePath = argv[++i]; }
+            else if (argument == "--quality" && i + 1 < argc) {
+                const std::string_view value=argv[++i];
+                if(value=="low") {preset=lv::QualityPreset::Low;}else if(value=="medium") {preset=lv::QualityPreset::Medium;}else if(value=="high") {preset=lv::QualityPreset::High;}else {return 2;}
+            }
             else if (argument == "--target-fps" && i + 1 < argc) {
                 const std::string_view number = argv[++i]; int value = 0;
                 const auto [end, error] = std::from_chars(number.data(), number.data() + number.size(), value);
                 if (error != std::errc{} || end != number.data() + number.size() || value < 0 || value > 240) { return 2; } targetFps = value;
             }
-            else { std::puts("Usage: minvex_equipment [--frames N] [--exercise] [--profile file.json] [--target-fps 0..240] [--no-vsync]\nSpace: cycle gear; Shift+Space: detach/attach weapon"); return argument == "--help" ? 0 : 2; }
+            else { std::puts("Usage: minvex_equipment [--frames N] [--exercise] [--profile file.json] [--quality low|medium|high] [--target-fps 0..240] [--no-vsync]\nSpace: cycle gear; Shift+Space: detach/attach weapon"); return argument == "--help" ? 0 : 2; }
         }
         lv::ViewerOptions options; options.AutoFrame = false; options.Title = "Minvex Equipment | Space: gear | Shift+Space: detach weapon";
-        options.Quality = lv::MakeQualityProfile(lv::QualityPreset::Medium); options.Quality.AllowFallback = true;
+        options.Quality = lv::MakeQualityProfile(preset); options.Quality.AllowFallback = true;
+        if(!profilePath.empty()) {options.Width=1280;options.Height=720;options.HighDpi=false;}
         options.VSync = vsync;
         // VSync already paces this animation preview to the display. An explicit
         // --target-fps remains available for testing the software limiter.
@@ -63,7 +69,7 @@ int main(int argc, char** argv) {
             if (!profilePath.empty()) { diagnostics.Record(frame, scene, body, clothes); }
         }; }
         const auto result = viewer.Run(run); if (!result) { std::fprintf(stderr, "%s\n", result.Error().Message.c_str()); return 1; }
-        if (!profilePath.empty()) { const auto telemetry = viewer.GetTelemetry(); if (!telemetry) { throw std::runtime_error(telemetry.Error().Message); } diagnostics.Save(profilePath, telemetry.Value(), vsync, fps); }
+        if (!profilePath.empty()) { const auto telemetry = viewer.GetTelemetry(); if (!telemetry) { throw std::runtime_error(telemetry.Error().Message); } diagnostics.Save(profilePath, telemetry.Value(), vsync, fps, preset); }
         return 0;
     } catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }
 }

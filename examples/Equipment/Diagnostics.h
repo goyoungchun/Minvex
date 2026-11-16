@@ -12,6 +12,10 @@ namespace equipment {
 class Diagnostics {
 public:
     void Record(const lv::ViewerFrameInfo& frame, const lv::Scene& scene, lv::ObjectId body, lv::ObjectId clothes) {
+        if(previousFrame_ && frame.FrameNumber==*previousFrame_) {return;}
+        if(previousFrame_ && frame.FrameNumber!=*previousFrame_+1) {throw std::runtime_error("Equipment profile frame sequence is incomplete.");}
+        if(frame.FramebufferWidth!=1280||frame.FramebufferHeight!=720) {throw std::runtime_error("Equipment profile requires a 1280x720 framebuffer.");}
+        previousFrame_=frame.FrameNumber;
         const auto now = std::chrono::steady_clock::now();
         const auto interval = previous_ ? std::chrono::duration<double, std::milli>(now - *previous_).count() : 0;
         previous_ = now; // Observe wall-clock cadence even when the simulation delta is clamped after a stall.
@@ -24,7 +28,7 @@ public:
         const auto& matrix = source.Local[4].Elements;
         samples_.push_back({interval, scene.GetObject(body).Animation.Time(), std::atan2(double(matrix[1]), matrix[0]), error});
     }
-    void Save(const std::filesystem::path& path, const lv::TelemetrySnapshot& telemetry, bool vsync, int fps) const {
+    void Save(const std::filesystem::path& path, const lv::TelemetrySnapshot& telemetry, bool vsync, int fps,lv::QualityPreset quality=lv::QualityPreset::Medium) const {
         if (samples_.empty()) { throw std::runtime_error("Profile needs more than 30 frames (warmup)."); }
         std::vector<double> intervals; double error = 0; std::size_t over25 = 0;
         for (const auto& sample : samples_) { intervals.push_back(sample.Ms); error = std::max(error, sample.Error); over25 += sample.Ms > 25; }
@@ -34,6 +38,7 @@ public:
         std::ofstream summary(path, std::ios::binary); summary << std::setprecision(12);
         summary << "{\n\"format\":\"MinvexEquipmentProfile\",\"version\":1,\"samples\":" << samples_.size()
             << ",\"vsync\":" << (vsync ? "true" : "false") << ",\"targetFps\":" << fps
+            << ",\"width\":1280,\"height\":720,\"quality\":\""<<(quality==lv::QualityPreset::Low ? "low":quality==lv::QualityPreset::Medium ? "medium":"high")<<"\""
             << ",\"meanFrameMs\":" << mean << ",\"averageFps\":" << 1000 / mean
             << ",\"p50FrameMs\":" << percentile(.5) << ",\"p95FrameMs\":" << percentile(.95) << ",\"maxFrameMs\":" << intervals.back()
             << ",\"framesOver25Ms\":" << over25 << ",\"maxFollowerMatrixError\":" << error << "\n}\n";
@@ -50,5 +55,6 @@ private:
     struct Sample { double Ms, Time, Angle, Error; };
     std::vector<Sample> samples_;
     std::optional<std::chrono::steady_clock::time_point> previous_;
+    std::optional<std::uint64_t> previousFrame_;
 };
 } // namespace equipment

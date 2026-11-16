@@ -4,7 +4,7 @@
 namespace lv {
 struct SkeletonSocket {
     std::string Name, Joint;
-    Transform LocalTransform;
+    Transform LocalTransform{};
 };
 
 class SharedSkeletonAsset;

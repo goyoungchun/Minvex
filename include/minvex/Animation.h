@@ -26,7 +26,7 @@ using ModelHandle = std::shared_ptr<const ModelAsset>;
 struct SkeletonJoint {
     std::string Name;
     JointId Parent = NoJoint;
-    Transform ReferenceLocal;
+    Transform ReferenceLocal{};
     Mat4 ReferenceMatrix = Mat4::Identity();
     bool Editable = true; // Matrix-authored shear nodes are retained, read-only.
     bool IsJoint = false;

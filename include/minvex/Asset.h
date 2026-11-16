@@ -84,14 +84,14 @@ struct MeshPrimitive {
     MeshData Geometry;
     std::size_t MaterialIndex = 0;
     bool HasSkinning = false;
-    std::vector<MeshLod> Lods; // Rigid LOD1..3; imported base vertex/index order is preserved.
-    std::vector<MorphTarget> MorphTargets;
+    std::vector<MeshLod> Lods{}; // Rigid LOD1..3; imported base vertex/index order is preserved.
+    std::vector<MorphTarget> MorphTargets{};
 };
 
 struct MeshAsset {
     std::string Name;
     std::vector<MeshPrimitive> Primitives;
-    std::vector<float> MorphWeights;
+    std::vector<float> MorphWeights{};
 };
 
 struct ModelNode {
@@ -107,7 +107,7 @@ struct ModelPart {
     std::size_t MeshIndex = 0;
     Mat4 Transform = Mat4::Identity();
     JointId Node = NoJoint;
-    std::optional<std::size_t> SkinIndex;
+    std::optional<std::size_t> SkinIndex{};
 };
 
 enum class AssetFormat { Gltf, Obj, Fbx, Custom };
