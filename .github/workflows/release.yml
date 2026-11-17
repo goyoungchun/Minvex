@@ -73,6 +73,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mapfile -d '' -t release_assets < <(find release-assets -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.sha256' \) -print0)
+          test "${#release_assets[@]}" -eq 4
+          while IFS= read -r -d '' checksum; do
+            (cd "$(dirname "$checksum")" && sha256sum --check "$(basename "$checksum")")
+          done < <(find release-assets -type f -name '*.sha256' -print0)
           cat > release-notes.txt <<'NOTES'
           Minvex is a lightweight C++20 graphics SDK for Windows x64 / D3D11 and macOS 14+ / Apple Silicon arm64 / Metal.
 
@@ -86,5 +91,5 @@ jobs:
           NOTES
           release_flags=()
           if [[ "$RELEASE_TAG" == *-rc.* ]]; then release_flags+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" release-assets/* --verify-tag \
+          gh release create "$RELEASE_TAG" "${release_assets[@]}" --verify-tag \
             --title "Minvex $RELEASE_TAG" --notes-file release-notes.txt "${release_flags[@]}"
