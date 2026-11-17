@@ -8,8 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-import ValidateMacos as validation
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import RunTests as validation
 
 
 class EvidenceTests(unittest.TestCase):
@@ -38,6 +38,43 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("100", by_name["g8-lifecycle"].command)
         self.assertTrue(by_name["p02-morph-1"].command[-1] == "--animate")
         self.assertEqual(sum(s.name.startswith("p01-") and s.name not in ("p01-trace", "p01-continuous") for s in steps), 15)
+
+    def test_three_suites_cover_the_full_plan_on_both_platforms(self):
+        for system in ("Darwin", "Windows"):
+            complete, _ = validation.plan(self.output, system=system)
+            divided = [validation.plan(self.output, system=system, suite=suite)[0] for suite in ("contracts", "graphics", "release")]
+            self.assertEqual({s.name for s in complete}, {s.name for suite in divided for s in suite})
+            for suite in divided:
+                available = set()
+                for step in suite:
+                    self.assertTrue(set(step.requires) <= available, step.name)
+                    available.add(step.name)
+            self.assertNotIn("profile-configure", {s.name for s in complete})
+
+    def test_windows_plan_contains_no_macos_tools_or_flags(self):
+        steps, _ = validation.plan(self.output, system="Windows")
+        for step in steps:
+            self.assertNotIn(step.command[0], ("file", "otool", "xcrun", "leaks"))
+            self.assertFalse(any("CMAKE_OSX" in arg for arg in step.command))
+            self.assertFalse(step.validation)
+        by_name = {s.name: s for s in steps}
+        self.assertTrue(by_name["release-variants"].command[0].endswith(".exe"))
+        self.assertIn("--inspect-pe", by_name["debug-architecture"].command)
+
+    def test_cpu_and_desktop_tests_are_disjoint(self):
+        steps, _ = validation.plan(self.output)
+        by_name = {s.name: s for s in steps}
+        self.assertIn("-LE", by_name["debug-tests"].command)
+        self.assertIn("-L", by_name["debug-metal"].command)
+        self.assertEqual(by_name["debug-metal"].command[by_name["debug-metal"].command.index("--parallel") + 1], "1")
+
+    def test_mac_minimum_machine_is_not_a_windows_requirement(self):
+        self.assertEqual(validation.POLICY["architectures"], {"Windows": "x64", "Darwin": "arm64"})
+        steps, _ = validation.plan(self.output, system="Windows")
+        results = {s.name: {"gate": s.gate, "status": "PASS"} for s in steps}
+        report = validation.assess(self.output, results, False, True, True, {}, system="Windows")
+        self.assertEqual(report["gates"]["G0"], "PASS")
+        self.assertEqual(report["gates"]["G9"], "PASS")
 
     def test_failure_does_not_stop_independent_work(self):
         failed = validation.run_step(validation.Step("bad", "G1", [sys.executable, "-c", "raise SystemExit(7)"]), self.output, {})

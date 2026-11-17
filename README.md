@@ -34,7 +34,7 @@ cmake --build --preset windows-release --parallel 4
 ```
 
 ### macOS
-**macOS 14.0+ 대상 Apple Silicon arm64 · Preview · CMake 3.24+, Xcode Command Line Tools, Ninja**
+**macOS 14.0+ 대상 Apple Silicon arm64 · CMake 3.24+, Xcode Command Line Tools, Ninja**
 
 ```sh
 cmake --preset macos-release
@@ -83,14 +83,24 @@ cmake --build build
 | **SDK**                  | C++20, CMake 설치·연결, Facade API, Result/Error, 공식 예제, CPU-only 구성                                                                                        |
 | **Python**               | CPython 3.12, Viewer·Scene·Lighting·Pose·Animation·Blend Tree·Additive·Morph·Material·Quality·Event API, Wheel                                                   |
 | **Web**                  | WebAssembly·WebGL2 Canvas, JavaScript API, URL·파일·메모리 로딩, Animation·Blend Tree·Additive·Event·Morph·PBR, Context 복구                                     |
-| **Platform**             | Windows x64 / D3D11, macOS Apple Silicon arm64 / Metal (Preview), Browser WebGL2                                                                        |
+| **Platform**             | Windows x64 / D3D11, macOS Apple Silicon arm64 / Metal, Browser WebGL2                                                                        |
 
 ## 실행 요구사항
 
 | 항목          | 사양                                                                 |
 | ----------- | ------------------------------------------------------------------ |
 | **Windows** | x64, DirectX 11 Feature Level 11_0 이상                              |
-| **macOS**   | Apple Silicon arm64, Metal (Preview). Intel Mac은 공식 지원 대상에 포함되지 않음 |
-| **메모리**     | 4GB                                                                |
+| **macOS**   | Apple Silicon arm64, macOS 14.0 이상, Metal. Intel Mac은 공식 지원 대상에 포함되지 않음 |
+| **메모리**     | 사용 장면과 자산 크기에 따라 달라짐                                                                |
 | **개발 도구**   | CMake 3.24+, C++20 컴파일러, Ninja, 플랫폼 SDK                            |
 
+
+## API와 라이선스
+
+각 기능의 역할과 사용 방법은 [API 문서](docs/API.md)를 참고함.
+
+Minvex 자체 코드는 [Apache-2.0](LICENSE)을 적용하며 [NOTICE](NOTICE)를 함께 제공함. 외부 의존성은 원래의 라이선스를 유지하며 설치 SDK의 `share/minvex/licenses`에서 고지를 확인할 수 있음.
+
+## 표시 성능
+
+macOS의 화면 표시에는 OS display callback·창 가림·절전 상태가 영향을 줌. 간헐적인 긴 프레임이 관측되며 일정한 최대 프레임 시간을 보장하지 않음. VSync 해제는 화면 주사율을 넘는 callback 빈도를 보장하지 않음.

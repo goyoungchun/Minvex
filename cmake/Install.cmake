@@ -49,12 +49,12 @@ install(FILES examples/Equipment/Main.cpp examples/Equipment/EquipmentScene.h ex
     DESTINATION "${_sdk_share}/examples/Equipment")
 install(DIRECTORY examples/assets/ DESTINATION "${_sdk_share}/examples/assets")
 install(DIRECTORY benchmarks/ DESTINATION "${_sdk_share}/benchmarks")
-# Documentation is an explicit opt-in until the local drafts are published.
-option(MINVEX_INSTALL_DRAFT_DOCS "Include local README/API drafts in a local SDK package" OFF)
-if(MINVEX_INSTALL_DRAFT_DOCS)
-    install(FILES README.md DESTINATION "${_sdk_share}/docs")
-    install(FILES assets/branding/Minvex_banner_transparent.png DESTINATION "${_sdk_share}/docs/assets/branding")
-    install(FILES docs/API.md DESTINATION "${_sdk_share}/docs")
+# Install only public product documentation; local planning documents stay local.
+option(MINVEX_INSTALL_DOCS "Include README and API reference in the SDK" ON)
+if(MINVEX_INSTALL_DOCS)
+    install(FILES README.md DESTINATION .)
+    install(FILES assets/branding/Minvex_banner_transparent.png DESTINATION assets/branding)
+    install(FILES docs/API.md DESTINATION docs)
 endif()
 install(FILES third_party/versions.json DESTINATION "${_sdk_share}/licenses")
 install(FILES third_party/cgltf/LICENSE DESTINATION "${_sdk_share}/licenses" RENAME cgltf-LICENSE)

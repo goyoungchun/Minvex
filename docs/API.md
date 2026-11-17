@@ -18,9 +18,29 @@ target_link_libraries(my_viewer PRIVATE minvex::viewer)
 
 공개 헤더 경로는 `<minvex/...>`, CMake 옵션 접두사는 `MINVEX_`, SDK 데이터 경로는 `share/minvex`임. 이전 이름의 패키지·타깃·헤더 별칭은 제공하지 않으므로 SDK 소비자는 참조를 갱신하고 다시 빌드해야 함. 문서 형식은 새 저장 시 Minvex 식별자를 쓰며 이름 변경 이전의 Scene·Pose·Quality·Editor 설정 식별자는 읽기 호환을 유지함. C++ 네임스페이스는 기존 `lv`를 사용함.
 
+## 모듈별 주요 API
+
+| 모듈 / 헤더 | 주요 타입·함수 |
+|---|---|
+| **ui** · [Ui.h](../include/minvex/Ui.h) | `UiCanvas`, `UiElement`, `UiLayout/UiContainer/UiLayoutBox`, `UiStyle`, `UiTextStyle/UiTextRun`, `UiHistoryState`, `UiInput`, `UiFont`. `Add/Set/Get`, `ResolveLayout/SetScroll`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo/History`, `ProcessInput/PollActivations`, `Fonts`, `SetFontDirectory`, `Save/Load`, `Rasterize` |
+| **core** · [Math.h](../include/minvex/Math.h), [Mesh.h](../include/minvex/Mesh.h) | `Vec3`, `Quaternion`, `Mat4`, `Transform`, `Bounds`, `MeshData`, `MakeCube()`, `DecomposeTRS()`. 생성 헤더 `Version.h`의 `Version`, `BuildInfo`, `GetBuildInfo()` |
+| **assets** · [Asset.h](../include/minvex/Asset.h), [AssetLoading.h](../include/minvex/AssetLoading.h) | `ModelHandle`, `MorphTarget`, `MaterialAsset`, `ShadingModel`, `ImportSettings`, `ImporterRegistry`, `AssetRegistry::LoadModel/PrepareModel/ReimportModel`, `InspectModel()`, `ValidateModel()`, `CopyModelToProject()`, `AssetLoader`, `AssetHotReload` |
+| **scene** · [Scene.h](../include/minvex/Scene.h) | `Scene`, `ObjectId`, `Camera`, `AmbientLight`, `DirectionalLight`, `PointLight`, `SpotLight`, `RectLight`, `LocalShadowSettings`. `AddModel()`, `CreateObject()`, `SetParent()`, `SetTransform()`, `SetModel()`, `GetMaterial/SetMaterial/ResetMaterial`, `GetAnimation()`, `UpdateAnimations()`, `SceneAnimationEvent`, `PollAnimationEvents/DispatchAnimationEvents()` |
+| **animation** · [Animation.h](../include/minvex/Animation.h) | `SkeletonAsset`, `SkinAsset`, `PoseAsset`, `PoseBuffer`, `PoseChannels`, `AdditivePose/AdditiveAnimationState`, `AnimationClip`, `AnimationEvent/AnimationEventTrack/AnimationEventOccurrence`, `AnimationBlendState`, `BlendTreeDesc/BlendTreeAsset/BlendTreeState`, `MorphTrack`, `MorphPose`, `AnimationPlayer`. `EvaluateAnimation()`, `BlendPoses()`, `ComposePose()`, `CreateBlendTree()`, `EvaluateBlendWeights/EvaluateBlendTree()`, `Play/PlayBlendTree()`, `CrossFade()`, `SetBlendParameter()`, `Seek/SeekBlendTree()`, `EvaluatePose/Evaluate()`, `SetAdditiveAnimation()`, `MakeAdditivePose/ApplyAdditivePose()`, `CapturePose()` |
+| **scene_io** · [SceneIO.h](../include/minvex/SceneIO.h), [PoseIO.h](../include/minvex/PoseIO.h) | `SceneArchive`, `SaveScene(scene, path, library={})`, `LoadScene(path, registry)`, `SavePose(pose, skeleton, path)`, `LoadPose(path, skeleton)` |
+| **viewer** · [Viewer.h](../include/minvex/Viewer.h) | `ViewerOptions`, `ModelOptions`, `ViewerRunOptions`, `Viewer`. `AddModel()`, `AddModelAsync()`, `GetAssetLoad()`, `CommitModelLoad()`, `SetHotReload()`, `SetCamera()`, `SetMaterial/ResetMaterial`, `SetQuality()`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `GetScene()`, `Run()` |
+| **embedded** · [EmbeddedRenderer.h](../include/minvex/EmbeddedRenderer.h) | `HostGraphicsContext`, `HostRenderTarget`, `EmbeddedFrameOptions`, `EmbeddedRenderer`. `Initialize()`, `Update()`, `Render()`, `WaitIdle()`, `DetachTarget()`, `Shutdown()` |
+| **editor_document** · [EditorDocument.h](../include/minvex/EditorDocument.h) | `EditorDocument`는 Editor의 Scene·선택·미저장 상태 관리 모델. `OpenModel()`, `Open()`, `Save()`, `ImportModel()`, `PlaceModel()`, `SetWorldTransform()`, `SetMaterial/ResetMaterial`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo`, `ClearUndoHistory()`, `SetMorphWeights/ClearMorphWeights` |
+| **quality** · [Quality.h](../include/minvex/Quality.h) | `QualityPreset`, `QualityProfile`, `QualityOverrides`, `QualityCapabilities`, `QualityState`. `MakeQualityProfile()`, `ExpandQuality()`, `ResolveQuality()`, `SaveQuality()`, `LoadQuality()` |
+| **telemetry** · [SystemInfo.h](../include/minvex/SystemInfo.h), [Telemetry.h](../include/minvex/Telemetry.h) | `HardwareInfo`, `MetricStatus`, `TelemetrySnapshot`. `SystemInfo::QueryHardware()`, `SystemMonitor::Sample()`, `FrameMonitor`, `EstimateQualityResources()`, `RecommendQuality()`, `SaveTelemetry()` |
+| **animation** · [Skeleton.h](../include/minvex/Skeleton.h) | `JointId`, `SkeletonJoint`, `SkeletonAsset`, `SkeletonSocket`, `SharedSkeletonAsset`, `SharedSkeletonHandle`, `SkeletonBinding`. `CreateSharedSkeleton()`, `FindSkeletonJoint()`, `BindSkeleton()` |
+| **optimization** · [Optimization.h](../include/minvex/Optimization.h) | `OptimizeMesh()`, `AnalyzeMeshLocality()`, `GenerateMeshLods()`, `SelectMeshLod()`, `TextureMipBytes()`, `OptimizationStatistics` |
+| **debug** · [Debug.h](../include/minvex/Debug.h) | `DebugView`, `DebugOptions`, `DebugDraw`, `RenderDebugInfo`. `InspectBoneInfluences()`, `InspectJoint()`, Viewer/Embedded의 `SetDebugOptions/SetDebugDraw/GetRenderDebugInfo()` |
+| **core** · [Result.h](../include/minvex/Result.h) | `Result<T>`, `Error`, `ErrorCode`. 실패 원인·힌트·입력 경로 전달 |
+
 ## 화면 UI
 
-[Ui.h](../include/minvex/Ui.h)의 `UiCanvas`는 Scene과 독립된 화면 overlay임. `minvex::ui`로 CPU 작성·저장·native text raster를 사용하고 `Viewer::GetUi()` 또는 `EmbeddedRenderer::GetUi()`로 3D 위에 합성함. Windows native 실행을 검증했으며 macOS Core Text 경로는 구현되어 있지만 실기기 검증 대기임. Python/Web UI binding은 제공하지 않음.
+[Ui.h](../include/minvex/Ui.h)의 `UiCanvas`는 Scene과 독립된 화면 overlay임. `minvex::ui`로 CPU 작성·저장·native text raster를 사용하고 `Viewer::GetUi()` 또는 `EmbeddedRenderer::GetUi()`로 3D 위에 합성함. Windows는 DirectWrite, macOS는 Core Text로 텍스트를 표시함. Python/Web UI binding은 제공하지 않음.
 
 ```cpp
 lv::Viewer viewer;
@@ -68,7 +88,7 @@ UI는 이전 CPU bitmap을 보관하고 요소·상태·변환·상위 clip의 �
 
 canvas별 bitmap과 변경 판정 데이터의 추정 보관량은 32 MiB로 제한함. 이 예산을 넘는 화면은 전체 raster로 처리하고 캐시를 보관하지 않음. 작업 중 복사본·native text·GPU 자원은 이 예산에 포함하지 않음. 여러 요소가 함께 바뀌거나 스크롤·재배치로 변경 영역이 커지면 비용도 커질 수 있음. 갱신 빈도와 요소 수는 대상 기기에서 측정해 정하며, 요소 수 한도는 프레임 성능을 보장하는 한도가 아님.
 
-Windows canvas는 시스템 DirectWrite collection·기본 UI font family와 WIC/Direct2D text surface를 재사용함. surface는 최대 4개·추정 pixel 저장량 16 MiB까지 보관하며 큰 surface는 임시로 사용함. 이는 위 CPU bitmap 예산과 별도이며 driver/native 내부 할당의 상한은 아님. `RefreshFonts()`와 Font directory 변경은 이 문맥도 갱신하므로 시스템 폰트·기본 UI family 변경 후 호출함. 사용자 font 파일 collection은 호출 간 보관하지 않음. 기존 Host COM apartment를 존중하며 canvas는 owner thread에서 파괴해야 함.
+
 
 GPU 합성은 같은 크기의 overlay texture와 staging buffer를 재사용하고 변경된 bitmap을 전송함. 전송은 현재 전체 bitmap 단위이며 row alignment에 따른 padding을 포함함. GPU 논리 buffer 비용·render debugger에는 UI upload staging이 포함됨.
 
@@ -114,7 +134,7 @@ Standalone은 absolute `ViewerInputEvent::X/Y`와 `KeyUp`을 UI에 먼저 전달
 
 Editor의 **UI Designer**에서 계층·container/sizing·run별 서식·style·font를 편집하고 별도의 UI Undo/Redo를 제공함. Drag/typing의 연속 속성 변경은 하나의 편집으로 묶고 Escape로 취소할 수 있음. UI Designer에 focus가 있고 text input이 자체 편집 키를 사용하지 않을 때 Ctrl+Z·Ctrl+Y/Ctrl+Shift+Z·Ctrl+S를 UI에 전달하며 Scene 이력은 별도임. New UI·Load UI·Quit은 미저장 UI의 Save/Discard/Cancel을 제공함. Scene의 New/Open은 독립 UI를 유지함. UI는 Save UI로 따로 저장함.
 
-Font/raster 실패는 UI 미리보기 오류로 표시하고 Scene 표시를 유지함. 속성을 고치거나 Retry preview로 다시 시도함. `minvex_ui_overlay`는 Column/Hug·rich run·묶음 theme 변경과 Undo/Redo 예제임. UI v2는 v1만 지원하는 이전 reader로 읽을 수 없음. macOS Core Text의 새 rich run·측정 경로는 실기기 검증 대기이며 플랫폼별 동일 pixel 출력을 약속하지 않음. 정적 SDK의 공개 구조체 변경에는 소비자 재빌드가 필요함.
+Font/raster 실패는 UI 미리보기 오류로 표시하고 Scene 표시를 유지함. 속성을 고치거나 Retry preview로 다시 시도함. `minvex_ui_overlay`는 Column/Hug·rich run·묶음 theme 변경과 Undo/Redo 예제임. UI v2는 v1만 지원하는 이전 reader로 읽을 수 없음. 폰트 선택과 글자 raster 결과는 운영체제의 텍스트 엔진을 따름.
 
 ## 좌표·변환 계약
 
@@ -123,21 +143,38 @@ Font/raster 실패는 UI 미리보기 오류로 표시하고 Scene 표시를 유
 - 삼각형 목록과 CCW 앞면을 사용함. `MeshData`는 32-bit index, `Vertex`는 Position·Normal·Color·TexCoord·Joint/Weight 4개·Tangent를 포함함. 정확한 배열 타입은 [Mesh.h](../include/minvex/Mesh.h)를 따름.
 - 비유한 값·singular Transform·잘못된 Quaternion은 공개 검증 함수의 계약에 따라 거부함. `DecomposeTRS()`는 shear를 TRS로 가장하지 않고 거부함. 모델 Import의 단위·좌표 변환과 오류는 Asset 진단을 확인함.
 
-## 모듈별 주요 API
+## Asset 로딩과 Scene 구성
 
-| 모듈 / 헤더 | 주요 타입·함수 |
+| 기능 | 접근법과 역할 |
 |---|---|
-| **ui** · [Ui.h](../include/minvex/Ui.h) | `UiCanvas`, `UiElement`, `UiLayout/UiContainer/UiLayoutBox`, `UiStyle`, `UiTextStyle/UiTextRun`, `UiHistoryState`, `UiInput`, `UiFont`. `Add/Set/Get`, `ResolveLayout/SetScroll`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo/History`, `ProcessInput/PollActivations`, `Fonts`, `SetFontDirectory`, `Save/Load`, `Rasterize` |
-| **core** · [Math.h](../include/minvex/Math.h), [Mesh.h](../include/minvex/Mesh.h) | `Vec3`, `Quaternion`, `Mat4`, `Transform`, `Bounds`, `MeshData`, `MakeCube()`, `DecomposeTRS()`. 생성 헤더 `Version.h`의 `Version`, `BuildInfo`, `GetBuildInfo()` |
-| **assets** · [Asset.h](../include/minvex/Asset.h), [AssetLoading.h](../include/minvex/AssetLoading.h) | `ModelHandle`, `MorphTarget`, `MaterialAsset`, `ShadingModel`, `ImportSettings`, `ImporterRegistry`, `AssetRegistry::LoadModel/PrepareModel/ReimportModel`, `InspectModel()`, `ValidateModel()`, `CopyModelToProject()`, `AssetLoader`, `AssetHotReload` |
-| **scene** · [Scene.h](../include/minvex/Scene.h) | `Scene`, `ObjectId`, `Camera`, `AmbientLight`, `DirectionalLight`, `PointLight`, `SpotLight`, `RectLight`, `LocalShadowSettings`. `AddModel()`, `CreateObject()`, `SetParent()`, `SetTransform()`, `SetModel()`, `GetMaterial/SetMaterial/ResetMaterial`, `GetAnimation()`, `UpdateAnimations()`, `SceneAnimationEvent`, `PollAnimationEvents/DispatchAnimationEvents()` |
-| **animation** · [Animation.h](../include/minvex/Animation.h) | `SkeletonAsset`, `SkinAsset`, `PoseAsset`, `PoseBuffer`, `PoseChannels`, `AdditivePose/AdditiveAnimationState`, `AnimationClip`, `AnimationEvent/AnimationEventTrack/AnimationEventOccurrence`, `AnimationBlendState`, `BlendTreeDesc/BlendTreeAsset/BlendTreeState`, `MorphTrack`, `MorphPose`, `AnimationPlayer`. `EvaluateAnimation()`, `BlendPoses()`, `ComposePose()`, `CreateBlendTree()`, `EvaluateBlendWeights/EvaluateBlendTree()`, `Play/PlayBlendTree()`, `CrossFade()`, `SetBlendParameter()`, `Seek/SeekBlendTree()`, `EvaluatePose/Evaluate()`, `SetAdditiveAnimation()`, `MakeAdditivePose/ApplyAdditivePose()`, `CapturePose()` |
-| **scene_io** · [SceneIO.h](../include/minvex/SceneIO.h), [PoseIO.h](../include/minvex/PoseIO.h) | `SceneArchive`, `SaveScene(scene, path, library={})`, `LoadScene(path, registry)`, `SavePose(pose, skeleton, path)`, `LoadPose(path, skeleton)` |
-| **viewer** · [Viewer.h](../include/minvex/Viewer.h) | `ViewerOptions`, `ModelOptions`, `ViewerRunOptions`, `Viewer`. `AddModel()`, `AddModelAsync()`, `GetAssetLoad()`, `CommitModelLoad()`, `SetHotReload()`, `SetCamera()`, `SetMaterial/ResetMaterial`, `SetQuality()`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `GetScene()`, `Run()` |
-| **embedded** · [EmbeddedRenderer.h](../include/minvex/EmbeddedRenderer.h) | `HostGraphicsContext`, `HostRenderTarget`, `EmbeddedFrameOptions`, `EmbeddedRenderer`. `Initialize()`, `Update()`, `Render()`, `WaitIdle()`, `DetachTarget()`, `Shutdown()` |
-| **editor_document** · [EditorDocument.h](../include/minvex/EditorDocument.h) | `EditorDocument`는 Editor의 Scene·선택·미저장 상태 관리 모델. `OpenModel()`, `Open()`, `Save()`, `ImportModel()`, `PlaceModel()`, `SetWorldTransform()`, `SetMaterial/ResetMaterial`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo`, `ClearUndoHistory()`, `SetMorphWeights/ClearMorphWeights` |
-| **quality** · [Quality.h](../include/minvex/Quality.h) | `QualityPreset`, `QualityProfile`, `QualityOverrides`, `QualityCapabilities`, `QualityState`. `MakeQualityProfile()`, `ExpandQuality()`, `ResolveQuality()`, `SaveQuality()`, `LoadQuality()` |
-| **telemetry** · [SystemInfo.h](../include/minvex/SystemInfo.h), [Telemetry.h](../include/minvex/Telemetry.h) | `HardwareInfo`, `MetricStatus`, `TelemetrySnapshot`. `SystemInfo::QueryHardware()`, `SystemMonitor::Sample()`, `FrameMonitor`, `EstimateQualityResources()`, `RecommendQuality()`, `SaveTelemetry()` |
+| 모델 읽기 | `AssetRegistry::LoadModel(path, settings)`로 glTF/GLB·OBJ/MTL·FBX를 읽고 immutable `ModelHandle`을 얻음. `ImportSettings`로 좌표·단위·자원 한도를 설정함. `InspectModel/ValidateModel`로 내용과 오류를 조회하고 `ImporterRegistry`로 importer를 등록함 |
+| 캐시·재임포트 | `PrepareModel/AddPrepared`로 준비와 게시를 분리함. `ReimportModel/ReplacePrepared`는 Asset ID를 유지하며 후보를 교체함. `Scene::ReplaceModel`로 해당 Asset을 공유하는 인스턴스에 반영함 |
+| 비동기 로딩 | `AssetLoader::Submit` → `Poll` → Ready 모델을 owner thread에서 게시함. `Cancel/Forget`으로 작업과 보관 결과를 정리함. Viewer는 `AddModelAsync/GetAssetLoad/CommitModelLoad/CancelModelLoad`를 제공함 |
+| Hot Reload | `AssetHotReload::Watch/Synchronize/Poll`로 의존 파일 변경을 조회함. Viewer는 `SetHotReload(true)`와 `PollHotReload(now)`를 제공함. 실패 원인은 `GetAssetLoadError()`로 확인함 |
+| 객체 계층 | `Scene::CreateObject/AddModel`, `SetParent`, `SetTransform/SetWorldTransform`, `SetVisible`, `RemoveObject`로 구성함. `GetObject/ObjectIds/GetWorldTransform/GetModelBounds`로 조회함. `RemoveObject`는 subtree를 함께 제거함 |
+| 재질·변형 | `GetMaterial/SetMaterial/ResetMaterial`은 인스턴스 재질 override를 관리함. `GetAnimation`의 Player로 Pose·Morph·재생 상태를 제어함. 원본 Asset은 변경하지 않음 |
+| 프로젝트 저장 | `SaveScene/LoadScene`은 Scene과 외부 모델 참조를 저장·복원함. `CopyModelToProject`는 모델 및 의존 자산을 프로젝트로 복사함. `SavePose/LoadPose`는 Skeleton에 대응하는 Pose를 저장·복원함 |
+
+CPU에서 직접 Scene을 사용할 때 `UpdateAnimations(deltaSeconds)`로 시간을 진행함. Viewer에서는 기본 실행 루프가 진행함. Scene 참조를 반환하는 조회는 객체 삭제·모델 교체·문서 편집 뒤 다시 수행함.
+
+## 카메라·품질·진단
+
+| 기능 | 접근법과 역할 |
+|---|---|
+| 카메라 | `Scene::MainCamera` 또는 `Viewer::SetCamera()`로 perspective/orthographic 카메라를 설정함. `Viewer::FrameScene()`으로 전체 장면을 프레이밍함. 기본 마우스 입력은 Orbit·Pan·Zoom을 처리하며 Host 입력은 `ProcessInput()`으로 전달함 |
+| 품질 | `MakeQualityProfile(Low/Medium/High)`와 `Overrides`로 해상도 비율·MSAA·조명·Shadow·FXAA·HDR·압축·LOD·FPS·On-Demand를 지정함. `SetQuality()`로 적용하고 `GetQuality()`로 요청값·적용값·조정을 확인함 |
+| 지원 기능 | `GetQualityCapabilities()`는 현재 graphics context의 기능과 한도를 반환함. `ExpandQuality()`는 설정을 확장하고 `ResolveQuality()`는 capability와 출력 크기에 맞춰 해석함. `AllowFallback`으로 대체 허용 여부를 정함. `SaveQuality/LoadQuality`로 프로파일을 저장·복원함 |
+| 하드웨어·시스템 | `SystemInfo::QueryHardware()`로 창 없이 장치를 열거함. `SystemMonitor::Sample(now)`로 프로세스·시스템 사용량을 조회함. `Metric::Status/Value/Source`를 함께 읽으며 미지원·미수집 값을 0으로 해석하지 않음 |
+| 실행 지표 | `Viewer/EmbeddedRenderer::GetTelemetry()`로 현재 장치·Scene 렌더링·자원 비용을 조회함. `FrameMonitor`는 호출자가 제공한 CPU/GPU 시간과 cadence를 집계함. `SaveTelemetry()`는 JSON/CSV를 저장함 |
+| 자원·품질 추천 | `EstimateQualityResources()`는 엔진의 논리적 자원 비용을 계산함. `RecommendQuality()`는 capability·메모리·현재 Scene 관측으로 프로파일을 추천함. 논리적 크기는 드라이버 실제 할당량과 다를 수 있음 |
+| 렌더링 진단 | `SetDebugView/SetDebugOptions`로 Lit·Unlit·Wireframe·Normal·UV·Depth·Skeleton·BoneWeight·Shadow 진단을 선택함. `DebugDraw`로 선·화살표·상자·구·캡슐·축·Skeleton·카메라 frustum을 작성하고 `SetDebugDraw()`로 복사 전달함 |
+| 자원 조회 | `GetRenderDebugInfo()`는 pass·draw·shader·pipeline·texture·buffer 및 최적화 통계를 반환함. native GPU handle의 소유권을 넘기지 않음. `InspectJoint/InspectBoneInfluences`로 본 행렬과 가중치를 조회함 |
+
+## Editor 문서 통합
+
+[EditorDocument.h](../include/minvex/EditorDocument.h)의 `EditorDocument`는 Scene 편집 모델이며 `minvex::editor_document`로 연결함. `OpenModel/Open/Save`, `ImportModel/PlaceModel`, 선택·Transform·재질·Pose·Animation 편집을 제공함. `BeginEdit/CommitEdit/CancelEdit`로 연속 조작을 묶고 `Undo/Redo`로 복원함. 파일 대화상자·Hierarchy·Inspector·Gizmo·Timeline·UI Designer는 `minvex_editor` 애플리케이션에서 제공함.
+
+애플리케이션에서 편집 UI를 구현할 때 `EditorDocument`로 Scene 변경을 적용하고 `GetScene()`의 결과를 Embedded renderer에 전달하여 표시함. 문서의 Animation은 `UpdateAnimations()`로 진행함. Standalone Viewer는 자신의 `GetScene()`으로 장면을 관리함. UI Canvas의 저장과 Undo/Redo는 Scene 문서와 독립적임.
 | **debug** · [Debug.h](../include/minvex/Debug.h) | `DebugView`, `DebugOptions`, `DebugDraw`, `RenderDebugInfo`. `InspectJoint()`, `InspectBoneInfluences()`. Viewer/Embedded의 `SetDebugOptions()`, `SetDebugDraw()`, `GetRenderDebugInfo()` |
 | **optimization** · [Optimization.h](../include/minvex/Optimization.h) | `MeshOptimization`, `MeshOptimizationOptions`, `MeshLocalityStatistics`, `OptimizationStatistics`, `OptimizeMesh()`, `AnalyzeMeshLocality()`, `GenerateMeshLods()`, `SelectMeshLod()`, `TextureMipBytes()` |
 
@@ -405,17 +442,11 @@ Mesh당 최대 8개 target이며 `ImportSettings::MaxMorphTargets`로 더 낮출
 
 Scene v13는 node별 override와 frozen source Morph, layout signature를 저장함. 사용 중인 node/mesh·target 이름/순서·vertex 수·기본값 변경은 Reimport에서 거부함. Pose v1은 Morph를 저장하지 않음. 반환된 override 참조는 Player/Scene 편집 후 다시 조회하며 기존 owner-thread·오류 계약을 따름. `--morph` 렌더링 예제와 `examples/assets/MorphRibbon.gltf`를 제공함.
 
-### Frame Pacing / 장착 예제 진단
+### 프레임 제어
 
-`RenderScheduler`는 caller thread에서 사용하는 CPU 값 타입임. `Due(now, targetFps)`는 유한한 0 이상 초와 FPS 0~240을 받으며 잘못된 입력은 `std::invalid_argument`임. 0은 제한 없음이고, `Submitted(now, signature)`는 실제 제출을 기록함. `Invalidate()`는 다음 제출을 즉시 허용하고 새 epoch를 시작함. 시계가 뒤로 이동한 경우에도 다음 제출에서 epoch를 재설정함. On-Demand의 signature/dynamic 판정과 FPS 제한은 독립적임.
+[Quality.h](../include/minvex/Quality.h)의 `RenderScheduler`는 caller thread에서 사용하는 CPU 값 타입임. `Due(now, targetFps)`로 제출 시점을 확인하고 `NeedsRender(mode, signature, dynamic)`로 On-Demand 갱신 필요 여부를 판단함. 실제 제출 뒤 `Submitted(now, signature)`를 호출하고 내용이 바뀌면 `Invalidate()`로 다음 프레임을 요청함. 시간은 유한한 0 이상 초, TargetFps는 0~240이며 0은 제한 없음임.
 
-제한 시간은 첫 제출 epoch에 고정된 시간 격자를 사용함. 각 callback의 작은 지연을 다음 deadline에 누적하지 않으며, VSync 경계에서는 `min(0.5ms, framePeriod × 0.05)`의 이른 제출을 허용함. 허용한 프레임의 시간 slot은 다음 제출 시 계산에 포함되어 동일 slot을 중복 제출하지 않음. 높은 callback 빈도에서도 목표 평균 FPS를 유지하며, Viewer·Embedded·Editor의 공통 RenderSurface에 적용됨. VSync와 FPS 제한은 서로 다른 기능이며, 화면 주사율 그대로 재생할 애니메이션 미리보기는 `ViewerOptions::VSync=true`와 `Quality.Overrides.TargetFps=0`을 함께 사용할 수 있음. 서로 나누어떨어지지 않는 주사율/목표 FPS 조합의 표시 간격은 여전히 달라질 수 있음.
-
-Windows Standalone은 사용 가능한 경우 전용 고정밀 대기 타이머로 FPS 제한과 정적 대기를 처리함. 타이머를 사용할 수 없으면 일반 대기로 대체하며 OS 스케줄링·GPU 부하에 따라 실제 간격은 달라질 수 있음. Embedded·Editor는 각각 Host 호출 주기·Editor 이벤트 루프의 pacing을 따름.
-
-`minvex_equipment`는 위 VSync 설정을 기본으로 사용하며 `--target-fps 0..240`·`--no-vsync`로 비교할 수 있음. 팔 회전·몸 translation은 60 Hz cosine key로 방향 전환과 loop 경계를 완화하고 기존 Clip Slerp/Lerp로 평가함. `--profile path.json --frames 270`은 30프레임 warmup 후 wall-clock callback 간격을 기록함. 시뮬레이션 delta가 긴 stall 이후 clamp되어도 실제 간격을 기록하며, JSON 요약·frame별 CSV·기존 Telemetry JSON을 생성함. profile은 동기식 파일 IO이며 해당 path에 쓰기 권한이 필요하고 실패 시 예제는 오류를 출력하고 종료 코드 1을 반환함. 측정은 opt-in이며 수집된 본 행렬 비교는 Scene 상태를 변경하지 않음.
-
-`RenderScheduler`의 비공개 저장 상태를 포함한 구조체 크기와 바이너리 ABI는 고정하지 않음. 정적 SDK 소비자는 헤더/라이브러리를 함께 재빌드해야 함.
+Viewer·Embedded의 `RequestRedraw()`는 On-Demand 화면을 갱신함. `VSync`는 화면 동기화 요청이고 `TargetFps`는 제출 빈도 제한임. Embedded의 호출·Present 주기는 Host가 관리하며 실제 표시 간격은 OS·주사율·GPU 부하의 영향을 받음.
 
 ### Ambient / Point / Spot / Rect 조명
 
@@ -550,7 +581,7 @@ cmake --build out/build/web --target minvex_web --parallel 4
 python -m http.server 8000 --directory out/build/web/web
 ```
 
-브라우저에서 `http://localhost:8000`의 파일 선택 예제를 실행함. 배포 파일은 `minvex-native.js/.wasm`, `minvex.js`, `index.html`임. HTTP(S)에서 Wasm MIME을 `application/wasm`으로 제공함. `cmake --install out/build/web --prefix out/web-sdk --component web`으로 라이선스와 함께 설치함. 테스트는 `web`의 Playwright 의존성 설치 후 `node web/tests/browser.mjs`이며 `MINVEX_WEB_DIR`로 빌드 출력 경로를 지정함.
+브라우저에서 `http://localhost:8000`의 파일 선택 예제를 실행함. 배포 파일은 `minvex-native.js/.wasm`, `minvex.js`, `index.html`임. HTTP(S)에서 Wasm MIME을 `application/wasm`으로 제공함. `cmake --install out/build/web --prefix out/web-sdk --component web`으로 라이선스와 함께 설치함.
 
 ```javascript
 import {createViewer} from './minvex.js';
@@ -588,7 +619,7 @@ Viewer마다 독립 Wasm module·Canvas를 사용하며 같은 Canvas의 중복 
 
 ## macOS Metal 실행 조건
 
-macOS Metal 경로는 **macOS 14.0 이상을 대상으로 한 Apple Silicon arm64용 Preview**임. macOS preset은 `arm64`·`CMAKE_OSX_DEPLOYMENT_TARGET=14.0`을 지정함. 최소 검증 대상은 M1·8GB Mac이며 해당 환경의 실기기 승인 전까지 정식 지원 완료를 의미하지 않음. Intel Mac은 후속 범위임.
+macOS Metal 경로는 macOS 14.0 이상·Apple Silicon arm64를 대상으로 함. macOS preset은 `arm64`·`CMAKE_OSX_DEPLOYMENT_TARGET=14.0`을 지정함. Intel Mac용 바이너리는 제공하지 않음.
 
 - **빌드:** `CMAKE_OSX_ARCHITECTURES=arm64`와 대상 환경에 맞는 macOS SDK·컴파일러·라이브러리를 사용함. 배포할 애플리케이션의 `CMAKE_OSX_DEPLOYMENT_TARGET`은 Host 프로젝트에서 설정함.
 - **셰이더:** Metal 라이브러리는 런타임에 컴파일함. MSL 언어 버전을 명시적으로 고정하지 않음.

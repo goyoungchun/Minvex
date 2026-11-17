@@ -1,0 +1,90 @@
+name: Minvex release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and publish
+        type: string
+        required: true
+        default: v1.0.0
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+jobs:
+  sdk:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Verify tagged source and native architecture
+        shell: pwsh
+        run: |
+          if ($IsMacOS -and (uname -m) -ne 'arm64') { throw 'macOS release requires native arm64.' }
+          cmake "-DRELEASE_TAG=$env:RELEASE_TAG" -P cmake/VerifyReleaseVersion.cmake
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $options = @('-S', '.', '-B', 'out/release', '-DCMAKE_BUILD_TYPE=Release', '-DBUILD_TESTING=ON', '-DMINVEX_INSTALL_DOCS=ON')
+          if ($IsMacOS) { $options += @('-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0') }
+          else { $options += @('-A', 'x64') }
+          cmake @options
+          exit $LASTEXITCODE
+      - name: Build release SDK
+        run: cmake --build out/release --config Release --parallel 4
+      - name: Check CPU API contracts
+        run: ctest --test-dir out/release -C Release --parallel 4 --no-tests=error --output-on-failure
+      - name: Verify package checksum, relocation and independent consumers
+        run: cmake -DBUILD_DIR=out/release -DCONFIG=Release -DPACKAGE=ON -P cmake/VerifySdk.cmake
+      - name: Retain SDK archives
+        uses: actions/upload-artifact@v7
+        with:
+          name: Minvex-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            out/release/sdk-check-*/packages/*.zip
+            out/release/sdk-check-*/packages/*.tar.gz
+            out/release/sdk-check-*/packages/*.sha256
+          if-no-files-found: error
+  publish:
+    needs: sdk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: Minvex-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish native C++ SDKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.txt <<'NOTES'
+          Minvex is a lightweight C++20 graphics SDK for Windows x64 / D3D11 and macOS 14+ / Apple Silicon arm64 / Metal.
+
+          Includes model import, scenes, skeletal and morph animation, PBR materials, lighting and shadows, screen UI, Standalone Viewer, Embedded rendering and Editor document APIs.
+
+          Native SDK archives contain static libraries, public headers, CMake package configuration, consumer examples, API documentation and dependency notices. Use a matching architecture, compiler, build configuration and C++ runtime. SHA-256 files accompany each archive. Python and Web bindings can be built from source and are not included in these native archives.
+
+          Known limitation: intermittent long display frames have been observed on macOS. Frame cadence depends on window visibility, OS scheduling and display callbacks; disabling VSync does not guarantee an unlimited callback rate. A fixed maximum frame time is not guaranteed. Intel Mac binaries are not included.
+
+          License: Apache-2.0. Bundled dependencies retain their own licenses; see LICENSE, NOTICE and share/minvex/licenses.
+          NOTES
+          release_flags=()
+          if [[ "$RELEASE_TAG" == *-rc.* ]]; then release_flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" release-assets/* --verify-tag \
+            --title "Minvex $RELEASE_TAG" --notes-file release-notes.txt "${release_flags[@]}"
