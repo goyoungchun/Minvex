@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-15]
+        os: [windows-latest, macos-26]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -84,6 +84,8 @@ jobs:
           Includes model import, scenes, skeletal and morph animation, PBR materials, lighting and shadows, screen UI, Standalone Viewer, Embedded rendering and Editor document APIs.
 
           Native SDK archives contain static libraries, public headers, CMake package configuration, consumer examples, API documentation and dependency notices. Use a matching architecture, compiler, build configuration and C++ runtime. SHA-256 files accompany each archive. Python and Web bindings can be built from source and are not included in these native archives.
+
+          Building from source requires a C++20 standard library with std::jthread and std::stop_token. Each binary SDK records its compiler and runtime in share/minvex/sdk-manifest.json.
 
           Known limitation: intermittent long display frames have been observed on macOS. Frame cadence depends on window visibility, OS scheduling and display callbacks; disabling VSync does not guarantee an unlimited callback rate. A fixed maximum frame time is not guaranteed. Intel Mac binaries are not included.
 
