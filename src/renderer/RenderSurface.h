@@ -18,7 +18,7 @@ public:
     Result<void> Resize(const Scene& scene,int width,int height);
     bool Render(const Scene& scene,double now,bool force=false,const std::array<float,4>& clear={.025f,.035f,.055f,1},bool bypassPacing=false);
     void Present(bool hasDepth = true) const; // In a native single-sample presentation pass.
-    void Invalidate() noexcept {scheduler_.Invalidate();}
+    void Invalidate() noexcept {dirty_=true;}
     bool Due(double now) const;
     bool Applying() const noexcept {return applying_;}
     void Clear() noexcept;
@@ -64,7 +64,7 @@ private:
     QualityState state_;
     RenderScheduler scheduler_;
     int outputWidth_=0,outputHeight_=0,failedWidth_=-1,failedHeight_=-1;
-    bool applying_=false;
+    bool applying_=false,dirty_=true;
     std::uint64_t frames_=0;
     Result<void> Fail(lv::Error error);
 };

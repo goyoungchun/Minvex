@@ -666,11 +666,14 @@ void EditorUI::ViewportPanel() {
         const auto available = ImGui::GetContentRegionAvail(); const auto& io = ImGui::GetIO();
         if (available.x > 1 && available.y > 1) {
             Viewport.Resize(static_cast<int>(std::min(65536.0f,available.x*sapp_dpi_scale())),static_cast<int>(std::min(65536.0f,available.y*sapp_dpi_scale())));
-            // Publish replacement overlay views before ImGui records this Image.
-            Viewport.Render(Document.GetScene());
-            ImGui::Image(simgui_imtextureid(Viewport.Texture()),available);
+            // Reserve the image's hit area first. Draw the final texture below
+            // the gizmos after input and rendering have finished.
+            ImGui::Dummy(available);
             const auto imageMin=ImGui::GetItemRectMin();
             const bool hovered = ImGui::IsItemHovered();
+            auto* drawList=ImGui::GetWindowDrawList();
+            drawList->ChannelsSplit(2);
+            drawList->ChannelsSetCurrent(1);
             if (ImGui::BeginDragDropTarget()) {
                 if (const auto* p = ImGui::AcceptDragDropPayload("MVX_ASSET")) { if (Report(Document.PlaceModel(*static_cast<const AssetId*>(p->Data)))) { FrameScene(); } }
                 if (const auto* p = ImGui::AcceptDragDropPayload("MVX_FILE")) { Import(detail::PathFromUtf8(static_cast<const char*>(p->Data)),true); }
@@ -679,7 +682,6 @@ void EditorUI::ViewportPanel() {
             const bool modal = ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId) || dialog_ != Dialog::None || pending_ != Action::None;
             const bool uiBlocked=UiViewportInput(imageMin.x,imageMin.y,available.x,available.y,hovered,modal);
             if (uiBlocked) {StopCameraEdit(false);controls_.Reset();cameraDrag_=false;}
-            TransformTools(imageMin.x,imageMin.y,available.x,available.y,!modal&&!uiBlocked);
             if (io.AppFocusLost || modal) {StopCameraEdit(true);}
             else if (!uiBlocked) {
                 auto camera = Document.GetScene().MainCamera;
@@ -695,6 +697,9 @@ void EditorUI::ViewportPanel() {
                 if (hovered && !gizmoEditing_ && !gizmoSuppressed_ && io.MouseWheel != 0) { event.Type = ViewerInputType::Scroll; event.ScrollY = io.MouseWheel; changed = controls_.Process(camera,event,{},static_cast<int>(available.y)) || changed; }
                 if (changed) { Report(Document.SetCamera(camera)); }
                 if (!cameraDrag_ && cameraEditing_) {StopCameraEdit(false);}
+            }
+            TransformTools(imageMin.x,imageMin.y,available.x,available.y,!modal&&!uiBlocked&&!cameraDrag_);
+            if (!io.AppFocusLost && !modal && !uiBlocked) {
                 if (hovered && !gizmoBlockInput_ && !io.WantTextInput && ImGui::IsMouseClicked(0)) {try {Report(Document.Select(detail::PickSceneObject(Document.GetScene(),Viewport.Aspect(),(io.MousePos.x-imageMin.x)/available.x*2-1,1-(io.MousePos.y-imageMin.y)/available.y*2)));ImGui::SetWindowFocus();}catch (const std::exception& e) {ShowError({ErrorCode::InvalidArgument,e.what(),"Check the camera and visible model bounds.",{}});}}
                 if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.WantTextInput && !gizmoEditing_ && !gizmoSuppressed_) {
                     if (cameraEditing_) {if (ImGui::IsKeyPressed(ImGuiKey_Escape,false)) {StopCameraEdit(true);}}
@@ -706,6 +711,11 @@ void EditorUI::ViewportPanel() {
                     }
                 }
             }
+            Viewport.Render(Document.GetScene());
+            drawList->ChannelsSetCurrent(0);
+            const auto texture=Viewport.Texture();
+            if (texture.id) {drawList->AddImage(simgui_imtextureid(texture),imageMin,{imageMin.x+available.x,imageMin.y+available.y});}
+            drawList->ChannelsMerge();
         } else {StopCameraEdit(true);if (gizmoEditing_) {if (Document.IsEditing()) {(void)Document.CancelEdit();}ImGuizmo::Enable(false);gizmoEditing_=false;}Viewport.Resize(0,0);}
     } else {StopCameraEdit(true);if (gizmoEditing_) {if (Document.IsEditing()) {(void)Document.CancelEdit();}ImGuizmo::Enable(false);gizmoEditing_=false;}Viewport.Resize(0,0);}
     ImGui::End();

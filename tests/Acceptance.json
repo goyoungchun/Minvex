@@ -1,7 +1,7 @@
 {
   "format": "MinvexValidationPolicy",
   "version": 1,
-  "release": "1.0.0",
+  "release": "1.0.1",
   "scope": "native C++ SDK",
   "auxiliaryGate": "N/A: Python and Web are separately packaged auxiliary paths, outside native SDK approval",
   "deploymentTarget": "14.0",

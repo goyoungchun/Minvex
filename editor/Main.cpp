@@ -38,7 +38,7 @@ struct Application {
     std::optional<lv::QualityProfile> InitialQuality;
     std::optional<lv::QualityPreset> RecommendedQuality;
     std::uint64_t CachedFrames=0;
-    double PreviousTime = 0;
+    double PreviousTime = 0, LastAnimationTick = 0;
     char Message[2048]{};
     std::uint32_t FirstTarget = 0;
     int FirstWidth = 0;
@@ -191,6 +191,13 @@ void Init(void* user) noexcept {
         }
         if (app.InitialQuality) {Require(app.UI->ApplyQualityProfile(*app.InitialQuality));}
         if (app.QualitySmoke) {auto low=lv::MakeQualityProfile(lv::QualityPreset::Low);low.Overrides.TargetFps=0;Require(app.UI->ApplyQualityProfile(low));}
+        else if (app.Smoke || app.UiSmoke || app.UiAdvanced) {
+            // These scripts assert precise frame numbers independent of the display refresh rate.
+            auto profile=app.UI->Viewport.Quality().Requested;
+            profile.Overrides.TargetFps=0;
+            Require(app.UI->ApplyQualityProfile(profile));
+        }
+        app.LastAnimationTick=lv::detail::RenderClockSeconds();
     } catch (const std::exception& e) { app.Fail(e.what()); }
     catch (...) { app.Fail("Editor initialization threw an unknown exception."); }
 }
@@ -325,7 +332,10 @@ void Frame(void* user) noexcept {
         frame.delta_time = std::clamp(sapp_frame_duration(),0.00001,0.25); frame.dpi_scale = sapp_dpi_scale();
         if (app.Smoke && app.Frames == 4) {ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape,true);}
         simgui_new_frame(frame);
-        const auto advanced = app.UI->Document.UpdateAnimations(frame.delta_time);
+        const auto now=lv::detail::RenderClockSeconds();
+        const auto animationDelta=std::clamp(now-app.LastAnimationTick,0.0,0.25);
+        app.LastAnimationTick=now;
+        const auto advanced = app.UI->Document.UpdateAnimations(animationDelta);
         if (!advanced) {if (advanced.Error().Code==lv::ErrorCode::InsufficientResource) {app.UI->Record(lv::editor::ConsoleLevel::Error,advanced.Error().Message);}else {throw std::runtime_error(advanced.Error().Message);}}
         if (app.QualitySmoke && app.Frames == 2) {
             auto high=lv::MakeQualityProfile(lv::QualityPreset::High);high.AllowFallback=true;high.Overrides.TargetFps=0;Require(app.UI->ApplyQualityProfile(high));
@@ -367,8 +377,9 @@ void Frame(void* user) noexcept {
             if (app.Frames==5) {lv::UiElement text;text.Text="Recreated overlay";app.UiButton=ui.Add(text).Value();app.UI->Viewport.Resize(640,360);}
         }
         if (app.UiAdvanced) {UiAdvancedBefore(app);}
+        const auto viewportFrames=app.UI->Viewport.RenderedFrames();
         app.UI->Draw();
-        app.UI->Viewport.Render(app.UI->Document.GetScene());
+        if (app.Smoke) {Require(app.UI->Viewport.RenderedFrames()-viewportFrames <= 1,"Editor viewport rendered twice in one display frame.");}
         if (app.UiAdvanced) {UiAdvancedAfter(app);}
         if (app.UiSmoke) {if (app.Frames>0) {Require(app.UI->Viewport.Texture().id!=0,"UI smoke lost its viewport texture.");}Require(app.Frames==2 ? app.UI->Viewport.UiError.has_value():!app.UI->Viewport.UiError,"UI preview font failure did not recover.");if (app.Frames==7) {std::puts("Editor UI: save/load, Unicode overlay, missing font recovery, clear and resize passed.");}}
         if (app.Smoke) { SmokeAfterDraw(app); }

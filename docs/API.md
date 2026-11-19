@@ -1,6 +1,6 @@
 # Minvex API
 
-**C++20 Graphics SDK · Version 1.0.0 · Namespace `lv`**
+**C++20 Graphics SDK · Version 1.0.1 · Namespace `lv`**
 
 모듈별 주요 타입과 API를 정리한 사용 안내임. 전체 선언은 연결된 공개 헤더에서 확인할 수 있음.
 
@@ -217,7 +217,9 @@ int main() {
 }
 ```
 
-기본값은 1280×720, VSync·기본 입력·자동 Focus 활성화, Medium 품질임. `ViewerRunOptions::OnFrame`에서 Scene을 갱신할 수 있으며 Animation은 기본적으로 callback 전에 자동 진행함. 직접 진행하려면 `AdvanceAnimations=false`를 사용함.
+기본값은 1280×720, VSync·기본 입력·자동 Focus 활성화, Medium 품질임. `ViewerRunOptions::OnFrame`에서 Scene을 갱신할 수 있으며 `PlayAnimation()`으로 재생 중인 애니메이션은 기본적으로 callback 전에 진행합니다. 직접 진행하려면 `AdvanceAnimations=false`로 설정하고 `Scene::UpdateAnimations()`를 한 번 호출합니다. `ViewerFrameInfo::DeltaTimeSeconds`는 업데이트 사이의 경과 시간을 최대 0.25초로 제한한 값입니다. 이동 속도가 초당 단위라면 이 값을 곱해 프레임별 변위를 구합니다.
+
+설치 SDK의 `share/minvex/examples/QuickStart`에는 `find_package(Minvex 1.0.1 CONFIG REQUIRED COMPONENTS viewer graphics)`로 빌드하는 전체 CMake 프로젝트가 있습니다. [빠른 시작 빌드 명령](../README.md#설치-sdk로-움직이는-장면-시작)
 
 macOS Metal에서 `VSync=false`는 display sync 해제를 요청함. `OnFrame` 호출 빈도와 표시 FPS는 OS의 display callback 및 창 가림 상태의 영향을 받을 수 있으므로, 이 옵션만으로 주사율을 넘는 무제한 FPS를 보장하지 않음.
 
@@ -446,7 +448,7 @@ Scene v13는 node별 override와 frozen source Morph, layout signature를 저장
 
 [Quality.h](../include/minvex/Quality.h)의 `RenderScheduler`는 caller thread에서 사용하는 CPU 값 타입임. `Due(now, targetFps)`로 제출 시점을 확인하고 `NeedsRender(mode, signature, dynamic)`로 On-Demand 갱신 필요 여부를 판단함. 실제 제출 뒤 `Submitted(now, signature)`를 호출하고 내용이 바뀌면 `Invalidate()`로 다음 프레임을 요청함. 시간은 유한한 0 이상 초, TargetFps는 0~240이며 0은 제한 없음임.
 
-Viewer·Embedded의 `RequestRedraw()`는 On-Demand 화면을 갱신함. `VSync`는 화면 동기화 요청이고 `TargetFps`는 제출 빈도 제한임. Embedded의 호출·Present 주기는 Host가 관리하며 실제 표시 간격은 OS·주사율·GPU 부하의 영향을 받음.
+Viewer·Embedded의 `RequestRedraw()`는 다음 렌더링 가능 시점에 On-Demand 화면을 갱신합니다. Embedded에서 즉시 갱신이 필요하면 해당 `Render()` 호출의 `EmbeddedFrameOptions::ForceRedraw`를 설정합니다. `VSync`는 화면 동기화 요청이고 `TargetFps`는 새 장면 렌더링 빈도 제한입니다. Viewer에서 `VSync=true`와 `options.Quality.Overrides.TargetFps=0`을 함께 사용하면 디스플레이 주기에 맞춰 새 장면을 렌더링할 수 있습니다. Standalone에서 `OnFrame`과 `FrameLimit`은 새 장면 프레임을 기준으로 동작합니다. Embedded의 호출·Present 주기는 Host가 관리하며 실제 표시 간격은 OS·주사율·GPU 부하의 영향을 받습니다.
 
 ### Ambient / Point / Spot / Rect 조명
 
@@ -528,7 +530,7 @@ auto changed = viewer.SetQuality(quality); // Result<void> 확인 필요
 
 ```sh
 python -m pip wheel . --wheel-dir out/wheels
-python -m pip install --force-reinstall out/wheels/minvex-1.0.0-cp312-cp312-win_amd64.whl
+python -m pip install --force-reinstall out/wheels/minvex-1.0.1-cp312-cp312-win_amd64.whl
 python python/examples/viewer.py examples/assets/MorphRibbon.gltf --frames 60
 ```
 
@@ -673,7 +675,7 @@ Minvex 자체 코드는 Apache-2.0을 적용함. SDK 설치 접두사 최상위�
 
 ## 지원 범위
 
-이 문서는 SDK 1.0.0의 공개 API를 설명함. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고함.
+이 문서는 SDK 1.0.1의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
 
 CPU-only 구성의 native 초기화·실행은 `UnsupportedFeature`를 반환함.
 

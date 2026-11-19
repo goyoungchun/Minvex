@@ -41,6 +41,9 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/MinvexConfig.cmake"
 set(_sdk_share "${CMAKE_INSTALL_DATADIR}/minvex")
 install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" "${PROJECT_SOURCE_DIR}/NOTICE" DESTINATION .)
 install(DIRECTORY examples/SdkConsumer DESTINATION "${_sdk_share}/examples")
+if(MINVEX_BUILD_RENDERER)
+    install(DIRECTORY examples/QuickStart DESTINATION "${_sdk_share}/examples")
+endif()
 install(FILES examples/EmbeddedViewer/MainD3D11.cpp examples/EmbeddedViewer/MainMetal.mm
     DESTINATION "${_sdk_share}/examples/EmbeddedViewer")
 install(FILES examples/RenderingEnhancement/Main.cpp DESTINATION "${_sdk_share}/examples/RenderingEnhancement")

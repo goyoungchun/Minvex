@@ -11,7 +11,7 @@ void SceneViewport::Resize(int width,int height) {
 void SceneViewport::Render(const Scene& scene) {
     scene_=&scene;(void)surface_.Resize(scene,width_,height_);
     const bool retry=!UiError||failedUiRevision_!=Ui.Revision();surface_.SetUi(retry ? &Ui:nullptr,sapp_dpi_scale());
-    try {surface_.Render(scene,detail::RenderClockSeconds());if (retry) {UiError.reset();}}
+    try {if (surface_.Render(scene,detail::RenderClockSeconds()) && retry) {UiError.reset();}}
     catch (const detail::UiRasterError& error) {UiError=error.Info;failedUiRevision_=Ui.Revision();surface_.SetUi(nullptr);surface_.Render(scene,detail::RenderClockSeconds(),true,{.025f,.035f,.055f,1},true);}
 }
 Result<void> SceneViewport::SetQuality(const QualityProfile& profile,const Scene& scene) {

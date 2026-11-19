@@ -131,6 +131,36 @@ void Initialize(void* user) noexcept {
     } catch (...) { runtime.Capture(ErrorCode::GraphicsInitialization,"Check the Scene and GPU resource availability."); }
 }
 
+void Present(Runtime& runtime) {
+    sg_pass pass{};
+    pass.swapchain = [&] {ProfileScope profileAcquire(FramePhase::Acquire);return sglue_swapchain();}();
+    pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
+    const auto& color = runtime.State.Options.ClearColor;
+    pass.action.colors[0].clear_value = {color[0],color[1],color[2],color[3]};
+    pass.action.depth.load_action = SG_LOADACTION_CLEAR;
+    pass.action.depth.clear_value = 1;
+    sg_begin_pass(pass); runtime.InPass = true;
+    {ProfileScope profilePresent(FramePhase::Present);runtime.Surface.Present();}
+    sg_end_pass(); runtime.InPass = false;
+    {ProfileScope profileCommit(FramePhase::Commit);sg_commit();}
+}
+
+void SkipSceneFrame(Runtime& runtime, std::chrono::milliseconds delay) {
+#if defined(_WIN32)
+    // Sokol calls DXGI Present even when the frame callback returns early.
+    // A discard swapchain needs a new copy of the cached image in each buffer.
+    if (runtime.Surface.Texture().id) { Present(runtime); }
+    if (runtime.State.Options.VSync) { return; }
+#endif
+    // Metal already gets paced by the display link or obscured-window timer.
+#if !defined(__APPLE__)
+    runtime.Wait.Wait(delay);
+#else
+    (void)runtime;
+    (void)delay;
+#endif
+}
+
 void Frame(void* user) noexcept {
     auto& runtime = *static_cast<Runtime*>(user);
     if (runtime.Stop()) { sapp_quit(); return; }
@@ -150,7 +180,7 @@ void Frame(void* user) noexcept {
         const auto now=RenderClockSeconds();
         if (runtime.State.HotReload) {(void)runtime.Facade.PollHotReload(now);}
         runtime.Surface.SetUi(&runtime.State.Ui,dpi);
-        if (!runtime.Surface.Due(now)) {runtime.Wait.Wait(std::chrono::milliseconds(1));return;}
+        if (!runtime.Surface.Due(now)) {SkipSceneFrame(runtime,std::chrono::milliseconds(1));return;}
         const auto elapsed=now-runtime.LastUpdate;runtime.LastUpdate=now;
         const ViewerFrameInfo info{runtime.Frames,std::isfinite(elapsed) ? std::clamp(elapsed,0.0,0.25) : 0.0,width,height};
         if (runtime.Options.AdvanceAnimations) { runtime.State.World.UpdateAnimations(info.DeltaTimeSeconds); }
@@ -161,17 +191,8 @@ void Frame(void* user) noexcept {
         }
         if (runtime.Stop()) { sapp_quit(); return; }
         const bool submitted=runtime.Surface.Render(runtime.State.World,now,runtime.Options.FrameLimit != 0 || bool(runtime.Options.OnFrame),runtime.State.Options.ClearColor);
-        if (!submitted) {runtime.Wait.Wait(std::chrono::milliseconds(8));return;}
-        sg_pass pass{};
-        pass.swapchain = [&] {ProfileScope profileAcquire(FramePhase::Acquire);return sglue_swapchain();}();
-        pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
-        const auto& color = runtime.State.Options.ClearColor;
-        pass.action.colors[0].clear_value = {color[0],color[1],color[2],color[3]};
-        pass.action.depth.load_action = SG_LOADACTION_CLEAR; pass.action.depth.clear_value = 1;
-        sg_begin_pass(pass); runtime.InPass = true;
-        {ProfileScope profilePresent(FramePhase::Present);runtime.Surface.Present();}
-        sg_end_pass(); runtime.InPass = false;
-        {ProfileScope profileCommit(FramePhase::Commit);sg_commit();}
+        if (!submitted) {SkipSceneFrame(runtime,std::chrono::milliseconds(8));return;}
+        Present(runtime);
         ++runtime.Frames;
         if (runtime.Options.FrameLimit && runtime.Frames >= runtime.Options.FrameLimit) { runtime.State.CloseRequested.store(true); }
         if (runtime.Stop()) { sapp_quit(); }

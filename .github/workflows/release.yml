@@ -8,7 +8,7 @@ on:
         description: Existing release tag to build and publish
         type: string
         required: true
-        default: v1.0.0
+        default: v1.0.1
 permissions:
   contents: read
 concurrency:
@@ -84,6 +84,8 @@ jobs:
           Includes model import, scenes, skeletal and morph animation, PBR materials, lighting and shadows, screen UI, Standalone Viewer, Embedded rendering and Editor document APIs.
 
           Native SDK archives contain static libraries, public headers, CMake package configuration, consumer examples, API documentation and dependency notices. Use a matching architecture, compiler, build configuration and C++ runtime. SHA-256 files accompany each archive. Python and Web bindings can be built from source and are not included in these native archives.
+
+          Start with share/minvex/examples/QuickStart for a small CMake project that loads a model and updates its transform using the Viewer frame clock.
 
           Building from source requires a C++20 standard library with std::jthread and std::stop_token. Each binary SDK records its compiler and runtime in share/minvex/sdk-manifest.json.
 

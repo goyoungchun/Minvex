@@ -116,6 +116,10 @@ void CullingAndPacing() {
         if (fast.Due(now, 60)) { ++rendered; fast.Submitted(now, 1); }
     }
     Check(rendered == 240, "deadline grid preserves 60 FPS average on a faster host callback");
+    lv::RenderScheduler late; late.Submitted(1, 1);
+    Check(late.Due(1.0325, 60), "late frame can fill a missed deadline");
+    late.Submitted(1.0325, 1);
+    Check(!late.Due(1.0335, 60) && late.Due(1.041, 60), "late frames coalesce nearby deadlines without shifting the grid");
     fast.Submitted(20, 1); Check(!fast.Due(20.001, 60), "a long stall does not trigger immediate catch-up submissions");
     fast.Submitted(1, 1); Check(fast.Due(1 + 1.0 / 60, 60), "clock rollback resets the pacing epoch");
 }

@@ -95,10 +95,10 @@ sg_view RenderSurface::Texture() const noexcept {return uiRenderer_ ? uiRenderer
 sg_image RenderSurface::ColorImage() const noexcept {return uiRenderer_ ? uiRenderer_->Image():targets_ ? (targets_->PostColor.id ? targets_->PostColor:targets_->Color):sg_image{};}
 void RenderSurface::SetUi(const UiCanvas* canvas,float scale) {
     const auto revision=canvas ? canvas->Revision():0;
-    if (ui_!=canvas || uiRevision_!=revision || uiScale_!=scale) {scheduler_.Invalidate();}
+    if (ui_!=canvas || uiRevision_!=revision || uiScale_!=scale) {Invalidate();}
     ui_=canvas;uiRevision_=revision;uiScale_=scale;
 }
-Result<void> RenderSurface::Fail(lv::Error error) {state_.LastError=error;scheduler_.Invalidate();return Result<void>::Failure(std::move(error));}
+Result<void> RenderSurface::Fail(lv::Error error) {state_.LastError=error;return Result<void>::Failure(std::move(error));}
 Result<void> RenderSurface::ApplyQuality(const QualityProfile& profile,const Scene& scene,int width,int height) {
     if (!sg_isvalid() || sg_query_pass_state() != SG_PASSSTATE_NONE || applying_) {return Fail({ErrorCode::InvalidState,"Apply quality outside render passes on the graphics thread.","Apply from OnFrame or between frames.",{}});}
     const auto caps=QueryQualityCapabilities();auto resolved=ResolveQuality(profile,caps,std::max(1,width),std::max(1,height));
@@ -136,7 +136,7 @@ Result<void> RenderSurface::ApplyQuality(const QualityProfile& profile,const Sce
     catch (const std::exception& e) {return Fail({ErrorCode::Rendering,e.what(),"Quality application failed; previous settings/resources are retained.",{}});}
 }
 Result<void> RenderSurface::Resize(const Scene& scene,int width,int height) {
-    if (width <= 0 || height <= 0) {targets_.reset();shadow_.reset();localShadow_.reset();state_.RenderWidth=state_.RenderHeight=0;state_.Applied=false;outputWidth_=width;outputHeight_=height;scheduler_.Invalidate();return Result<void>::Success();}
+    if (width <= 0 || height <= 0) {uiRenderer_.reset();targets_.reset();shadow_.reset();localShadow_.reset();state_.RenderWidth=state_.RenderHeight=0;state_.Applied=false;outputWidth_=width;outputHeight_=height;scheduler_.Invalidate();return Result<void>::Success();}
     if (targets_ && width == outputWidth_ && height == outputHeight_) {return Result<void>::Success();}
     if (width == failedWidth_ && height == failedHeight_ && state_.LastError) {return Result<void>::Failure(*state_.LastError);}
     auto result=ApplyQuality(state_.Requested,scene,width,height);if (!result) {failedWidth_=width;failedHeight_=height;outputWidth_=width;outputHeight_=height;scheduler_.Invalidate();}return result;
@@ -145,8 +145,13 @@ bool RenderSurface::Due(double now) const {return scheduler_.Due(now,state_.Effe
 bool RenderSurface::Render(const Scene& scene,double now,bool force,const std::array<float,4>& clear,bool bypassPacing) {
     ProfileScope profileRender(FramePhase::Render);
     if (!targets_ || !renderer_ || !state_.Effective || (!bypassPacing && !Due(now))) {return false;}
-    auto signature=SceneRenderSignature(scene);for (float value:clear) {signature^=std::bit_cast<std::uint32_t>(value);signature*=1099511628211ull;}
-    if (!scheduler_.NeedsRender(state_.Effective->OnDemand,signature,force || bypassPacing || SceneHasActiveAnimation(scene))) {return false;}
+    std::uint64_t signature=0;
+    const auto mode=state_.Effective->OnDemand;
+    if (mode != OnDemandMode::Off) {
+        signature=SceneRenderSignature(scene);
+        for (float value:clear) {signature^=std::bit_cast<std::uint32_t>(value);signature*=1099511628211ull;}
+        if (!scheduler_.NeedsRender(mode,signature,dirty_ || force || bypassPacing) && !SceneHasActiveAnimation(scene)) {return false;}
+    }
     const bool overlay=debug_.View != DebugView::ShadowMap && (debug_.ShowSkeleton || debug_.ShowBounds || debug_.ShowReferencePose || debug_.View == DebugView::Skeleton || debug_.View == DebugView::BoundingBox || !debugDraw_.Lines().empty());
     if (overlay && !debugRenderer_) {debugRenderer_=std::make_unique<DebugRenderer>(*state_.Effective);}
     if (!overlay) {debugRenderer_.reset();}
@@ -189,7 +194,7 @@ bool RenderSurface::Render(const Scene& scene,double now,bool force,const std::a
     if (ui_&&!ui_->Empty()) {if (!uiRenderer_) {uiRenderer_=std::make_unique<UiRenderer>();}uiRenderer_->Composite(*ui_,targets_->PostTexture.id ? targets_->PostTexture:targets_->Texture,outputWidth_,outputHeight_,uiScale_);}else {uiRenderer_.reset();}
     const auto cpuEnd=RenderClockSeconds();const auto stats=renderer_->GetStats();
     frameMonitor_.Record(cpuEnd,(cpuEnd-cpuStart)*1000,(debug_.View == DebugView::ShadowMap ? 1:stats.LastDrawCalls+debugCalls_)+stats.LastShadowDrawCalls+(state_.Effective->PostProcessing ? 1:0)+(uiRenderer_ ? 1:0),(debug_.View == DebugView::ShadowMap ? 1:stats.LastTriangles)+stats.LastShadowTriangles+(state_.Effective->PostProcessing ? 1:0)+(uiRenderer_ ? 1:0));
-    scheduler_.Submitted(now,signature);++frames_;return true;
+    scheduler_.Submitted(now,signature);dirty_=false;++frames_;return true;
 }
 void RenderSurface::Present(bool hasDepth) const {
     if (!targets_ || !presenter_) {return;}sg_bindings bindings{};bindings.views[VIEW_rendered_texture]=Texture();bindings.samplers[SMP_rendered_sampler]=presenter_->Sampler;
@@ -215,11 +220,11 @@ Result<void> RenderSurface::SetDebugOptions(const DebugOptions& options) {
     if (!sg_isvalid() || sg_query_pass_state() != SG_PASSSTATE_NONE) {return Result<void>::Failure({ErrorCode::InvalidState,"Change debug options outside passes on the graphics thread.","Use OnFrame or between renders.",{}});}
     try {ValidateDebugOptions(options);}catch (const std::exception& e) {return Result<void>::Failure({ErrorCode::InvalidArgument,e.what(),"Select a valid view and palette index.",{}});}
     if (((options.View == DebugView::ShadowMap || options.View == DebugView::ShadowVisibility) && (!state_.Effective || state_.Effective->Shadow == ShadowMode::Off)) || (options.View >= DebugView::ShadowBlockers && options.View <= DebugView::ShadowPenumbra && (!state_.Effective || state_.Effective->Shadow != ShadowMode::Pcss))) {return Result<void>::Failure({ErrorCode::UnsupportedFeature,"The selected shadow diagnostic requires compatible shadow settings.","Apply a profile with supported shadows first.",{}});}
-    if (debug_ != options) {debug_=options;frameMonitor_.Reset();if (telemetry_) {telemetry_->ResetGpu();}scheduler_.Invalidate();}return Result<void>::Success();
+    if (debug_ != options) {debug_=options;frameMonitor_.Reset();if (telemetry_) {telemetry_->ResetGpu();}Invalidate();}return Result<void>::Success();
 }
 Result<void> RenderSurface::SetDebugDraw(const DebugDraw& commands) {
     if (!sg_isvalid() || sg_query_pass_state() != SG_PASSSTATE_NONE) {return Result<void>::Failure({ErrorCode::InvalidState,"Change debug commands outside passes.","Submit before rendering.",{}});}
-    try {debugDraw_=commands;frameMonitor_.Reset();if (telemetry_) {telemetry_->ResetGpu();}scheduler_.Invalidate();return Result<void>::Success();}catch (const std::bad_alloc& e) {return Result<void>::Failure({ErrorCode::InsufficientResource,e.what(),"Reduce debug line count.",{}});}
+    try {debugDraw_=commands;frameMonitor_.Reset();if (telemetry_) {telemetry_->ResetGpu();}Invalidate();return Result<void>::Success();}catch (const std::bad_alloc& e) {return Result<void>::Failure({ErrorCode::InsufficientResource,e.what(),"Reduce debug line count.",{}});}
 }
 sg_view RenderSurface::InspectionTexture(int target) const noexcept {return target == 2 ? (shadow_ ? shadow_->Texture:sg_view{}):target == 1 ? (targets_ ? targets_->Texture:sg_view{}):Texture();}
 sg_sampler RenderSurface::InspectionSampler(int target) const noexcept {return target == 2 ? (shadow_ ? shadow_->Sampler:sg_sampler{}):(presenter_ ? presenter_->Sampler:sg_sampler{});}

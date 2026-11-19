@@ -60,6 +60,19 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:/
 cmake --build build
 ```
 
+### 설치 SDK로 움직이는 장면 시작
+
+네이티브 SDK의 `share/minvex/examples/QuickStart`에 모델 로드, 프레임 시간 기반 회전, 오류 출력을 담은 C++20 예제가 들어 있습니다. 아래는 Release SDK를 Ninja로 빌드하는 Windows 예입니다.
+
+```powershell
+$sdk = "C:/path/to/extracted/Minvex-SDK"
+cmake -S "$sdk/share/minvex/examples/QuickStart" -B quickstart-build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$sdk"
+cmake --build quickstart-build
+./quickstart-build/minvex_quickstart.exe "$sdk/share/minvex/examples/assets/SharedBox.glb"
+```
+
+macOS에서는 실행 파일 이름의 `.exe`를 뺍니다. 예제에 `--frames 3`을 전달하면 그래픽 초기화와 갱신을 확인한 뒤 자동 종료합니다.
+
 ## 분야별 지원 기능
 
 | 분야                       | 현재 지원 기능                                                                                                                                                |
@@ -102,5 +115,7 @@ cmake --build build
 Minvex 자체 코드는 [Apache-2.0](LICENSE)을 적용하며 [NOTICE](NOTICE)를 함께 제공함. 외부 의존성은 원래의 라이선스를 유지하며 설치 SDK의 `share/minvex/licenses`에서 고지를 확인할 수 있음.
 
 ## 표시 성능
+
+Standalone에서 `--target-fps 0`을 주면 소프트웨어 FPS 제한을 해제하고 VSync를 사용합니다. 낮은 해상도와 주사율 동기화를 함께 사용하려면 `--preset low --target-fps 0`을 사용합니다.
 
 macOS의 화면 표시에는 OS display callback·창 가림·절전 상태가 영향을 줌. 간헐적인 긴 프레임이 관측되며 일정한 최대 프레임 시간을 보장하지 않음. VSync 해제는 화면 주사율을 넘는 callback 빈도를 보장하지 않음.

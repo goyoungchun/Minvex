@@ -2,6 +2,9 @@
 #include <minvex/Viewer.h>
 
 #include <thread>
+#if defined(_WIN32)
+#include <sokol_gfx.h>
+#endif
 
 using namespace test;
 namespace {
@@ -13,7 +16,16 @@ int main(int argc, char* argv[]) {
     if (argc != 2) { return 2; }
     const std::string mode(argv[1]);
     const bool animated = mode == "animation" || mode == "animation-manual";
-    lv::Viewer viewer;
+    lv::ViewerOptions viewerOptions;
+#if defined(_WIN32)
+    std::uint64_t commits=0;
+    if (mode == "pacing") {
+        viewerOptions.VSync=false;
+        viewerOptions.Quality=lv::MakeQualityProfile(lv::QualityPreset::Low);
+        viewerOptions.Quality.Overrides.TargetFps=5;
+    }
+#endif
+    lv::Viewer viewer(viewerOptions);
     lv::Viewer nested;
     lv::ObjectId modelId = 0;
     if (mode != "empty") {
@@ -39,6 +51,12 @@ int main(int argc, char* argv[]) {
         return consume;
     };
     options.OnFrame = [&](lv::Viewer& v, const lv::ViewerFrameInfo& info) {
+#if defined(_WIN32)
+        if (mode == "pacing" && info.FrameNumber == 0) {
+            Check(sg_add_commit_listener({[](void* data) {++*static_cast<std::uint64_t*>(data);},&commits}),
+                "watch D3D11 swapchain submissions across FPS-capped callbacks");
+        }
+#endif
         Check(v.IsRunning(),"OnFrame runs while Viewer owns the native loop");
         Check(info.FrameNumber == callbacks && info.FramebufferWidth > 0 && info.FramebufferHeight > 0 &&
             std::isfinite(info.DeltaTimeSeconds) && info.DeltaTimeSeconds >= 0,"frame callback receives valid framebuffer/timing information");
@@ -101,6 +119,11 @@ int main(int argc, char* argv[]) {
             Check(Same(camera.Position,v.GetScene().MainCamera.Position),"OnInput can consume an event before default orbit");
             Require(v.ProcessInput(event));
             Check(!Same(camera.Position,v.GetScene().MainCamera.Position),"unconsumed input reaches default camera controls");
+            consume = true; event.Type = lv::ViewerInputType::MouseUp; Require(v.ProcessInput(event)); consume = false;
+            const auto released = v.GetScene().MainCamera;
+            event.Type = lv::ViewerInputType::MouseMove; Require(v.ProcessInput(event));
+            Check(Same(released.Position,v.GetScene().MainCamera.Position),"consumed release still ends a camera drag");
+            event.Type = lv::ViewerInputType::MouseDown; Require(v.ProcessInput(event));
             consume = true; event.Type = lv::ViewerInputType::FocusLost; Require(v.ProcessInput(event)); consume = false;
             const auto unfocused = v.GetScene().MainCamera;
             event.Type = lv::ViewerInputType::MouseMove; Require(v.ProcessInput(event));
@@ -125,6 +148,14 @@ int main(int argc, char* argv[]) {
     const auto result = viewer.Run(options);
     if (closer.joinable()) { closer.request_stop(); closer.join(); }
     Check(!viewer.IsRunning(),"Run returns with running state cleared");
+#if defined(_WIN32)
+    if (mode == "pacing") {
+        const auto telemetry=viewer.GetTelemetry();
+        Check(telemetry && telemetry.Value().Frames.TotalRenderedFrames == callbacks,
+            "cached swapchain blits are not counted as new scene frames");
+        Check(commits > callbacks,"FPS-capped callbacks still fill the discard swapchain");
+    }
+#endif
     if (mode == "callback-error" || mode == "render-error") {
         const auto code = mode == "callback-error" ? lv::ErrorCode::CallbackFailure : lv::ErrorCode::Rendering;
         Check(!result && result.Error().Code == code && !result.Error().Hint.empty(),"runtime failure is returned after graphics cleanup");

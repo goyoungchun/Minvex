@@ -131,6 +131,9 @@ bool RenderScheduler::Due(double now,int fps) const {
     Require(std::isfinite(now) && now >= 0 && fps >= 0 && fps <= 240,"Invalid scheduler time/FPS.");
     if (!valid_ || fps == 0 || now < last_) { return true; }
     const double interval = 1.0 / fps;
+    // A late submission can land just before the next grid deadline.
+    // Coalesce that deadline if it would produce two nearly adjacent frames.
+    if (now - last_ < interval * .5) { return false; }
     // Keep a stable deadline grid instead of resetting the deadline to each
     // slightly late VSync callback. A bounded early margin absorbs timer jitter
     // without allowing a second submission in the same scheduled slot.

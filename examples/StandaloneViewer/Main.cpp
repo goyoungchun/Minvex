@@ -15,12 +15,17 @@ int main(int argc, char* argv[]) {
     lv::ViewerRunOptions run;
     bool hasPath = false;
     std::optional<std::size_t> animation;
+    std::optional<int> targetFps;
     lv::QualityProfile quality;
     std::filesystem::path telemetryJson,telemetryCsv;
     for (int i = 1; i < argc; ++i) {
         const std::string_view argument(argv[i]);
         if (argument == "--help") {
-            std::puts("Usage: minvex_standalone [model.glb|model.gltf] [--frames N] [--animation clip-index] [--preset low|medium|high] [--quality profile.mvxquality.json] [--allow-fallback] [--telemetry-json path] [--telemetry-csv path]\nLeft drag: orbit | Right/middle/Shift+left drag: pan | Wheel: zoom | F: frame | Esc: close");
+            std::puts("Usage: minvex_standalone [model.glb|model.gltf] [--frames N] [--animation clip-index]\n"
+                "  [--preset low|medium|high] [--quality profile.mvxquality.json] [--target-fps 0..240]\n"
+                "  [--allow-fallback] [--telemetry-json path] [--telemetry-csv path]\n"
+                "Target FPS 0 lets VSync pace rendering at the display refresh rate.\n"
+                "Left drag: orbit | Right/middle/Shift+left drag: pan | Wheel: zoom | F: frame | Esc: close");
             return 0;
         }
         if (argument == "--frames" && i + 1 < argc) {
@@ -33,6 +38,13 @@ int main(int argc, char* argv[]) {
             const std::string_view value(argv[++i]); std::size_t clip=0;
             const auto [end,error] = std::from_chars(value.data(),value.data()+value.size(),clip);
             if (error != std::errc{} || end != value.data()+value.size()) { std::fputs("--animation requires a clip index.\n",stderr); return 2; } animation = clip;
+        } else if (argument == "--target-fps" && i+1 < argc) {
+            const std::string_view value(argv[++i]); int fps = 0;
+            const auto [end,error] = std::from_chars(value.data(),value.data()+value.size(),fps);
+            if (error != std::errc{} || end != value.data()+value.size() || fps < 0 || fps > 240) {
+                std::fputs("--target-fps requires an integer in [0, 240].\n",stderr); return 2;
+            }
+            targetFps = fps;
         } else if (argument == "--quality" && i+1 < argc) {
             auto loaded=lv::LoadQuality(argv[++i]);if (!loaded) {PrintError(loaded.Error());return 1;}quality=std::move(loaded).Value();
         } else if (argument == "--preset" && i+1 < argc) {
@@ -44,6 +56,7 @@ int main(int argc, char* argv[]) {
         else if (!argument.starts_with("--") && !hasPath) { path = argv[i]; hasPath = true; }
         else { std::fprintf(stderr,"Unknown or incomplete argument: %s\n",argv[i]); return 2; }
     }
+    if (targetFps) {quality.Overrides.TargetFps=*targetFps;}
     lv::ViewerOptions options;options.Quality=quality;lv::Viewer viewer(options);
     const auto model = viewer.AddModel(path);
     if (!model) { PrintError(model.Error()); return 1; }
