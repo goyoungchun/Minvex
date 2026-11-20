@@ -8,7 +8,7 @@ on:
         description: Existing release tag to build and publish
         type: string
         required: true
-        default: v1.0.1
+        default: v1.0.2
 permissions:
   contents: read
 concurrency:
@@ -88,6 +88,8 @@ jobs:
           The Windows archive filename includes the required MSVC compiler major.minor (for example, MSVC-19.51). Check your compiler with cl /Bv. If the versions differ, select the matching MSVC toolset or build the SDK from this release tag with your compiler.
 
           Start with share/minvex/examples/QuickStart to load a model or build and control a scene from generated meshes.
+
+          UiCanvas::SetRuntimeText updates live labels without changing saved UI or edit history. The Web source build accepts C++ scene initialization, frame and command callbacks so a procedural scene can be shared with the native Viewer.
 
           Building from source requires a C++20 standard library with std::jthread and std::stop_token. Each binary SDK records its compiler and runtime in share/minvex/sdk-manifest.json.
 

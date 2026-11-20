@@ -6,7 +6,7 @@ if(POLICY CMP0141)
 endif()
 project(MinvexQuickStart LANGUAGES CXX)
 
-find_package(Minvex 1.0.1 CONFIG REQUIRED COMPONENTS viewer graphics)
+find_package(Minvex 1.0.2 CONFIG REQUIRED COMPONENTS viewer graphics)
 add_executable(minvex_quickstart Main.cpp)
 target_link_libraries(minvex_quickstart PRIVATE minvex::viewer)
 add_executable(minvex_quickstart_procedural Procedural.cpp)
