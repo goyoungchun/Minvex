@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minvex Procedural Quick Start</title>
+<style>
+  body { font: 1rem system-ui; margin: 1.5rem auto; max-width: 50rem; padding: 0 1rem; }
+  canvas { display: block; width: 100%; aspect-ratio: 16 / 9; margin: 1rem 0; touch-action: none; }
+</style>
+<h1>Minvex Procedural Quick Start</h1>
+<canvas aria-label="3D arm with a movable shoulder"></canvas>
+<button type="button" data-turn="left" disabled>Turn left</button>
+<button type="button" data-turn="right" disabled>Turn right</button>
+<p id="error" role="alert"></p>
+<script type="module">
+  import {createViewer} from './minvex.js';
+
+  const report = error => { document.querySelector('#error').textContent = error.message; };
+  try {
+    const viewer = await createViewer({canvas: document.querySelector('canvas'), onError: report});
+    window.addEventListener('pagehide', event => { if (!event.persisted) viewer.dispose(); });
+    for (const button of document.querySelectorAll('[data-turn]')) {
+      button.disabled = false;
+      button.addEventListener('click', () => {
+        try { viewer.sceneCommand('turn', button.dataset.turn); }
+        catch (error) { report(error); }
+      });
+    }
+  } catch (error) { report(error); }
+</script>

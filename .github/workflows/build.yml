@@ -39,6 +39,17 @@ jobs:
           npx playwright install --with-deps chromium
           cd ..
           node web/tests/browser.mjs
+      - name: Build and test the C++ Web scene Quick Start
+        env:
+          MINVEX_WEB_DIR: out/web-ci/web
+          MINVEX_BROWSERS: chromium
+          MINVEX_TEST_WEB_SCENE: '1'
+        run: |
+          source ./out/emsdk/emsdk_env.sh
+          emcmake cmake -S . -B out/web-ci -DMINVEX_WEB_SCENE_SOURCES=examples/QuickStart/WebScene.cpp
+          cmake --build out/web-ci --target minvex_web --parallel 4
+          cmake -E copy examples/QuickStart/Web.html out/web-ci/web/procedural.html
+          node web/tests/browser.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: Minvex-WebAssembly

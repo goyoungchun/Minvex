@@ -10,6 +10,7 @@
   "processor": "@CMAKE_SYSTEM_PROCESSOR@",
   "macosDeploymentTarget": "@CMAKE_OSX_DEPLOYMENT_TARGET@",
   "compiler": "@CMAKE_CXX_COMPILER_ID@-@CMAKE_CXX_COMPILER_VERSION@",
+  "msvcToolset": "@MINVEX_SDK_MSVC_TOOLSET@",
   "pointerBytes": @CMAKE_SIZEOF_VOID_P@,
   "configuration": "$<CONFIG>",
   "runtime": "@MINVEX_SDK_RUNTIME@",

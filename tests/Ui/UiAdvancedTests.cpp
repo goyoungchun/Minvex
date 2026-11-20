@@ -50,7 +50,56 @@ void Rich() {
 #endif
     ui.Save(temp.File("rich.json")).Value();UiCanvas loaded;loaded.Load(temp.File("rich.json")).Value();const auto copy=loaded.Elements().Value()[0];Check(copy.Runs==e.Runs,"run values and absent overrides round trip");ui.Undo().Value();ui.Redo().Value();Check(ui.Get(id).Value().Runs==e.Runs,"redo restores complete rich text");
 }
+void RuntimeText() {
+    TemporaryDirectory temp;
+    UiCanvas ui;
+    UiElement label;
+    label.Text="Fallback";
+    UiTextRun run;
+    run.Text="Short";
+    label.Runs={run};
+    label.Layout.WidthSizing=UiSizing::Hug;
+    const auto id=ui.Add(label).Value();
+    label.Id=id;
+    ui.Save(temp.File("ui.json")).Value();
+    auto edited=label;
+    edited.Layout.X+=12;
+    ui.Set(id,edited).Value();
+    ui.Undo().Value();
+    const auto history=ui.History().Value();
+    const auto revision=ui.Revision();
+#if defined(_WIN32) || defined(__APPLE__)
+    const auto authoredWidth=Box(ui,id).Width;
+    const auto authoredPixels=ui.Rasterize(400,120).Value();
+#endif
+    ui.SetRuntimeText(id,"A longer runtime value").Value();
+    Check(ui.Revision()==revision+1 && ui.Get(id).Value()==label,"runtime text invalidates rendering without changing authored text");
+    const auto updated=ui.History().Value();
+    Check(updated.UndoCount==history.UndoCount && updated.RedoCount==history.RedoCount && !updated.Dirty,"runtime text preserves history, redo and saved state");
+    ui.SetRuntimeText(id,"A longer runtime value").Value();
+    Check(!ui.SetRuntimeText(id,std::string(16385,'x')) && !ui.SetRuntimeText(id,std::string_view("a\0b",3)) &&
+          ui.Revision()==revision+1,"identical and invalid runtime text preserve the render revision");
+    ui.BeginEdit().Value();
+    ui.CancelEdit().Value();
+#if defined(_WIN32) || defined(__APPLE__)
+    Check(Box(ui,id).Width>authoredWidth && ui.Rasterize(400,120).Value()!=authoredPixels,"runtime text overrides rich text in layout and rasterization after cancel");
+    ui.SetRuntimeText(id,"").Value();
+    const auto blank=ui.Rasterize(400,120).Value();
+    Check(std::all_of(blank.begin(),blank.end(),[](auto byte){return byte==0;}),"empty runtime text hides authored text");
+#endif
+    ui.Save(temp.File("runtime.json")).Value();
+    Check(Read(temp.File("runtime.json"))==Read(temp.File("ui.json")),"runtime text is excluded from the saved document");
+    ui.SetRuntimeText(id,std::nullopt).Value();
+#if defined(_WIN32) || defined(__APPLE__)
+    Check(ui.Rasterize(400,120).Value()==authoredPixels,"clearing runtime text restores authored rich text");
+    ui.SetRuntimeText(id,"Discard on removal").Value();
+    ui.Remove(id).Value();
+    ui.Undo().Value();
+    Check(ui.Rasterize(400,120).Value()==authoredPixels,"undo removal restores authored text only");
+#endif
+}
 void History() {
+    RuntimeText();
     UiCanvas ui;Check(!ui.History().Value().Dirty&&!ui.History().Value().CanUndo,"empty canvas starts clean");auto e=Panel(0,0,100,100);const auto id=ui.Add(e).Value();Check(ui.History().Value().Dirty&&ui.History().Value().UndoCount==1,"add creates an undo entry and dirties canvas");
     TemporaryDirectory temp;ui.Save(temp.File("saved.json")).Value();Check(!ui.History().Value().Dirty,"save marks the durable state clean");const auto baseline=ui.History().Value().UndoCount;ui.BeginEdit().Value();Check(!ui.BeginEdit()&&!ui.Undo()&&!ui.Redo()&&!ui.Save(temp.File("mid.json"))&&!ui.Load(temp.File("saved.json")),"active transaction rejects nested edits/history/file publication");for (int i=1;i<=100;++i) {e.Layout.X=static_cast<float>(i);ui.Set(id,e).Value();}ui.CommitEdit().Value();Check(ui.History().Value().UndoCount==baseline+1,"many drag updates form one undo step");ui.Undo().Value();Check(Close(ui.Get(id).Value().Layout.X,0)&&!ui.History().Value().Dirty,"undo restores values and saved state");ui.Redo().Value();Check(Close(ui.Get(id).Value().Layout.X,100)&&ui.History().Value().Dirty,"redo restores grouped edit");
     ui.BeginEdit().Value();e.Layout.X=200;ui.Set(id,e).Value();ui.CancelEdit().Value();Check(Close(ui.Get(id).Value().Layout.X,100)&&!ui.History().Value().Editing,"cancel rolls back intermediate edits");ui.Undo().Value();const auto revision=ui.Revision();ui.Set(id,ui.Get(id).Value()).Value();Check(ui.History().Value().CanRedo&&ui.Revision()==revision,"no-op edit preserves redo and render cache");ui.BeginEdit().Value();ui.CommitEdit().Value();Check(ui.History().Value().CanRedo&&!ui.History().Value().Dirty,"empty transaction preserves saved marker and redo");

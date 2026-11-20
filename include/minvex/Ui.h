@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lv {
@@ -108,6 +109,9 @@ public:
     UiCanvas& operator=(const UiCanvas&)=delete;
     Result<UiId> Add(const UiElement& description);
     Result<void> Set(UiId id,const UiElement& description);
+    // Plain display text for Text/Button, including an empty string. Pass nullopt
+    // to restore authored Text/Runs. Excluded from Get, save and edit history.
+    Result<void> SetRuntimeText(UiId id,std::optional<std::string_view> text);
     Result<UiElement> Get(UiId id) const; // Independent copy.
     Result<std::vector<UiElement>> Elements() const;
     Result<void> Remove(UiId id);

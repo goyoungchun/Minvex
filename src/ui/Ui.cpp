@@ -23,7 +23,7 @@ Error ErrorFromException(ErrorCode code=ErrorCode::InvalidArgument,const std::fi
 }
 template<class T> Result<T> Fail(ErrorCode code,const char* message) {return Result<T>::Failure({code,message,"Use valid UI IDs and the canvas owner thread.",{}});}
 void Require(bool condition,const char* message) {if (!condition) {throw std::invalid_argument(message);}}
-bool Utf8(const std::string& s) {
+bool Utf8(std::string_view s) {
     for (std::size_t i=0;i<s.size();) {
         const auto c=static_cast<unsigned char>(s[i++]);if (c==0) {return false;}if (c<128) {continue;}
         int n=c>=0xc2 && c<=0xdf ? 1:c>=0xe0 && c<=0xef ? 2:c>=0xf0 && c<=0xf4 ? 3:-1;
@@ -180,6 +180,7 @@ struct UiCanvas::Impl {
     std::thread::id Owner=std::this_thread::get_id();std::vector<UiElement> Items;std::vector<UiId> Events;
     std::filesystem::path Directory="Font";UiId Next=1,Hover=0,Capture=0,Focus=0,KeyCapture=0;std::uint64_t Version=1;
     detail::UiScrollMap Scroll;
+    detail::UiRuntimeTextMap RuntimeText;
     struct Snapshot {std::vector<UiElement> Items;std::filesystem::path Directory;std::uint64_t State;};
     std::deque<Snapshot> Past,Future;
     std::optional<Snapshot> Group;
@@ -192,11 +193,17 @@ struct UiCanvas::Impl {
     mutable detail::NativeTextContextSlot TextContext;
     auto Find(UiId id) {return std::find_if(Items.begin(),Items.end(),[=](const auto& e){return e.Id==id;});}
     auto Find(UiId id) const {return std::find_if(Items.begin(),Items.end(),[=](const auto& e){return e.Id==id;});}
-    const std::vector<detail::UiResolved>& Resolve(float width,float height) const {if (CachedEpoch!=LayoutEpoch||CachedWidth!=width||CachedHeight!=height) {auto candidate=detail::BuildUiLayout(Items,Directory,width,height,Scroll,&TextContext);CachedLayout=std::move(candidate);CachedWidth=width;CachedHeight=height;CachedEpoch=LayoutEpoch;}return CachedLayout;}
+    const std::vector<detail::UiResolved>& Resolve(float width,float height) const {if (CachedEpoch!=LayoutEpoch||CachedWidth!=width||CachedHeight!=height) {auto candidate=detail::BuildUiLayout(Items,Directory,width,height,Scroll,RuntimeText,&TextContext);CachedLayout=std::move(candidate);CachedWidth=width;CachedHeight=height;CachedEpoch=LayoutEpoch;}return CachedLayout;}
     Snapshot CaptureState() const {return {Items,Directory,State};}
     static std::size_t Bytes(const Snapshot& s) {std::size_t n=sizeof(s)+s.Directory.native().size()*sizeof(std::filesystem::path::value_type);for (const auto& e:s.Items) {n+=ElementBytes(e);}return n;}
     void Trim() {std::size_t bytes=Group ? Bytes(*Group):0;for (const auto& s:Past) {bytes+=Bytes(s);}for (const auto& s:Future) {bytes+=Bytes(s);}while (Past.size()+Future.size()>128||bytes>32*1024*1024) {if (!Past.empty()) {bytes-=Bytes(Past.front());Past.pop_front();}else if (!Future.empty()) {bytes-=Bytes(Future.front());Future.pop_front();}else {break;}}}
     void ResetInput() {Events.clear();Hover=Capture=Focus=KeyCapture=0;Scroll.clear();}
+    void PruneRuntimeText() {
+        std::erase_if(RuntimeText,[&](const auto& entry) {
+            const auto item=Find(entry.first);
+            return item==Items.end() || item->Kind==UiKind::Panel;
+        });
+    }
     bool Active(UiId id,bool button=false) const {auto it=Find(id);if (it==Items.end()||(button&&it->Kind!=UiKind::Button)) {return false;}for (;;) {if (!it->Visible||!it->Enabled) {return false;}if (!it->Parent) {return true;}it=Find(it->Parent);if (it==Items.end()) {return false;}}}
     bool Apply(std::vector<UiElement> items,std::filesystem::path directory) {
         if (items==Items&&directory==Directory) {return false;}detail::ValidateUiTree(items);
@@ -204,11 +211,12 @@ struct UiCanvas::Impl {
         if (!Group) {Past.push_back(CaptureState());Future.clear();}
         if (Directory!=next.Directory||next.Items.empty()) {TextContext.reset();}
         Items=std::move(next.Items);Directory=std::move(next.Directory);State=++Serial;++Version;++LayoutEpoch;
+        PruneRuntimeText();
         if (Items.empty()) {Raster.reset();}
         if (!Active(Hover)) {Hover=0;}if (!Active(Capture)) {Capture=0;}if (!Active(Focus,true)) {Focus=0;}if (!Active(KeyCapture,true)) {KeyCapture=0;}
         std::erase_if(Events,[&](UiId id){return !Active(id,true);});std::erase_if(Scroll,[&](const auto& pair){return Find(pair.first)==Items.end();});Trim();return true;
     }
-    void Restore(Snapshot state) {if (Directory!=state.Directory||state.Items.empty()) {TextContext.reset();}Items=std::move(state.Items);Directory=std::move(state.Directory);State=state.State;ResetInput();++Version;++LayoutEpoch;}
+    void Restore(Snapshot state) {if (Directory!=state.Directory||state.Items.empty()) {TextContext.reset();}Items=std::move(state.Items);Directory=std::move(state.Directory);State=state.State;ResetInput();PruneRuntimeText();++Version;++LayoutEpoch;}
     bool Ready() const {return Owner==std::this_thread::get_id();}
     const UiStyle& Style(const UiElement& e) const {
         if (!e.Enabled&&e.Disabled) {return *e.Disabled;}if ((Capture==e.Id||KeyCapture==e.Id)&&e.Pressed) {return *e.Pressed;}if (Hover==e.Id&&e.Hover) {return *e.Hover;}if (Focus==e.Id&&e.Focused) {return *e.Focused;}return e.Normal;
@@ -226,6 +234,24 @@ Result<UiId> UiCanvas::Add(const UiElement& description) {
 Result<void> UiCanvas::Set(UiId id,const UiElement& description) {
     auto& p=*impl_;if (!p.Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}const auto it=p.Find(id);if (it==p.Items.end()) {return Fail<void>(ErrorCode::InvalidHandle,"Unknown UI ID.");}
     try {Validate(description);auto candidate=p.Items;auto e=description;e.Id=id;candidate[static_cast<std::size_t>(it-p.Items.begin())]=std::move(e);p.Apply(std::move(candidate),p.Directory);return Result<void>::Success();}catch (...) {return Result<void>::Failure(ErrorFromException());}
+}
+Result<void> UiCanvas::SetRuntimeText(UiId id,std::optional<std::string_view> text) {
+    auto& p=*impl_;
+    if (!p.Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}
+    const auto item=p.Find(id);
+    if (item==p.Items.end()) {return Fail<void>(ErrorCode::InvalidHandle,"Unknown UI ID.");}
+    if (item->Kind==UiKind::Panel) {return Fail<void>(ErrorCode::InvalidArgument,"Runtime text requires a Text or Button element.");}
+    try {
+        if (text) {
+            const auto current=p.RuntimeText.find(id);
+            if (current!=p.RuntimeText.end() && current->second==*text) {return Result<void>::Success();}
+            Require(text->size()<=MaxText && Utf8(*text),"Runtime text must be valid UTF-8 without NUL and at most 16384 bytes.");
+            p.RuntimeText.insert_or_assign(id,std::string(*text));
+        } else if (!p.RuntimeText.erase(id)) {return Result<void>::Success();}
+        ++p.Version;
+        ++p.LayoutEpoch;
+        return Result<void>::Success();
+    } catch (...) {return Result<void>::Failure(ErrorFromException());}
 }
 Result<UiElement> UiCanvas::Get(UiId id) const {const auto& p=*impl_;if (!p.Ready()) {return Fail<UiElement>(ErrorCode::WrongThread,"UI accessed from another thread.");}const auto it=p.Find(id);return it==p.Items.end() ? Fail<UiElement>(ErrorCode::InvalidHandle,"Unknown UI ID."):Result<UiElement>::Success(*it);}
 Result<std::vector<UiElement>> UiCanvas::Elements() const {if (!impl_->Ready()) {return Fail<std::vector<UiElement>>(ErrorCode::WrongThread,"UI accessed from another thread.");}return Result<std::vector<UiElement>>::Success(impl_->Items);}

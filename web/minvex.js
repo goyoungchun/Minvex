@@ -133,6 +133,7 @@ class Viewer {
   setQuality(value) { return this.command({op: 'quality', value}); }
   setCamera(value) { return this.command({...value, op: 'camera'}); }
   frameScene() { return this.command({op: 'frame'}); }
+  sceneCommand(name, payload = '') { this.command({op: 'sceneCommand', name, payload}); }
   #handleLoss() {
     if (this.#lost || this.disposed) return;
     this.#resume = this.#running; this.#pauseLoop(); this.#lost = true;

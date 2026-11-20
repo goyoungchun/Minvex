@@ -45,6 +45,8 @@ cmake --build --preset macos-release --parallel 4
 ### 기존 C++ 프로젝트에 SDK 연결
 **CMake 설치 및 `minvex::viewer` 연결**
 
+Windows 릴리스 ZIP 이름의 `MSVC-19.xx`가 필요한 컴파일러 버전 계열입니다. Developer PowerShell x64에서 `cl /Bv`로 확인하고, 같은 `major.minor`의 MSVC와 아키텍처·빌드 구성·C++ 런타임을 사용합니다. 컴파일러 버전이 다르면 `find_package(Minvex)`가 SDK와 현재 컴파일러 버전을 표시합니다. 일치하는 도구 집합을 선택하거나 같은 릴리스 태그에서 현재 컴파일러로 Minvex를 빌드할 수 있습니다.
+
 ```powershell
 cmake --install out/build/windows-release --config Release --prefix out/sdk-native
 ```
@@ -62,16 +64,19 @@ cmake --build build
 
 ### 설치 SDK로 움직이는 장면 시작
 
-네이티브 SDK의 `share/minvex/examples/QuickStart`에 모델 로드, 프레임 시간 기반 회전, 오류 출력을 담은 C++20 예제가 들어 있습니다. 아래는 Release SDK를 Ninja로 빌드하는 Windows 예입니다.
+네이티브 SDK의 `share/minvex/examples/QuickStart`에서 두 C++20 예제를 빌드합니다. `minvex_quickstart_procedural`은 `MakeCube()`로 메시를 만들고 팔을 관절의 자식으로 배치합니다. **Space**와 **Shift+Space**로 관절을 돌리면 화면에 각도가 표시됩니다. `minvex_quickstart`는 GLB를 로드해 프레임 경과 시간에 따라 모델을 회전합니다.
 
 ```powershell
 $sdk = "C:/path/to/extracted/Minvex-SDK"
 cmake -S "$sdk/share/minvex/examples/QuickStart" -B quickstart-build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$sdk"
 cmake --build quickstart-build
+./quickstart-build/minvex_quickstart_procedural.exe
 ./quickstart-build/minvex_quickstart.exe "$sdk/share/minvex/examples/assets/SharedBox.glb"
 ```
 
 macOS에서는 실행 파일 이름의 `.exe`를 뺍니다. 예제에 `--frames 3`을 전달하면 그래픽 초기화와 갱신을 확인한 뒤 자동 종료합니다.
+
+같은 절차적 장면을 Emscripten으로 빌드해 브라우저에서 버튼으로 조작할 수 있습니다. [C++ 장면 연결](docs/API.md#c-장면-연결)
 
 ## 분야별 지원 기능
 

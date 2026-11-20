@@ -36,6 +36,7 @@ const server = createServer(async (request, response) => {
 await new Promise(done => server.listen(0, '127.0.0.1', done));
 const url = `http://127.0.0.1:${server.address().port}`;
 const requested = process.env.MINVEX_BROWSERS?.split(',') ?? ['chromium'];
+const testScene = process.env.MINVEX_TEST_WEB_SCENE === '1';
 try {
   for (const name of requested) {
     const browser = name === 'firefox' ? await firefox.launch({headless: true, firefoxUserPrefs: {'webgl.force-enabled': true, 'gfx.webrender.software': true}}) : await chromium.launch({headless: true, channel: name === 'edge' ? 'msedge' : name === 'chromium' ? undefined : 'chrome', args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-gpu-sandbox']});
@@ -57,7 +58,58 @@ try {
         check(!crossOriginIsolated, 'Single-thread build must work without COOP/COEP');
         await expect('InvalidState',()=>createViewer({canvas}));
       });
+      if (testScene) {
+        await page.evaluate(async () => {
+          const {createViewer} = await import('/minvex.js');
+          const canvas = document.querySelector('canvas');
+          const initial = pixels();
+          const corner = initial.subarray(0, 4);
+          check(initial.some((value, index) => index % 4 !== 3 && value !== corner[index % 4]), 'C++ initialization did not render geometry');
+          await expect('InvalidArgument', () => viewer.sceneCommand('turn', 'up'));
+          await expect('InvalidArgument', () => viewer.sceneCommand('', 'right'));
+          check(changed(initial, pixels()) === 0, 'Rejected command moved the scene');
+          viewer.sceneCommand('turn', 'right');
+          check(changed(initial, pixels()) === 0, 'A zero-delta tick advanced the arm');
+          viewer.render(.2);
+          const moved = pixels();
+          check(changed(initial, moved) > 100, 'C++ frame callback did not move the arm');
+
+          const extension = canvas.getContext('webgl2').getExtension('WEBGL_lose_context');
+          check(extension, 'Context loss extension');
+          const contextEvent = (name, action) => new Promise(done => {
+            canvas.addEventListener(name, () => setTimeout(done, 20), {once: true});
+            action();
+          });
+          await contextEvent('webglcontextlost', () => extension.loseContext());
+          await expect('InvalidState', () => viewer.render());
+          await contextEvent('webglcontextrestored', () => extension.restoreContext());
+          check(changed(moved, pixels()) === 0, 'Restoration reset the C++ scene');
+          viewer.sceneCommand('turn', 'left');
+          viewer.render(.2);
+          check(changed(initial, pixels()) === 0, 'C++ commands did not resume after restoration');
+
+          viewer.sceneCommand('turn', 'right');
+          viewer.render(.2);
+          viewer.dispose();
+          await expect('InvalidState', () => viewer.sceneCommand('turn', 'right'));
+          window.viewer = await createViewer({canvas, autoStart: false, quality: {preset:'medium', shadow:'off', targetFps:0, pbr:true}});
+          check(changed(initial, pixels()) === 0, 'A new Viewer inherited the previous C++ scene');
+          viewer.dispose();
+        });
+        await page.goto(`${url}/procedural.html`);
+        const turn = page.getByRole('button', {name: 'Turn right'});
+        await page.waitForFunction(() => !document.querySelector('[data-turn="right"]').disabled);
+        const canvas = page.locator('canvas');
+        const before = await canvas.evaluate(element => element.toDataURL());
+        await turn.click();
+        await page.waitForFunction(initial => document.querySelector('canvas').toDataURL() !== initial, before);
+        assert.equal(await page.getByRole('alert').textContent(), '');
+        assert.equal(errors.length,0,errors.join('\n'));
+        console.log(JSON.stringify({browser:name,cppScene:true,contextRestored:true,disposed:true}));
+        continue;
+      }
       const core = await page.evaluate(async () => {
+        await expect('UnsupportedFeature', () => viewer.sceneCommand('turn', 'right'));
         const base = pixels();
         const box = await viewer.loadModel('/assets/SharedBox.glb');
         const image = pixels();check(changed(base,image)>100,'GLB did not produce Canvas pixels');

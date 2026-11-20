@@ -2,6 +2,7 @@
 #include <emscripten/html5.h>
 #include <GLES3/gl3.h>
 #include <minvex/Version.h>
+#include <minvex/WebScene.h>
 #include "renderer/RenderSurface.h"
 #include "platform/GraphicsSession.h"
 #include "CameraController.h"
@@ -19,13 +20,25 @@ using Json=nlohmann::json;
 struct Failure : std::runtime_error {lv::Error Detail;explicit Failure(lv::Error e):std::runtime_error(e.Message),Detail(std::move(e)) {}};
 template<class T> T Check(lv::Result<T> r) {if (!r) {throw Failure(r.Error());}return std::move(r).Value();}
 void Check(lv::Result<void> r) {if (!r) {throw Failure(r.Error());}}
+template<class Callback, class... Args>
+decltype(auto) InvokeSceneCallback(const char* stage, const Callback& callback, Args&&... args) {
+    try { return callback(std::forward<Args>(args)...); }
+    catch (const std::bad_alloc&) { throw; }
+    catch (const std::exception& e) {
+        throw Failure({lv::ErrorCode::CallbackFailure,std::string(stage)+": "+e.what(),{}, {}});
+    }
+    catch (...) { throw Failure({lv::ErrorCode::CallbackFailure,stage,{}, {}}); }
+}
 [[noreturn]] void Fail(lv::ErrorCode code,const char* text) {throw Failure({code,text,"Check the browser capability and supplied value.",{}});}
 const char* Code(lv::ErrorCode code) {
     switch(code) {
     case lv::ErrorCode::InvalidHandle:return "InvalidHandle";case lv::ErrorCode::InvalidState:return "InvalidState";
     case lv::ErrorCode::UnsupportedFeature:return "UnsupportedFeature";case lv::ErrorCode::AssetLoad:return "AssetLoad";
     case lv::ErrorCode::InsufficientResource:return "InsufficientResource";case lv::ErrorCode::Rendering:return "Rendering";
-    case lv::ErrorCode::InvalidData:return "InvalidData";default:return "InvalidArgument";
+    case lv::ErrorCode::InvalidData:return "InvalidData";case lv::ErrorCode::CallbackFailure:return "CallbackFailure";
+    case lv::ErrorCode::WrongThread:return "WrongThread";case lv::ErrorCode::GraphicsInitialization:return "GraphicsInitialization";
+    case lv::ErrorCode::SceneIo:return "SceneIo";case lv::ErrorCode::QualityIo:return "QualityIo";case lv::ErrorCode::TelemetryIo:return "TelemetryIo";
+    default:return "InvalidArgument";
     }
 }
 lv::Vec3 Vector(const Json& j) {if (!j.is_array() || j.size()!=3) {throw std::invalid_argument("Expected three vector components.");}return {j[0].get<float>(),j[1].get<float>(),j[2].get<float>()};}
@@ -63,6 +76,8 @@ lv::QualityProfile Profile(const Json& value) {
 }
 class WebHost {
     lv::Scene world_;lv::AssetRegistry assets_;
+    lv::WebSceneCallbacks sceneCallbacks_;
+    std::uint64_t frameNumber_=0;
     std::unique_ptr<lv::detail::RenderSurface> surface_;
     lv::detail::GraphicsLease lease_{this};lv::detail::CameraController controls_;
     std::unordered_map<lv::ObjectId,lv::BlendTreeHandle> trees_;
@@ -117,11 +132,29 @@ class WebHost {
             EmscriptenWebGLContextAttributes a;emscripten_webgl_init_context_attributes(&a);a.majorVersion=2;a.minorVersion=0;a.alpha=false;a.antialias=false;a.depth=true;a.stencil=true;a.preserveDrawingBuffer=true;
             context_=emscripten_webgl_create_context(r.at("selector").get<std::string>().c_str(),&a);
             if (context_<=0) {context_=0;lease_.Release();Fail(lv::ErrorCode::UnsupportedFeature,"WebGL2 is unavailable for this Canvas.");}
-            try {Setup();}catch (...) {Dispose();throw;}return Quality();
+            try {
+#ifdef MINVEX_WEB_CUSTOM_SCENE
+                sceneCallbacks_=InvokeSceneCallback("Web scene factory failed",lv::CreateWebSceneCallbacks);
+                if (sceneCallbacks_.OnInitialize) {
+                    InvokeSceneCallback("Web scene initialization failed",sceneCallbacks_.OnInitialize,world_);
+                }
+#endif
+                Setup();
+            }catch (...) {Dispose();throw;}return Quality();
         }
         if (!context_) {Fail(lv::ErrorCode::InvalidState,"Initialize the Web Host first.");}
         if (op=="suspend") {Suspend();return nullptr;}
         if (op=="restore") {if (!lost_) {return Quality();}Setup();return Quality();}
+        if (op=="sceneCommand") {
+            if (!sceneCallbacks_.OnCommand) {Fail(lv::ErrorCode::UnsupportedFeature,"No C++ Web scene command handler is registered.");}
+            const auto& name=r.at("name").get_ref<const std::string&>();
+            const auto& payload=r.at("payload").get_ref<const std::string&>();
+            if (name.empty() || name.size()>128 || payload.size()>16384) {
+                throw std::invalid_argument("Scene command name must be 1..128 UTF-8 bytes and payload at most 16384 bytes.");
+            }
+            Check(InvokeSceneCallback("Web scene command failed",sceneCallbacks_.OnCommand,world_,name,payload));
+            return nullptr;
+        }
         if (op=="load") {
             if (world_.Size()>=256) {Fail(lv::ErrorCode::InsufficientResource,"Web Scene object limit reached.");}
             lv::ImportSettings settings;settings.MaxFileBytes=64*1024*1024;settings.MaxResourceBytes=128*1024*1024;settings.MaxVertices=500000;settings.MaxIndices=1500000;settings.MaxNodes=8192;settings.MaxImageDimension=4096;
@@ -146,7 +179,12 @@ class WebHost {
             if (lost_ || emscripten_is_webgl_context_lost(context_)) {Fail(lv::ErrorCode::InvalidState,"Context is lost.");}Current();const auto dt=r.value("dt",0.0);if (!std::isfinite(dt) || dt<0 || dt>1) {throw std::invalid_argument("Frame delta must be in [0,1].");}
             const int w=r.contains("width") ? Integer<int>(r.at("width")):width_,h=r.contains("height") ? Integer<int>(r.at("height")):height_;if (w<1 || h<1 || w>8192 || h>8192) {throw std::invalid_argument("Invalid Canvas extent.");}
             if (w!=width_ || h!=height_) {Check(surface_->Resize(world_,w,h));width_=w;height_=h;}
-            world_.UpdateAnimations(dt);now_+=dt;const bool rendered=surface_->Render(world_,now_,r.value("force",false),{.025f,.035f,.055f,1});
+            world_.UpdateAnimations(dt);now_+=dt;
+            if (sceneCallbacks_.OnFrame) {
+                const lv::ViewerFrameInfo frame{frameNumber_++,dt,width_,height_};
+                InvokeSceneCallback("Web scene frame callback failed",sceneCallbacks_.OnFrame,world_,frame);
+            }
+            const bool rendered=surface_->Render(world_,now_,r.value("force",false),{.025f,.035f,.055f,1});
             sg_pass pass{};pass.swapchain.width=width_;pass.swapchain.height=height_;pass.swapchain.sample_count=1;pass.swapchain.color_format=SG_PIXELFORMAT_RGBA8;pass.swapchain.depth_format=SG_PIXELFORMAT_DEPTH_STENCIL;pass.swapchain.gl.framebuffer=0;pass.action.colors[0].load_action=SG_LOADACTION_DONTCARE;
             sg_begin_pass(pass);surface_->Present();sg_end_pass();sg_commit();if (emscripten_is_webgl_context_lost(context_)) {Fail(lv::ErrorCode::InvalidState,"Context is lost.");}if (graphicsError_) {Fail(lv::ErrorCode::Rendering,"WebGL2 reported a graphics resource or shader error.");}
             Json events=Json::array();for (const auto& e:world_.PollAnimationEvents()) {events.push_back({{"object",e.Object},{"clip",e.Occurrence.Clip},{"name",e.Occurrence.Event.Name},{"time",e.Occurrence.Event.TimeSeconds},{"payload",e.Occurrence.Event.Payload},{"reverse",e.Occurrence.Reverse}});}
@@ -190,7 +228,7 @@ class WebHost {
 public:
     WebHost()=default;
     ~WebHost() {Dispose();}
-    void Dispose() noexcept {if (!disposed_) {try {if (context_) {Current();surface_.reset();if (sg_isvalid()) {sg_shutdown();}emscripten_webgl_destroy_context(context_);}}catch (...) {}context_=0;lease_.Release();world_=lv::Scene{};disposed_=true;}}
+    void Dispose() noexcept {if (!disposed_) {try {if (context_) {Current();surface_.reset();if (sg_isvalid()) {sg_shutdown();}emscripten_webgl_destroy_context(context_);}}catch (...) {}context_=0;lease_.Release();sceneCallbacks_={};world_=lv::Scene{};disposed_=true;}}
     std::string Command(const std::string& input) {
         std::string fallback="InvalidArgument";
         try {const auto request=Json::parse(input);if (request.value("op",std::string{})=="tick") {fallback="Rendering";}return Json{{"value",Execute(request)}}.dump();}

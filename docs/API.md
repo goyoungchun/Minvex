@@ -22,7 +22,7 @@ target_link_libraries(my_viewer PRIVATE minvex::viewer)
 
 | 모듈 / 헤더 | 주요 타입·함수 |
 |---|---|
-| **ui** · [Ui.h](../include/minvex/Ui.h) | `UiCanvas`, `UiElement`, `UiLayout/UiContainer/UiLayoutBox`, `UiStyle`, `UiTextStyle/UiTextRun`, `UiHistoryState`, `UiInput`, `UiFont`. `Add/Set/Get`, `ResolveLayout/SetScroll`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo/History`, `ProcessInput/PollActivations`, `Fonts`, `SetFontDirectory`, `Save/Load`, `Rasterize` |
+| **ui** · [Ui.h](../include/minvex/Ui.h) | `UiCanvas`, `UiElement`, `UiLayout/UiContainer/UiLayoutBox`, `UiStyle`, `UiTextStyle/UiTextRun`, `UiHistoryState`, `UiInput`, `UiFont`. `Add/Set/Get/SetRuntimeText`, `ResolveLayout/SetScroll`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo/History`, `ProcessInput/PollActivations`, `Fonts`, `SetFontDirectory`, `Save/Load`, `Rasterize` |
 | **core** · [Math.h](../include/minvex/Math.h), [Mesh.h](../include/minvex/Mesh.h) | `Vec3`, `Quaternion`, `Mat4`, `Transform`, `Bounds`, `MeshData`, `MakeCube()`, `DecomposeTRS()`. 생성 헤더 `Version.h`의 `Version`, `BuildInfo`, `GetBuildInfo()` |
 | **assets** · [Asset.h](../include/minvex/Asset.h), [AssetLoading.h](../include/minvex/AssetLoading.h) | `ModelHandle`, `MorphTarget`, `MaterialAsset`, `ShadingModel`, `ImportSettings`, `ImporterRegistry`, `AssetRegistry::LoadModel/PrepareModel/ReimportModel`, `InspectModel()`, `ValidateModel()`, `CopyModelToProject()`, `AssetLoader`, `AssetHotReload` |
 | **scene** · [Scene.h](../include/minvex/Scene.h) | `Scene`, `ObjectId`, `Camera`, `AmbientLight`, `DirectionalLight`, `PointLight`, `SpotLight`, `RectLight`, `LocalShadowSettings`. `AddModel()`, `CreateObject()`, `SetParent()`, `SetTransform()`, `SetModel()`, `GetMaterial/SetMaterial/ResetMaterial`, `GetAnimation()`, `UpdateAnimations()`, `SceneAnimationEvent`, `PollAnimationEvents/DispatchAnimationEvents()` |
@@ -68,6 +68,7 @@ run.OnFrame = [](lv::Viewer& v, const lv::ViewerFrameInfo&) {
 | API / 타입 | 계약 |
 |---|---|
 | `Add / Set / Get / Elements / Remove / Clear` | 텍스트·버튼·패널 작성, 독립 복사본 조회. Set은 ID를 유지하고 전체 description을 교체함. Add는 입력의 ID를 무시함. 실패한 검증/로드는 기존 요소를 유지함 |
+| `SetRuntimeText(id, text)` | `Text`/`Button`의 표시 문자열과 `Hug` 측정을 plain text로 덮어씀. 문자열은 복사되며 최대 16,384바이트의 NUL 없는 UTF-8을 허용함. 빈 문자열은 문구를 숨기고 `std::nullopt`는 authored `Text`/`Runs`를 복원함 |
 | `UiLayout` | 좌상단 원점 logical pixel. 절대 배치에서 pivot 위치 = 부모 content 크기 × anchor + X/Y. 루트의 부모 영역은 viewport임. Width/Height·Fixed/Fill/Hug·Min/Max·Flex, pivot·회전 radians·ScaleX/Y·형제 Z 지원. 부모의 affine transform을 상속함 |
 | `Parent / UiContainer` | 부모 Panel의 Row·Column·균등 Grid·Absolute, L/T/R/B padding, gap, justify·cross align, Visible/Clip/Scroll overflow. 부모 삭제는 subtree 삭제임. cycle·없는/비 Panel 부모·깊이 초과를 거부함 |
 | `ResolveLayout / SetScroll` | authored 값을 바꾸지 않는 paint 순서의 `UiLayoutBox` 복사본. 최종 크기·local→viewport 2D affine matrix·content extent·실제 scroll·상속된 Visible/Enabled를 제공함. 스크롤은 런타임 상태이며 저장/Undo 대상이 아님 |
@@ -83,6 +84,8 @@ run.OnFrame = [](lv::Viewer& v, const lv::ViewerFrameInfo&) {
 | `Rasterize` | native shaping, top-left origin의 premultiplied sRGB RGBA8 복사본. UI 변경·DPI·resize 때만 viewer bitmap을 갱신하고 Scene 품질 축소 뒤의 full-resolution pass에서 합성함. UI 합성 자원은 telemetry와 render debugger에 포함함 |
 
 모든 canvas 수정·조회·저장·로드·입력·raster는 생성 스레드에서 호출함. `Revision / Focused / Empty`는 owner thread 전용의 unchecked query임. GetUi는 소유자의 수명 동안만 유효한 참조이며 Viewer/Embedded의 thread-safe 예외에 포함하지 않음. 독립 `UiCanvas`는 GPU 없이 Windows/macOS native text를 생성할 수 있음. 다른 플랫폼의 native font/text는 `UnsupportedFeature`임.
+
+`SetRuntimeText`는 편집 트랜잭션 중에도 호출할 수 있습니다. 런타임 문자열은 `Get`/`Elements`, 저장 파일, Undo/Redo 및 dirty 상태에서 제외됩니다. 편집 이력의 이동 후에도 동일한 텍스트/버튼 ID가 남아 있으면 표시값이 유지됩니다. 요소가 삭제되거나 패널로 바뀌면 덮어쓰기가 해제됩니다. 같은 값을 다시 전달하면 `Revision`을 유지합니다. 없는 ID는 `InvalidHandle`, 패널이나 잘못된 문자열은 `InvalidArgument`, 다른 스레드의 호출은 `WrongThread`를 반환합니다.
 
 UI는 이전 CPU bitmap을 보관하고 요소·상태·변환·상위 clip의 변경 영역을 갱신함. 이동·삭제 전의 영역도 지운 뒤 겹치는 요소를 paint 순서대로 다시 그리며, 정적 UI는 bitmap을 재사용함. 첫 raster·DPI/viewport 변경·Font 폴더 변경·`RefreshFonts()`는 전체를 다시 그림. 실패한 raster는 보관된 이미지를 부분 갱신하지 않으며 반환한 pixel 배열은 독립 복사본임.
 
@@ -596,20 +599,41 @@ viewer.dispose();
 
 | 대상 | 주요 API |
 |---|---|
-| Viewer | `createViewer({canvas, quality, autoStart, onEvent, onError})`, `start/stop/render`, `setCamera/frameScene`, `setQuality/quality`, `pollAnimationEvents`, `dispose` |
+| Viewer | `createViewer({canvas, quality, autoStart, onEvent, onError})`, `start/stop/render`, `setCamera/frameScene`, `setQuality/quality`, `sceneCommand`, `pollAnimationEvents`, `dispose` |
 | Asset | 비동기 `loadModel(url, options)`, `loadBuffer(bytes, {name, files, resolve})`, `loadFiles(FileList, {entry})`임. GLB·외부 glTF의 buffers/images·base64 URI를 지원함 |
 | Object | `info`, `clone/remove`, `setTransform({position, rotation, scale})`, `setMaterial({baseColor, metallic, roughness, unlit}, index)`임. 배열은 Vec3·Quaternion·RGBA 순서임 |
 | Animation | `play/pause/stop/seekAnimation`, `setAnimationSpeed`, `setMorphWeights/clearMorphWeights`, `playBlendTree`, `setBlendParameter/seekBlendTree`, `setAdditiveAnimation/setAdditiveWeight/seekAdditive/clearAdditiveAnimation`, `setAnimationEvents`임 |
 
 `info`는 Transform·Clip·Node별 Morph weight·시간·Blend weight의 복사본임. Blend Tree description은 `kind: '1d'/'2d'`, `parameterX/parameterY`, `samples: [{clip, x, y}]`임. Additive의 `clip, weight=1, mask=[]`는 Skeleton reference를 기준으로 함. `seekAnimation(time, collect=false)`는 기본 무발생이며 이벤트는 `onEvent` 또는 polling으로 배출함. Clip·Node·Material index와 정수 품질 설정은 소수점·범위 초과 값을 `InvalidArgument`로 거부하며 다른 대상이나 적용 상태를 수정하지 않음.
 
-메모리 입력은 임시 MEMFS에 복사한 뒤 기존 Importer를 호출하고 파일을 제거함. `files`는 URI→typed array의 Object/Map이며 `resolve(uri, absoluteURL, signal)`로 의존성을 제공할 수 있음. URL 로딩은 상대 URI를 원래 URL 기준으로 Fetch하고, File Input은 선택한 파일·상대 경로·유일한 basename으로 해석함. 네트워크/file URI를 C++ 파일 경로로 전달하지 않음. ArrayBuffer/typed array의 추가 소유 복사 전에 파일당 64 MiB·의존성 합계 128 MiB를 검사하며 초과는 `InsufficientResource`임. 이미지 최대 4096·정점 50만·Scene 객체 256개가 한도임. dispose 후 resolver가 완료되어도 다음 의존성 요청이나 데이터 복사·Import를 진행하지 않음.
+메모리 입력은 임시 MEMFS에 복사한 뒤 기존 Importer를 호출하고 파일을 제거함. `files`는 URI→typed array의 Object/Map이며 `resolve(uri, absoluteURL, signal)`로 의존성을 제공할 수 있음. URL 로딩은 상대 URI를 원래 URL 기준으로 Fetch하고, File Input은 선택한 파일·상대 경로·유일한 basename으로 해석함. 네트워크/file URI를 C++ 파일 경로로 전달하지 않음. ArrayBuffer/typed array의 추가 소유 복사 전에 파일당 64 MiB·의존성 합계 128 MiB를 검사하며 초과는 `InsufficientResource`임. Import는 이미지 최대 4096·정점 50만을 허용함. JavaScript `load`/`clone`은 C++에서 만든 객체를 포함해 Scene에 객체가 256개 있으면 추가 생성을 거부함. dispose 후 resolver가 완료되어도 다음 의존성 요청이나 데이터 복사·Import를 진행하지 않음.
 
 WebGL2 Skinning은 최소 uniform 사양에 맞춰 Skin당 48 Joint이며 초과는 `UnsupportedFeature`임. Morph는 C++ 평가→객체·Node별 정점 stream→GPU Skinning 순서로 적용하며 공유 Asset의 weight를 바꾸지 않음. 직접광 PBR·Normal Map·Static Instancing·Frustum Culling을 재사용함. Canvas는 CSS pixel 기준임. `setCamera`는 position/target/up·projection·orthographicHeight·fovRadians·nearPlane/farPlane을 지원하고 입력은 드래그 Orbit·우클릭 Pan·휠 Zoom임.
 
 품질은 preset 문자열 또는 `{preset, allowFallback, pbr, targetFps, resolutionScale, shadow, postProcessing, msaaSamples, onDemand}`임. Web 경로는 Shadow/PCSS·HDR·BC3 OFF, MSAA·anisotropy 1임. `allowFallback` 기본 true이며 High의 미지원 값은 조정 내역으로 반환함. false이면 거부하고 이전 설정을 유지함. 웹 PCSS는 지원 기능으로 포함하지 않음.
 
 Viewer마다 독립 Wasm module·Canvas를 사용하며 같은 Canvas의 중복 소유는 거부함. 브라우저 GC에 GPU 해제를 맡기지 않고 `dispose()`를 호출함. Object는 약한 Viewer 참조이며 삭제 후 `InvalidHandle`, dispose 후 `InvalidState`임. 미완료 Fetch는 취소하며 File 읽기 중 dispose도 완료 후 `InvalidState`임. File 읽기 실패는 `AssetLoad`이며 cause를 보존함. context loss에서는 프레임을 멈추고 CPU Scene을 유지하며 복구 시 extension·GPU 자원을 재생성함. `MinvexError`의 `code/message/hint/sourcePath/cause`를 제공함. rAF 오류는 `onError` 또는 Canvas의 `minvexerror` 이벤트로 전달함. callback 실패는 `CallbackFailure`이며 이벤트 큐는 최대 1024개임. 초과 프레임은 오류로 중단하고 새 전달분은 저장하지 않으며 시간은 이미 진행된 상태임.
+
+### C++ 장면 연결
+
+`<minvex/WebScene.h>`를 포함하고 `lv::CreateWebSceneCallbacks()`를 한 번 정의합니다. 소스 파일을 `MINVEX_WEB_SCENE_SOURCES`에 전달하면 `minvex_web`과 함께 컴파일됩니다. 여러 소스는 세미콜론으로 구분하고, 상대 경로는 Minvex 소스 루트를 기준으로 합니다. 기본 Web 모듈은 이 설정을 비워 둡니다.
+
+| 콜백 | 실행 시점 |
+|---|---|
+| `OnInitialize(Scene&)` | Viewer를 초기화할 때 한 번 실행합니다. 이때 절차 메시, 객체 계층, 카메라를 구성할 수 있습니다. |
+| `OnFrame(Scene&, const ViewerFrameInfo&)` | 각 브라우저 틱이나 직접 `render()` 호출에서 애니메이션 진행 후, 그리기 전에 실행합니다. `FrameNumber`는 0부터 시작하고, 크기는 품질 축소 전 Canvas 픽셀입니다. 첫 렌더와 크기 변경에 따른 렌더는 `DeltaTimeSeconds`가 0일 수 있습니다. |
+| `OnCommand(Scene&, name, payload)` | JavaScript의 `viewer.sceneCommand(name, payload = '')` 호출을 동기적으로 처리하는 `Result<void>` 콜백입니다. 이름은 UTF-8 1~128바이트, payload는 UTF-8 최대 16,384바이트 문자열입니다. 명령 자체는 렌더를 예약하지 않으므로 정지 상태에서는 `render()`로 반영합니다. |
+
+콜백은 모두 선택 사항이며 Viewer마다 팩터리를 호출합니다. 상태는 콜백이 소유하고 Scene과 문자열 참조는 콜백 호출 중 사용합니다. 콜백은 브라우저 메인 스레드에서 실행되므로 같은 Viewer로 재진입하거나 렌더러를 직접 제어하지 않습니다. WebGL context 복구 시 Scene과 콜백 상태를 유지합니다. 명령 콜백이 없는 모듈의 `sceneCommand`는 `UnsupportedFeature`를 반환합니다. 명령이 반환한 실패는 `MinvexError`로 전달되며, 콜백이 던진 예외는 `CallbackFailure`, 메모리 할당 실패는 `InsufficientResource`가 됩니다.
+
+아래 명령을 Minvex 소스 루트에서 실행하면 네이티브 Quick Start의 `ProceduralScene.h`를 브라우저에서 재사용합니다. `http://localhost:8000/procedural.html`에서 관절을 돌릴 수 있습니다. 배포하려면 Web 컴포넌트를 설치한 뒤 `Web.html`을 설치된 `web` 폴더에 `procedural.html`로 복사합니다.
+
+```sh
+emcmake cmake -S . -B out/build/web-scene -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DMINVEX_WEB_SCENE_SOURCES=examples/QuickStart/WebScene.cpp
+cmake --build out/build/web-scene --target minvex_web --parallel 4
+cmake -E copy examples/QuickStart/Web.html out/build/web-scene/web/procedural.html
+python -m http.server 8000 --directory out/build/web-scene/web
+```
 
 ### Embedded Runtime
 
@@ -663,7 +687,7 @@ Facade·IO는 Result를 사용하고, low-level Asset/Scene/Animation API는 `Im
 | **Scene** | writer v13 / reader v1~v13. 외부 모델 참조·계층·카메라·조명·Pose·Clip/Cross-fade·Blend Tree·Additive·Event overlay·재질/Morph override·Shared Skeleton·Leader Pose·Socket 저장. 로드 시 runtime ID 재매핑 |
 | **Pose / Quality / Import** | Pose v1, Quality writer v2 / reader v1~v2, ImportVersion 6. Pose는 skeleton signature 호환 필요 |
 | **Quality** | Low·Medium·High, Overrides가 있으면 Custom. 기본 `AllowFallback=false`; 미지원 설정 대체는 명시적으로 허용 |
-| **SDK** | 정적 라이브러리. 같은 architecture·compiler/toolset·configuration·C++ runtime으로 소비자 재빌드 필요. 바이너리 ABI 비고정 |
+| **SDK** | 정적 라이브러리. 소비자는 같은 architecture·compiler/toolset·configuration·C++ runtime을 사용함. MSVC로 빌드한 패키지는 ZIP 이름과 manifest의 `msvcToolset`에 컴파일러 `major.minor`를 표시하며 C++ 소비자의 컴파일러 ID와 `major.minor`를 `find_package`에서 검사함. 전체 컴파일러 버전은 `compiler`와 CMake의 `Minvex_COMPILER`에 기록함 |
 
 Scene v13는 v12 이하만 지원하는 이전 SDK reader로 읽을 수 없음. Scene/Pose/Quality 저장은 임시 파일 작성 후 교체하며 모델 파일 자체를 Scene에 내장하지 않음. Undo 이력·UI 상태·Telemetry는 Scene에 저장하지 않음.
 
