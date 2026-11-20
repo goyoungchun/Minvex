@@ -8,6 +8,39 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Save-KoreanCompilerMessages($CatalogPath, $Toolset, $Destination, $WorkDirectory) {
+    $catalog = Get-Content -LiteralPath $CatalogPath -Raw | ConvertFrom-Json -Depth 100
+    $family = [regex]::Escape(([version]$Toolset).ToString(2))
+    $resourceId = "^Microsoft\.VC\.$family(?:\.\d+\.\d+)?\.Tools\.HostX64\.TargetX64\.Res\.base$"
+    $payloads = @($catalog.packages | Where-Object {
+        $_.language -eq 'ko-KR' -and $_.id -match $resourceId
+    } | ForEach-Object payloads)
+    if ($payloads.Count -ne 1) { throw "Expected one Korean resource package for MSVC $Toolset." }
+    $payload = $payloads[0]
+    $uri = [uri]$payload.url
+    if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'download.visualstudio.microsoft.com') {
+        throw 'The Visual Studio catalog did not specify a Microsoft download URL.'
+    }
+
+    # Extract only the compiler's message DLL from the matching, checksum-verified VSIX.
+    # A full Visual Studio modify can fail or change the toolset used to build the SDK.
+    $package = Join-Path $WorkDirectory 'msvc-ko-KR.vsix'
+    Invoke-WebRequest -Uri $uri -OutFile $package -TimeoutSec 60
+    if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -ne $payload.sha256) {
+        throw 'The Korean Visual Studio resource package checksum did not match its catalog.'
+    }
+    $zip = [IO.Compression.ZipFile]::OpenRead($package)
+    try {
+        $entry = $zip.GetEntry("Contents/VC/Tools/MSVC/$Toolset/bin/Hostx64/x64/1042/clui.dll")
+        if (!$entry) { throw "The Korean resource package does not match the installed MSVC $Toolset." }
+        New-Item -ItemType Directory -Force (Split-Path -Parent $Destination) | Out-Null
+        [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $Destination)
+    } finally {
+        $zip.Dispose()
+    }
+}
+
 $instanceEntry = Get-Content -LiteralPath (Join-Path $BuildDirectory 'CMakeCache.txt') |
     Where-Object { $_ -match '^CMAKE_GENERATOR_INSTANCE:[^=]+=' } |
     Select-Object -First 1
@@ -29,16 +62,19 @@ if ($instance) {
 
 $compiler = Get-Command cl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $koreanMessages = Join-Path (Split-Path -Parent $compiler.Source) '1042/clui.dll'
+$verificationRoot = Split-Path -Parent $SdkRoot
 if (!(Test-Path -LiteralPath $koreanMessages) -and $env:GITHUB_ACTIONS -eq 'true' -and $instance) {
-    $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/setup.exe'
-    $installerArgs = @('modify', '--installPath', ('"' + $instance + '"'), '--addProductLang', 'ko-KR', '--quiet', '--norestart')
-    $setup = Start-Process -FilePath $installer -ArgumentList $installerArgs -WindowStyle Hidden -Wait -PassThru
-    if ($setup.ExitCode -notin 0, 3010) { throw "Korean Visual Studio language pack installation failed ($($setup.ExitCode))." }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    $installed = & $vswhere -all -prerelease -products '*' -format json | ConvertFrom-Json |
+        Where-Object { $_.installationPath.Replace('\', '/') -eq $instance.Replace('\', '/') } |
+        Select-Object -First 1
+    if (!$installed) { throw 'Could not find the catalog for the SDK Visual Studio instance.' }
+    $catalog = Join-Path $env:ProgramData "Microsoft/VisualStudio/Packages/_Instances/$($installed.instanceId)/catalog.json"
+    Save-KoreanCompilerMessages $catalog $env:VCToolsVersion.Trim() $koreanMessages $verificationRoot
 }
 if (!(Test-Path -LiteralPath $koreanMessages)) { throw 'The active MSVC toolset requires Korean compiler resources (1042/clui.dll).' }
 $env:VSLANG = '1042'
 
-$verificationRoot = Split-Path -Parent $SdkRoot
 $localizedSdk = Join-Path $verificationRoot '설치 SDK'
 & $CMake -E copy_directory $SdkRoot $localizedSdk
 if ($LASTEXITCODE -ne 0) { throw 'Could not stage the SDK in a Korean path.' }
