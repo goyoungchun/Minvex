@@ -1,5 +1,6 @@
 #include "renderer/SceneRenderer.h"
 #include "optimization/IndexPacking.h"
+#include "platform/GpuResourceError.h"
 #include <cstring>
 
 #include "renderer/MeshRenderer.h"
@@ -66,10 +67,16 @@ struct SceneRenderer::GpuModel {
         Images.resize(Asset->Images.size()*2);Samplers.resize(Asset->Textures.size());
         for (const auto& part:Asset->Parts) {
             auto& primitives=Meshes.at(part.MeshIndex);if (!primitives.empty()) {continue;}bool first=true;
-            for (const auto& primitive:Asset->Meshes.at(part.MeshIndex).Primitives) {
+            const auto& mesh = Asset->Meshes.at(part.MeshIndex);
+            for (const auto& primitive : mesh.Primitives) {
                 for (const auto& v:primitive.Geometry.Vertices) {const Vec3 p{v.Position[0],v.Position[1],v.Position[2]};auto& b=MeshBounds[part.MeshIndex];if (first) {b={p,p};first=false;}b.Min={std::min(b.Min.X,p.X),std::min(b.Min.Y,p.Y),std::min(b.Min.Z,p.Z)};b.Max={std::max(b.Max.X,p.X),std::max(b.Max.Y,p.Y),std::max(b.Max.Z,p.Z)};}
                 const auto& material=Asset->Materials.at(primitive.MaterialIndex);auto renderer=std::make_unique<MeshRenderer>();
-                renderer->Initialize(primitive.Geometry,material.DoubleSided,primitive.HasSkinning,settings.MsaaSamples,settings.PostProcessing ? SG_PIXELFORMAT_RGBA16F:SG_PIXELFORMAT_NONE,settings.Shadow!=ShadowMode::Off,settings.Lod ? std::span<const MeshLod>(primitive.Lods):std::span<const MeshLod>{},primitive.MorphTargets,&primitive,extendedLighting);
+                try {
+                    renderer->Initialize(primitive.Geometry,material.DoubleSided,primitive.HasSkinning,settings.MsaaSamples,settings.PostProcessing ? SG_PIXELFORMAT_RGBA16F:SG_PIXELFORMAT_NONE,settings.Shadow!=ShadowMode::Off,settings.Lod ? std::span<const MeshLod>(primitive.Lods):std::span<const MeshLod>{},primitive.MorphTargets,&primitive,extendedLighting);
+                } catch (const GpuPoolExhausted& e) {
+                    const auto name = mesh.Name.empty() ? std::to_string(part.MeshIndex) : "'" + mesh.Name + "'";
+                    throw GpuPoolExhausted("Mesh " + name + " primitive " + std::to_string(primitives.size()) + ": " + e.what());
+                }
                 BufferBytes+=primitive.Geometry.Vertices.size()*sizeof(Vertex)+primitive.Geometry.Indices.size()*IndexElementBytes(primitive.Geometry.Vertices.size());
                 if (settings.Lod) {for (const auto& level:primitive.Lods) {BufferBytes+=level.Indices.size()*IndexElementBytes(primitive.Geometry.Vertices.size());}}
                 if (!primitive.MorphTargets.empty()) {
@@ -166,13 +173,16 @@ void SceneRenderer::Prepare(const Scene& scene) {
     std::uint64_t signature=14695981039346656037ull;
     for (const auto& item : items_) {
         if (needed.insert(item.Model.get()).second) {HashResourceIdentity(signature,item.Model.get());}
+    }
+    // Retire assets removed from the Scene before allocating their replacements.
+    std::erase_if(models_, [&needed](const auto& entry) { return !needed.contains(entry.first); });
+    for (const auto& item : items_) {
         if (!models_.contains(item.Model.get())) {
             auto model = std::make_unique<GpuModel>();
             model->Upload(item.Model,settings_,extendedLighting_);
             models_.emplace(item.Model.get(), std::move(model));
         }
     }
-    std::erase_if(models_, [&needed](const auto& entry) { return !needed.contains(entry.first); });
     for (auto& [key,model]:models_) {(void)key;model->BeginMaterials();}
     for (const auto& item:items_) {auto& gpu=*models_.at(item.Model.get());for (const auto& part:item.Model->Parts) {for (std::size_t i=0;i<item.Model->Meshes[part.MeshIndex].Primitives.size();++i) {const auto& primitive=item.Model->Meshes[part.MeshIndex].Primitives[i];const auto& material=scene.GetMaterial(item.Object,primitive.MaterialIndex);gpu.UseMaterial(material,settings_);if (material.DoubleSided) {gpu.Meshes[part.MeshIndex][i]->PrepareDoubleSided();}}}}
     for (auto& [key,model]:models_) {(void)key;model->EndMaterials();}

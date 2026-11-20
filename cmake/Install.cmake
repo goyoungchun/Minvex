@@ -43,6 +43,7 @@ write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/MinvexConfigVersio
 install(EXPORT MinvexTargets NAMESPACE minvex:: DESTINATION "${_sdk_config_dir}")
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/MinvexConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/MinvexConfigVersion.cmake" DESTINATION "${_sdk_config_dir}")
+install(FILES cmake/MSVCDependencies.cmake DESTINATION "${_sdk_config_dir}" RENAME MinvexMSVCDependencies.cmake)
 
 set(_sdk_share "${CMAKE_INSTALL_DATADIR}/minvex")
 install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" "${PROJECT_SOURCE_DIR}/NOTICE" DESTINATION .)

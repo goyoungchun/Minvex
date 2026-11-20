@@ -5,6 +5,7 @@
 #if MINVEX_EMBEDDED_GRAPHICS
 #include "HostBridge.h"
 #include "platform/GraphicsSession.h"
+#include "platform/GpuResourceError.h"
 #include "renderer/RenderSurface.h"
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +15,11 @@ namespace lv {
 namespace {
 template<class T=void> Result<T> Failure(ErrorCode code,const char* text,const char* hint="Use the owner render thread and valid Host resources.") {return Result<T>::Failure({code,text,hint,{}});}
 Error Exception(ErrorCode fallback) {
-    try {throw;}catch (const std::bad_alloc& e) {return {ErrorCode::InsufficientResource,e.what(),"Reduce the Scene or render target size.",{}};}
+    try {throw;}
+#if MINVEX_EMBEDDED_GRAPHICS
+    catch (const detail::GpuPoolExhausted& e) {return {ErrorCode::InsufficientResource,e.what(),detail::GpuPoolHint,{}};}
+#endif
+    catch (const std::bad_alloc& e) {return {ErrorCode::InsufficientResource,e.what(),"Reduce the Scene or render target size.",{}};}
     catch (const std::invalid_argument& e) {return {ErrorCode::InvalidArgument,e.what(),"Check the Host contract and Scene parameters.",{}};}
     catch (const std::exception& e) {return {fallback,e.what(),"Check Host compatibility, resource limits and device status.",{}};}
 }
@@ -69,10 +74,25 @@ struct EmbeddedRenderer::Impl {
     int ViewWidth=0,ViewHeight=0;
     std::optional<TelemetrySnapshot> LastTelemetry;
     char Diagnostics[1024]{};
+    bool FullPool = false;
+    void ResetDiagnostics() noexcept { Diagnostics[0] = 0; FullPool = false; }
+    Error WithDiagnostics(Error error) const {
+        if (!Diagnostics[0] || error.Code == ErrorCode::InsufficientResource) { return error; }
+        error.Message += " ";
+        error.Message += Diagnostics;
+        if (FullPool) {
+            error.Code = ErrorCode::InsufficientResource;
+            error.Hint = detail::GpuPoolHint;
+        }
+        return error;
+    }
     static void Log(const char* tag,std::uint32_t level,std::uint32_t item,const char* text,std::uint32_t,const char*,void* user) noexcept {
         auto& p=*static_cast<Impl*>(user);
         if (level == 0) {std::fprintf(stderr,"%s\n%s %u: %s\n",p.Diagnostics,tag,item,text ? text:"Graphics panic");std::abort();} // Preserve the preceding validation error; native PANIC cannot be recovered.
-        if (level == 1) {std::snprintf(p.Diagnostics,sizeof(p.Diagnostics),"%s %u: %s",tag,item,text ? text:"Graphics resource failure");}
+        if (level == 1 && !p.FullPool) {
+            p.FullPool = detail::DescribeFullPool(p.Diagnostics, sizeof(p.Diagnostics), item);
+            if (!p.FullPool) {std::snprintf(p.Diagnostics,sizeof(p.Diagnostics),"%s %u: %s",tag,item,text ? text:"Graphics resource failure");}
+        }
     }
 #endif
     Result<void> Ready(bool initialized=true) const {
@@ -95,6 +115,7 @@ Result<void> EmbeddedRenderer::Initialize(const HostGraphicsContext& context,con
 #if MINVEX_EMBEDDED_GRAPHICS
     if (!p.Lease.Acquire()) {return Failure(ErrorCode::InvalidState,"Another Minvex graphics session owns this process.");}
     if (sg_isvalid()) {p.Lease.Release();return Failure(ErrorCode::InvalidState,"An external Sokol GFX context is already active.","Use a native Host device without a separate Sokol implementation/session.");}
+    p.ResetDiagnostics();
     try {
         p.Bridge=std::make_unique<detail::HostBridge>(context);auto hostState=p.Bridge->Enter();
         sg_desc d{};d.environment=p.Bridge->Environment();d.logger.func=Impl::Log;d.logger.user_data=&p;
@@ -102,10 +123,10 @@ Result<void> EmbeddedRenderer::Initialize(const HostGraphicsContext& context,con
         if (!sg_isvalid()) {throw std::runtime_error("Cannot initialize Embedded graphics on the Host device.");}
         p.Surface=std::make_unique<detail::RenderSurface>();Scene empty;
         auto applied=p.Surface->ApplyQuality(options.Quality,empty,0,0);
-        if (!applied) {const auto error=applied.Error();p.Surface.reset();sg_shutdown();hostState.reset();p.Bridge.reset();p.Lease.Release();return Result<void>::Failure(error);}
+        if (!applied) {const auto error=p.WithDiagnostics(applied.Error());p.Surface.reset();sg_shutdown();hostState.reset();p.Bridge.reset();p.Lease.Release();return Result<void>::Failure(error);}
         sg_commit();p.LastTelemetry.reset();p.Initialized=true;return Result<void>::Success();
     } catch (...) {
-        const auto error=Exception(ErrorCode::GraphicsInitialization);
+        const auto error=p.WithDiagnostics(Exception(ErrorCode::GraphicsInitialization));
         // Scope restoration already ran on exception. Shutdown inside isolation as well.
         if (p.Bridge) {auto scope=p.Bridge->Enter();p.Target.reset();p.Surface.reset();if (sg_isvalid()) {sg_shutdown();}}
         p.Bridge.reset();p.Lease.Release();return Result<void>::Failure(error);
@@ -129,13 +150,14 @@ Result<EmbeddedFrameResult> EmbeddedRenderer::Render(const Scene& scene,const Ho
     if (full) {viewport.Width=target.Width;viewport.Height=target.Height;}
     if (target.Width && (viewport.X > target.Width || viewport.Y > target.Height || viewport.Width > target.Width-viewport.X || viewport.Height > target.Height-viewport.Y)) {return Failure<EmbeddedFrameResult>(ErrorCode::InvalidArgument,"Viewport must fit inside the Host target in framebuffer pixels.");}
 #if MINVEX_EMBEDDED_GRAPHICS
+    p.ResetDiagnostics();
     try {
-        auto hostState=p.Bridge->Enter();FrameCommit frame;sg_reset_state_cache();p.Diagnostics[0]=0;
+        auto hostState=p.Bridge->Enter();FrameCommit frame;sg_reset_state_cache();
         if (!target.Width) {p.Target.reset();p.ViewWidth=p.ViewHeight=0;(void)p.Surface->Resize(scene,0,0);frame.Finish();return Result<EmbeddedFrameResult>::Success({});}
         const auto valid=p.Bridge->ValidateTarget(target);if (!valid) {return Result<EmbeddedFrameResult>::Failure(valid.Error());}
         std::unique_ptr<TargetBinding> candidate;
         if (!p.Target || !p.Target->Matches(target)) {candidate=std::make_unique<TargetBinding>(target,p.Bridge->Environment());}
-        const auto resized=p.Surface->Resize(scene,viewport.Width,viewport.Height);if (!resized) {return Result<EmbeddedFrameResult>::Failure(resized.Error());}
+        const auto resized=p.Surface->Resize(scene,viewport.Width,viewport.Height);if (!resized) {return Result<EmbeddedFrameResult>::Failure(p.WithDiagnostics(resized.Error()));}
         if (candidate) {p.Target.swap(candidate);candidate.reset();}
         p.ViewWidth=viewport.Width;p.ViewHeight=viewport.Height;
         if (options.ForceRedraw) {p.Surface->Invalidate();}
@@ -149,9 +171,10 @@ Result<EmbeddedFrameResult> EmbeddedRenderer::Render(const Scene& scene,const Ho
         pass.action.depth.store_action=SG_STOREACTION_STORE;pass.action.stencil.store_action=SG_STOREACTION_STORE;
         sg_begin_pass(pass);sg_apply_viewport(viewport.X,viewport.Y,viewport.Width,viewport.Height,true);sg_apply_scissor_rect(viewport.X,viewport.Y,viewport.Width,viewport.Height,true);
         p.Surface->Present(target.DepthTexture != nullptr);sg_end_pass();frame.Finish();
+        if (p.FullPool) {return Failure<EmbeddedFrameResult>(ErrorCode::InsufficientResource,p.Diagnostics,detail::GpuPoolHint);}
         if (p.Diagnostics[0]) {return Failure<EmbeddedFrameResult>(ErrorCode::Rendering,p.Diagnostics);}
         return Result<EmbeddedFrameResult>::Success({rendered,true,p.Surface->Width(),p.Surface->Height()});
-    }catch (...) {auto error=Exception(ErrorCode::Rendering);if (p.Diagnostics[0]) {error.Message+=" ";error.Message+=p.Diagnostics;}return Result<EmbeddedFrameResult>::Failure(std::move(error));}
+    }catch (...) {return Result<EmbeddedFrameResult>::Failure(p.WithDiagnostics(Exception(ErrorCode::Rendering)));}
 #else
     (void)scene;return Failure<EmbeddedFrameResult>(ErrorCode::UnsupportedFeature,"Embedded graphics is unavailable.");
 #endif
@@ -159,8 +182,15 @@ Result<EmbeddedFrameResult> EmbeddedRenderer::Render(const Scene& scene,const Ho
 Result<void> EmbeddedRenderer::SetQuality(const QualityProfile& profile,const Scene& scene) {
     auto& p=*impl_;auto ready=p.Ready();if (!ready) {return ready;}
 #if MINVEX_EMBEDDED_GRAPHICS
-    try {auto scope=p.Bridge->Enter();FrameCommit frame;sg_reset_state_cache();auto result=p.Surface->ApplyQuality(profile,scene,p.ViewWidth,p.ViewHeight);frame.Finish();return result;}
-    catch (...) {return Result<void>::Failure(Exception(ErrorCode::Rendering));}
+    p.ResetDiagnostics();
+    try {
+        auto scope=p.Bridge->Enter();FrameCommit frame;sg_reset_state_cache();
+        auto result=p.Surface->ApplyQuality(profile,scene,p.ViewWidth,p.ViewHeight);
+        frame.Finish();
+        if (!result) {return Result<void>::Failure(p.WithDiagnostics(result.Error()));}
+        return result;
+    }
+    catch (...) {return Result<void>::Failure(p.WithDiagnostics(Exception(ErrorCode::Rendering)));}
 #else
     (void)profile;(void)scene;return Failure(ErrorCode::UnsupportedFeature,"Embedded graphics is unavailable.");
 #endif

@@ -6,6 +6,40 @@
 using namespace test;
 namespace {
 struct Options {unsigned Cycles=10,Seconds=0;std::filesystem::path Output;};
+
+void CheckResourcePoolRecovery(GraphicsTestTarget& target, const lv::ModelAsset& cube) {
+    lv::EmbeddedRenderer renderer;
+    lv::EmbeddedOptions options;
+    options.Quality = lv::MakeQualityProfile(lv::QualityPreset::Low);
+    renderer.Initialize(target.Context(), options).Value();
+    lv::Scene scene;
+    std::vector<lv::ObjectId> objects;
+    for (int i = 0; i < 96; ++i) {
+        objects.push_back(scene.AddModel(std::make_shared<lv::ModelAsset>(cube)));
+    }
+    const auto failed = renderer.Render(scene, target.Target());
+    Check(!failed, "distinct models exhaust a native graphics resource pool");
+    if (!failed) {
+        const auto& error = failed.Error();
+        Check(error.Code == lv::ErrorCode::InsufficientResource &&
+            error.Message.find("Lifecycle") != std::string::npos &&
+            error.Message.find("pool exhausted") != std::string::npos &&
+            error.Message.find("slots occupied") != std::string::npos,
+            "pool exhaustion reports its resource name and slots occupied for the failed mesh");
+    }
+    for (const auto id : objects) { scene.RemoveObject(id); }
+    const auto shared = std::make_shared<lv::ModelAsset>(cube);
+    for (std::size_t i = 0; i < objects.size(); ++i) {
+        const auto object = scene.AddModel(shared);
+        auto material = scene.GetMaterial(object, 0);
+        material.BaseColor = {.3f, .5f, .8f, 1};
+        scene.SetMaterial(object, 0, material);
+    }
+    const auto recovered = renderer.Render(scene, target.Target());
+    Check(recovered && recovered.Value().Presented, "reusing a single model and overriding materials restores rendering");
+    renderer.Shutdown().Value();
+}
+
 int Run(const Options& run) {
     try {
         const auto started=std::chrono::steady_clock::now();
@@ -69,6 +103,7 @@ int Run(const Options& run) {
             for(std::size_t i=0;i<samples.size();++i) {const auto& s=samples[i];if(i){out<<',';}out<<"{\"seconds\":"<<s.Seconds<<",\"phase\":\""<<s.Phase<<"\",\"logicalBytes\":"<<s.Logical<<",\"rssBytes\":";if(s.Rss){out<<*s.Rss;}else{out<<"null";}out<<'}';}
             out<<"]}\n";out.close();if(!out){throw std::runtime_error("Cannot save lifecycle report.");}
         }
+        CheckResourcePoolRecovery(target, *model);
     }catch(const std::exception& e){Check(false,e.what());}return Finish();
 }
 }

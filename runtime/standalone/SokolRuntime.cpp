@@ -3,6 +3,7 @@
 #include "renderer/RenderSurface.h"
 #include "platform/GraphicsSession.h"
 #include "platform/FrameProfiling.h"
+#include "platform/GpuResourceError.h"
 
 #include <sokol_gfx.h>
 #include <sokol_glue.h>
@@ -82,6 +83,13 @@ struct Runtime {
     }
     void Capture(ErrorCode code, const char* hint) noexcept {
         try { throw; }
+        catch (const GpuPoolExhausted& error) {
+            if (Failed && Code == ErrorCode::InsufficientResource) {
+                std::snprintf(Message, sizeof(Message), "%s", error.what());
+            } else {
+                Fail(ErrorCode::InsufficientResource, error.what(), GpuPoolHint);
+            }
+        }
         catch (const std::bad_alloc&) { Fail(ErrorCode::InsufficientResource,"Runtime allocation failed.","Reduce model/resource sizes and retry."); }
         catch (const std::exception& error) { Fail(code,error.what(),hint); }
         catch (...) { Fail(code,"Callback/runtime threw a non-standard exception.",hint); }
@@ -95,9 +103,13 @@ void Log(const char* tag, std::uint32_t level, std::uint32_t item, const char* m
     if (runtime.Surface.Applying() && level <= 1) {slog_func(tag,level,item,message,line,file,nullptr);return;}
     if (level <= 1) {
         char description[2048];
-        std::snprintf(description,sizeof(description),"%s error %u: %s",tag,item,message ? message : "See the native graphics diagnostics.");
-        runtime.Fail(runtime.Initialized ? ErrorCode::Rendering : ErrorCode::GraphicsInitialization,
-            description,"Check graphics-driver/backend compatibility and GPU resource limits.");
+        if (std::strcmp(tag, "sg") == 0 && DescribeFullPool(description, sizeof(description), item)) {
+            runtime.Fail(ErrorCode::InsufficientResource, description, GpuPoolHint);
+        } else {
+            std::snprintf(description,sizeof(description),"%s error %u: %s",tag,item,message ? message : "See the native graphics diagnostics.");
+            runtime.Fail(runtime.Initialized ? ErrorCode::Rendering : ErrorCode::GraphicsInitialization,
+                description,"Check graphics-driver/backend compatibility and GPU resource limits.");
+        }
     }
     // Sokol PANIC is fatal by contract; never resume native initialization from
     // a state the backend declares unrecoverable. Ordinary errors return Result.

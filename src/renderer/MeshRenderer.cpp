@@ -3,6 +3,7 @@
 #include "mesh.glsl.h"
 #include "DebugResources.h"
 #include "optimization/IndexPacking.h"
+#include "platform/GpuResourceError.h"
 #include "LightMath.h"
 
 #include <cstddef>
@@ -29,6 +30,11 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
     if (!sg_isvalid()) {
         throw std::logic_error("Initialize Sokol GFX before creating the mesh renderer.");
     }
+    struct Rollback {
+        MeshRenderer& Renderer;
+        bool Committed = false;
+        ~Rollback() { if (!Committed) { Renderer.Shutdown(); } }
+    } rollback{*this};
     ValidateMesh(mesh);
     extendedLighting_=extendedLighting;
     const auto optimized=OptimizeMesh(mesh,lods);const auto& data=optimized.Geometry;
@@ -39,25 +45,38 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
     vertexDesc.data = {data.Vertices.data(), data.Vertices.size() * sizeof(Vertex)};
     vertexDesc.label = "minvex-mesh-vertices";
     vertices_ = sg_make_buffer(vertexDesc);
+    RequireGpuResource(sg_query_buffer_state(vertices_), vertices_.id, BufferPool, "mesh vertex buffer");
 
     sg_buffer_desc indexDesc{};
     indexDesc.usage.index_buffer = true;
     indexDesc.label = "minvex-mesh-indices";
     const auto uploadIndices=[&](std::span<const std::uint32_t> indices) {const auto packed=indexType==SG_INDEXTYPE_UINT16 ? PackIndices16(indices):std::vector<std::uint16_t>{};indexDesc.data=indexType==SG_INDEXTYPE_UINT16 ? sg_range{packed.data(),packed.size()*sizeof(std::uint16_t)}:sg_range{indices.data(),indices.size()*sizeof(std::uint32_t)};return sg_make_buffer(indexDesc);};
     indices_ = uploadIndices(data.Indices);
-    for (const auto& level:optimized.Lods) {indexDesc.label="mesh-lod-indices";const auto buffer=uploadIndices(level.Indices);lodBuffers_.push_back(buffer);lodCounts_.push_back(static_cast<int>(level.Indices.size()));if (sg_query_buffer_state(buffer) != SG_RESOURCESTATE_VALID) {Shutdown();throw std::runtime_error("Cannot create LOD index buffer.");}}
+    RequireGpuResource(sg_query_buffer_state(indices_), indices_.id, BufferPool, "mesh index buffer");
+    lodBuffers_.reserve(optimized.Lods.size());
+    for (const auto& level : optimized.Lods) {
+        indexDesc.label = "mesh-lod-indices";
+        const auto buffer = uploadIndices(level.Indices);
+        lodBuffers_.push_back(buffer);
+        RequireGpuResource(sg_query_buffer_state(buffer), buffer.id, BufferPool, "mesh LOD index buffer");
+        lodCounts_.push_back(static_cast<int>(level.Indices.size()));
+    }
     morphCount_=morphs.size();morphVertices_=mesh.Vertices.size();
-    if (morphCount_>MaxMorphTargets || (morphCount_ && (morphVertices_>16777216 || !lods.empty()))) {Shutdown();throw std::length_error("Morph GPU limit exceeded or incompatible reduced LOD.");}
+    if (morphCount_>MaxMorphTargets || (morphCount_ && (morphVertices_>16777216 || !lods.empty()))) {throw std::length_error("Morph GPU limit exceeded or incompatible reduced LOD.");}
 #if defined(__EMSCRIPTEN__)
     webSource_=source;webRemap_=optimized.VertexRemap;
-    if (morphCount_ && !source) {Shutdown();throw std::invalid_argument("CPU Morph requires its immutable source primitive.");}
+    if (morphCount_ && !source) {throw std::invalid_argument("CPU Morph requires its immutable source primitive.");}
 #else
     if (morphCount_) {
         static_assert(sizeof(morph_delta_t)==48);std::vector<morph_delta_t> deltas(morphCount_*morphVertices_);
         for (std::size_t t=0;t<morphCount_;++t) {const auto& target=morphs[t];for (const auto* channel:{&target.PositionDeltas,&target.NormalDeltas,&target.TangentDeltas}) {if (!channel->empty() && channel->size()!=morphVertices_) {throw std::invalid_argument("Morph GPU delta count mismatch.");}}
             for (std::size_t v=0;v<morphVertices_;++v) {auto& delta=deltas[t*morphVertices_+optimized.VertexRemap[v]];const auto value=[&](const auto& channel) {const auto xyz=channel.empty() ? Vec3{}:channel[v];return ShaderVec4{xyz.X,xyz.Y,xyz.Z,0};};delta.position=value(target.PositionDeltas);delta.normal=value(target.NormalDeltas);delta.tangent=value(target.TangentDeltas);}}
         sg_buffer_desc b{};b.usage.storage_buffer=true;b.data={deltas.data(),deltas.size()*sizeof(morph_delta_t)};b.label="morph-deltas";morphBuffer_=sg_make_buffer(b);
-        if (sg_query_buffer_state(morphBuffer_)!=SG_RESOURCESTATE_VALID) {Shutdown();throw std::runtime_error("Cannot create morph storage buffer.");}sg_view_desc view{};view.storage_buffer.buffer=morphBuffer_;morphView_=sg_make_view(view);if (sg_query_view_state(morphView_)!=SG_RESOURCESTATE_VALID) {Shutdown();throw std::runtime_error("Cannot create morph storage view.");}
+        RequireGpuResource(sg_query_buffer_state(morphBuffer_), morphBuffer_.id, BufferPool, "morph storage buffer");
+        sg_view_desc view{};
+        view.storage_buffer.buffer = morphBuffer_;
+        morphView_ = sg_make_view(view);
+        RequireGpuResource(sg_query_view_state(morphView_), morphView_.id, ViewPool, "morph storage view");
     }
 #endif
     skinned_ = skinned;
@@ -68,12 +87,7 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
     shader_ = sg_make_shader(extendedLighting_ ? (morphCount_ ? (skinned ? lit_morph_skin_shader_desc(sg_query_backend()):lit_morph_mesh_shader_desc(sg_query_backend())):(skinned ? lit_skin_shader_desc(sg_query_backend()):lit_mesh_shader_desc(sg_query_backend()))):(morphCount_ ? (skinned ? morph_skin_shader_desc(sg_query_backend()):morph_mesh_shader_desc(sg_query_backend())):(skinned ? skin_shader_desc(sg_query_backend()):mesh_shader_desc(sg_query_backend()))));
 #endif
 
-    if (sg_query_buffer_state(vertices_) != SG_RESOURCESTATE_VALID ||
-        sg_query_buffer_state(indices_) != SG_RESOURCESTATE_VALID ||
-        sg_query_shader_state(shader_) != SG_RESOURCESTATE_VALID) {
-        Shutdown();
-        throw std::runtime_error("Failed to create mesh buffers or shader. See Sokol diagnostics.");
-    }
+    RequireGpuResource(sg_query_shader_state(shader_), shader_.id, ShaderPool, "mesh shader");
 
     sg_pipeline_desc pipelineDesc{};
     pipelineDesc.shader = shader_;
@@ -104,10 +118,13 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
     for (int i = 0; i < 2; ++i) {
         pipelineDesc.face_winding = i == 0 ? SG_FACEWINDING_CCW : SG_FACEWINDING_CW;
         pipelines_[i] = sg_make_pipeline(pipelineDesc);
-        if (doubleSided) {auto twoSided=pipelineDesc;twoSided.cull_mode=SG_CULLMODE_NONE;doubleSidedPipelines_[i]=sg_make_pipeline(twoSided);}
-        if (sg_query_pipeline_state(pipelines_[i]) != SG_RESOURCESTATE_VALID || (doubleSided && sg_query_pipeline_state(doubleSidedPipelines_[i]) != SG_RESOURCESTATE_VALID)) {
-            Shutdown();
-            throw std::runtime_error("Failed to create the mesh pipeline. See Sokol diagnostics.");
+        RequireGpuResource(sg_query_pipeline_state(pipelines_[i]), pipelines_[i].id, PipelinePool, "mesh pipeline");
+        if (doubleSided) {
+            auto twoSided = pipelineDesc;
+            twoSided.cull_mode = SG_CULLMODE_NONE;
+            doubleSidedPipelines_[i] = sg_make_pipeline(twoSided);
+            RequireGpuResource(sg_query_pipeline_state(doubleSidedPipelines_[i]), doubleSidedPipelines_[i].id,
+                PipelinePool, "double-sided mesh pipeline");
         }
     }
     if (shadow) {
@@ -116,13 +133,25 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
 #else
         shadowShader_=sg_make_shader(morphCount_ ? (skinned ? morph_shadow_skin_shader_desc(sg_query_backend()):morph_shadow_mesh_shader_desc(sg_query_backend())):(skinned ? shadow_skin_shader_desc(sg_query_backend()):shadow_mesh_shader_desc(sg_query_backend())));
 #endif
+        RequireGpuResource(sg_query_shader_state(shadowShader_), shadowShader_.id, ShaderPool, "mesh shadow shader");
         sg_pipeline_desc d{};d.shader=shadowShader_;d.sample_count=1;d.colors[0].pixel_format=SG_PIXELFORMAT_R32F;d.depth.pixel_format=SG_PIXELFORMAT_DEPTH;d.depth.compare=SG_COMPAREFUNC_LESS_EQUAL;d.depth.write_enabled=true;d.index_type=indexType;d.cull_mode=doubleSided || skinned ? SG_CULLMODE_NONE:SG_CULLMODE_BACK;d.layout.buffers[0].stride=sizeof(Vertex);
         const auto attr=[&](int index,sg_vertex_format format,int offset) {d.layout.attrs[index].format=format;d.layout.attrs[index].offset=offset;};
         if (skinned) {attr(ATTR_shadow_skin_position,SG_VERTEXFORMAT_FLOAT3,offsetof(Vertex,Position));attr(ATTR_shadow_skin_color0,SG_VERTEXFORMAT_FLOAT4,offsetof(Vertex,Color));attr(ATTR_shadow_skin_texcoord0,SG_VERTEXFORMAT_FLOAT2,offsetof(Vertex,TexCoord));attr(ATTR_shadow_skin_joint_indices,SG_VERTEXFORMAT_USHORT4,offsetof(Vertex,Joints));attr(ATTR_shadow_skin_joint_weights,SG_VERTEXFORMAT_FLOAT4,offsetof(Vertex,Weights));}
         else {attr(ATTR_shadow_mesh_position,SG_VERTEXFORMAT_FLOAT3,offsetof(Vertex,Position));attr(ATTR_shadow_mesh_color0,SG_VERTEXFORMAT_FLOAT4,offsetof(Vertex,Color));attr(ATTR_shadow_mesh_texcoord0,SG_VERTEXFORMAT_FLOAT2,offsetof(Vertex,TexCoord));}
         d.cull_mode=skinned ? SG_CULLMODE_NONE:SG_CULLMODE_BACK;
-        for (int i=0;i<2;++i) {d.face_winding=i == 0 ? SG_FACEWINDING_CCW:SG_FACEWINDING_CW;shadowPipelines_[i]=sg_make_pipeline(d);if (doubleSided) {auto twoSided=d;twoSided.cull_mode=SG_CULLMODE_NONE;doubleSidedShadowPipelines_[i]=sg_make_pipeline(twoSided);if (sg_query_pipeline_state(doubleSidedShadowPipelines_[i]) != SG_RESOURCESTATE_VALID) {Shutdown();throw std::runtime_error("Cannot create double-sided shadow pipeline.");}}}
-        if (sg_query_shader_state(shadowShader_) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(shadowPipelines_[0]) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(shadowPipelines_[1]) != SG_RESOURCESTATE_VALID) {Shutdown();throw std::runtime_error("Cannot create shadow mesh pipelines.");}
+        for (int i = 0; i < 2; ++i) {
+            d.face_winding = i == 0 ? SG_FACEWINDING_CCW : SG_FACEWINDING_CW;
+            shadowPipelines_[i] = sg_make_pipeline(d);
+            RequireGpuResource(sg_query_pipeline_state(shadowPipelines_[i]), shadowPipelines_[i].id,
+                PipelinePool, "mesh shadow pipeline");
+            if (doubleSided) {
+                auto twoSided = d;
+                twoSided.cull_mode = SG_CULLMODE_NONE;
+                doubleSidedShadowPipelines_[i] = sg_make_pipeline(twoSided);
+                RequireGpuResource(sg_query_pipeline_state(doubleSidedShadowPipelines_[i]), doubleSidedShadowPipelines_[i].id,
+                    PipelinePool, "double-sided mesh shadow pipeline");
+            }
+        }
     }
     const std::uint32_t white = 0xFFFFFFFF;
     sg_image_desc imageDesc{};
@@ -130,23 +159,19 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
     imageDesc.pixel_format = SG_PIXELFORMAT_SRGB8A8;
     imageDesc.data = SG_RANGE(white);
     whiteImage_ = sg_make_image(imageDesc);
-    if (sg_query_image_state(whiteImage_) != SG_RESOURCESTATE_VALID) {
-        Shutdown();
-        throw std::runtime_error("Failed to create the fallback image.");
-    }
+    RequireGpuResource(sg_query_image_state(whiteImage_), whiteImage_.id, ImagePool, "fallback image");
     sg_view_desc viewDesc{};
     viewDesc.texture.image = whiteImage_;
     whiteView_ = sg_make_view(viewDesc);
+    RequireGpuResource(sg_query_view_state(whiteView_), whiteView_.id, ViewPool, "fallback image view");
     sg_sampler_desc samplerDesc{};
     samplerDesc.min_filter = samplerDesc.mag_filter = SG_FILTER_LINEAR;
     whiteSampler_ = sg_make_sampler(samplerDesc);
+    RequireGpuResource(sg_query_sampler_state(whiteSampler_), whiteSampler_.id, SamplerPool, "linear fallback sampler");
     samplerDesc.min_filter=samplerDesc.mag_filter=SG_FILTER_NEAREST;nearestSampler_=sg_make_sampler(samplerDesc);
-    if (sg_query_image_state(whiteImage_) != SG_RESOURCESTATE_VALID || sg_query_view_state(whiteView_) != SG_RESOURCESTATE_VALID ||
-        sg_query_sampler_state(whiteSampler_) != SG_RESOURCESTATE_VALID || sg_query_sampler_state(nearestSampler_) != SG_RESOURCESTATE_VALID) {
-        Shutdown();
-        throw std::runtime_error("Failed to create the fallback texture.");
-    }
+    RequireGpuResource(sg_query_sampler_state(nearestSampler_), nearestSampler_.id, SamplerPool, "nearest fallback sampler");
     indexCount_ = static_cast<int>(mesh.Indices.size());
+    rollback.Committed = true;
 }
 
 void MeshRenderer::Draw(const Mat4& model, const Mat4& viewProjection, const DirectionalLight& light,

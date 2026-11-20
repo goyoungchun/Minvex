@@ -8,7 +8,7 @@ on:
         description: Existing release tag to build and publish
         type: string
         required: true
-        default: v1.0.2
+        default: v1.0.3
 permissions:
   contents: read
 concurrency:
@@ -43,7 +43,7 @@ jobs:
       - name: Check CPU API contracts
         run: ctest --test-dir out/release -C Release --parallel 4 --no-tests=error --output-on-failure
       - name: Verify package checksum, relocation and independent consumers
-        run: cmake -DBUILD_DIR=out/release -DCONFIG=Release -DPACKAGE=ON -P cmake/VerifySdk.cmake
+        run: cmake -DBUILD_DIR=out/release -DCONFIG=Release -DPACKAGE=ON -DVERIFY_KOREAN_NINJA=${{ runner.os == 'Windows' }} -P cmake/VerifySdk.cmake
       - name: Retain SDK archives
         uses: actions/upload-artifact@v7
         with:
@@ -87,7 +87,14 @@ jobs:
 
           The Windows archive filename includes the required MSVC compiler major.minor (for example, MSVC-19.51). Check your compiler with cl /Bv. If the versions differ, select the matching MSVC toolset or build the SDK from this release tag with your compiler.
 
-          Start with share/minvex/examples/QuickStart to load a model or build and control a scene from generated meshes.
+          New in 1.0.3
+
+          - The procedural skinning Quick Start builds and animates a two-bone mesh from C++ without loading a model file.
+          - The frame capture Quick Start renders offscreen with EmbeddedRenderer and saves PPM images for pixel checks.
+          - The installed Quick Start configures Ninja to track SDK header dependencies with localized MSVC.
+          - Native mesh upload errors identify the full GPU resource pool and report its occupied slots and capacity.
+
+          The examples are in share/minvex/examples/QuickStart.
 
           UiCanvas::SetRuntimeText updates live labels without changing saved UI or edit history. The Web source build accepts C++ scene initialization, frame and command callbacks so a procedural scene can be shared with the native Viewer.
 

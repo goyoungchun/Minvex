@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(MinvexInstalledGraphicsChecks LANGUAGES CXX)
 find_package(Minvex 1.0 CONFIG REQUIRED COMPONENTS embedded graphics)
+include("${Minvex_DIR}/MinvexMSVCDependencies.cmake" OPTIONAL)
 get_filename_component(_repo "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 if(APPLE)
     enable_language(OBJCXX)

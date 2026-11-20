@@ -12,6 +12,7 @@ find_package(Minvex 1.0 CONFIG REQUIRED COMPONENTS core assets scene_io quality 
 if(MINVEX_SDK_BUILD_VIEWER OR MINVEX_SDK_BUILD_EMBEDDED_HOST)
     find_package(Minvex 1.0 CONFIG REQUIRED COMPONENTS graphics)
 endif()
+include("${Minvex_DIR}/MinvexMSVCDependencies.cmake" OPTIONAL)
 add_executable(minvex_sdk_cpu Cpu.cpp)
 add_executable(minvex_sdk_ui ../UiOverlay/Main.cpp)
 target_link_libraries(minvex_sdk_ui PRIVATE minvex::viewer)

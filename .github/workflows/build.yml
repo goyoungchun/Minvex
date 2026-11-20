@@ -122,7 +122,7 @@ jobs:
         run: cmake -DBUILD_DIR=out/ci -DCONFIG=${{ matrix.configuration }} -P cmake/VerifySdk.cmake
       - name: Package, checksum, extract and verify the actual SDK archive (Release)
         if: matrix.configuration == 'Release'
-        run: cmake -DBUILD_DIR=out/ci -DCONFIG=Release -DPACKAGE=ON -P cmake/VerifySdk.cmake
+        run: cmake -DBUILD_DIR=out/ci -DCONFIG=Release -DPACKAGE=ON -DVERIFY_KOREAN_NINJA=${{ runner.os == 'Windows' }} -P cmake/VerifySdk.cmake
       - name: Retain SDK archives and checksums (Release only)
         if: matrix.configuration == 'Release'
         uses: actions/upload-artifact@v4

@@ -57,6 +57,8 @@ add_executable(my_viewer main.cpp)
 target_link_libraries(my_viewer PRIVATE minvex::viewer)
 ```
 
+이 소스에서 설치한 SDK의 `MinvexMSVCDependencies.cmake`를 `find_package()` 뒤에 `include("${Minvex_DIR}/MinvexMSVCDependencies.cmake")`로 불러오면 MSVC와 Ninja의 `/showIncludes` 접두사를 맞출 수 있습니다. 구성과 빌드에는 같은 MSVC 언어 환경을 사용합니다. 아래 설치 SDK Quick Start에는 이 단계가 포함돼 있습니다.
+
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:/path/to/out/sdk-native"
 cmake --build build
@@ -64,17 +66,24 @@ cmake --build build
 
 ### 설치 SDK로 움직이는 장면 시작
 
-네이티브 SDK의 `share/minvex/examples/QuickStart`에서 두 C++20 예제를 빌드합니다. `minvex_quickstart_procedural`은 `MakeCube()`로 메시를 만들고 팔을 관절의 자식으로 배치합니다. **Space**와 **Shift+Space**로 관절을 돌리면 화면에 각도가 표시됩니다. `minvex_quickstart`는 GLB를 로드해 프레임 경과 시간에 따라 모델을 회전합니다.
+이 소스에서 설치한 네이티브 SDK의 `share/minvex/examples/QuickStart`에서 C++20 예제를 빌드합니다.
+
+- `minvex_quickstart_skinning`은 모델 파일 없이 두 본과 가중치로 팔꿈치를 굽힙니다. **Space**로 재생하고 **Shift+Space**로 정지하면 첫 자세로 돌아옵니다.
+- `minvex_quickstart_capture`는 같은 팔을 화면 밖에서 렌더링합니다. 현재 디렉터리에 `straight.ppm`과 `bent.ppm`을 저장하고 실루엣 변화와 정지 후 복원을 확인합니다.
+- `minvex_quickstart_procedural`은 `MakeCube()`로 만든 팔을 Scene 관절의 자식으로 배치합니다. **Space**와 **Shift+Space**로 관절을 돌립니다.
+- `minvex_quickstart`는 GLB를 로드해 프레임 경과 시간에 따라 모델을 회전합니다.
 
 ```powershell
 $sdk = "C:/path/to/extracted/Minvex-SDK"
 cmake -S "$sdk/share/minvex/examples/QuickStart" -B quickstart-build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$sdk"
 cmake --build quickstart-build
+./quickstart-build/minvex_quickstart_skinning.exe
+./quickstart-build/minvex_quickstart_capture.exe
 ./quickstart-build/minvex_quickstart_procedural.exe
 ./quickstart-build/minvex_quickstart.exe "$sdk/share/minvex/examples/assets/SharedBox.glb"
 ```
 
-macOS에서는 실행 파일 이름의 `.exe`를 뺍니다. 예제에 `--frames 3`을 전달하면 그래픽 초기화와 갱신을 확인한 뒤 자동 종료합니다.
+macOS에서는 실행 파일 이름의 `.exe`를 뺍니다. Viewer를 띄우는 예제에 `--frames 3`을 전달하면 세 프레임을 렌더링한 뒤 자동 종료합니다.
 
 같은 절차적 장면을 Emscripten으로 빌드해 브라우저에서 버튼으로 조작할 수 있습니다. [C++ 장면 연결](docs/API.md#c-장면-연결)
 
