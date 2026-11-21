@@ -240,12 +240,62 @@ void TestOrthographicControls() {
     camera=viewer.GetScene().MainCamera;camera.Projection=static_cast<lv::CameraProjection>(99);Check(!viewer.SetCamera(camera) && viewer.GetScene().MainCamera.Projection == lv::CameraProjection::Orthographic,"invalid projection preserves the active camera");
 }
 
+void TestPicking() {
+    lv::ViewerOptions options;
+    options.AutoFrame=false;
+    lv::Viewer viewer(options);
+    lv::Camera camera;
+    camera.Position={0,0,5};
+    viewer.SetCamera(camera).Value();
+    const auto back=viewer.AddModel(Fixture("SharedBox.glb")).Value();
+    lv::ModelOptions closer;
+    closer.Transform.Position.Z=1;
+    const auto front=viewer.AddModel(Fixture("SharedBox.glb"),closer).Value();
+    const auto tie=viewer.AddModel(Fixture("SharedBox.glb"),closer).Value();
+    Check(viewer.PickObject(640,360).Value()==front,"nearest overlapping bounds win; exact ties keep scene order");
+    Check(viewer.PickObject(0,0).Value()==lv::NoObject&&viewer.PickObject(1280,360).Value()==lv::NoObject,
+          "background and positions outside the viewport miss");
+    viewer.SetVisible(front,false).Value();
+    viewer.SetVisible(tie,false).Value();
+    Check(viewer.PickObject(640,360).Value()==back,"invisible objects are excluded from bounds picking");
+
+    camera.Projection=lv::CameraProjection::Orthographic;
+    camera.OrthographicHeight=4;
+    viewer.SetCamera(camera).Value();
+    const auto upper=viewer.AddModel(Fixture("SharedBox.glb"),{}).Value();
+    lv::Transform transform;
+    transform.Position={0,1,0};
+    viewer.SetTransform(upper,transform).Value();
+    lv::ViewerInputEvent resize;
+    resize.Type=lv::ViewerInputType::Resized;
+    resize.Width=800;
+    resize.Height=400;
+    viewer.ProcessInput(resize).Value();
+    Check(viewer.PickObject(400,100).Value()==upper&&viewer.PickObject(400,300).Value()==lv::NoObject,
+          "orthographic picking uses top-left logical coordinates after resize");
+    camera.FarPlane=2;
+    viewer.SetCamera(camera).Value();
+    Check(viewer.PickObject(400,200).Value()==lv::NoObject,"picking respects the camera clip planes");
+    resize.Width=resize.Height=0;
+    viewer.ProcessInput(resize).Value();
+    Check(viewer.PickObject(0,0).Value()==lv::NoObject,"zero-sized viewport misses");
+    ErrorIs(viewer.PickObject(std::numeric_limits<float>::infinity(),0),lv::ErrorCode::InvalidArgument,"non-finite pick rejected");
+    bool wrongThread=false;
+    std::thread worker([&] {
+        const auto result=viewer.PickObject(0,0);
+        wrongThread=!result&&result.Error().Code==lv::ErrorCode::WrongThread;
+    });
+    worker.join();
+    Check(wrongThread,"picking requires the Viewer owner thread");
+}
+
 int main() {
     try {
         TestFacade();TestFailures();TestInput();
         TestDebugContracts();
         TestOptimizationContracts();
         TestOrthographicControls();
+        TestPicking();
         lv::EmbeddedRenderer embedded;lv::Scene scene;
         Check(!embedded.IsInitialized() && embedded.Shutdown().HasValue(),"Embedded inactive shutdown is idempotent");
         ErrorIs(embedded.Render(scene,{}),lv::ErrorCode::InvalidState,"Embedded render requires initialization");

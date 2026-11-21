@@ -21,19 +21,33 @@ class LayoutEngine {
     const std::filesystem::path& directory_;
     const UiScrollMap& scroll_;
     const UiRuntimeTextMap& runtimeText_;
+    const UiRuntimeTextMap& numberText_;
     NativeTextContextSlot* context_;
     std::unordered_map<UiId,std::size_t> indices_;
     std::vector<std::vector<std::size_t>> children_;
     std::map<std::tuple<std::size_t,float,float>,std::array<float,2>> measurements_;
     std::vector<UiResolved> result_;
     void ApplyRuntimeText(UiElement& element) const {
+        if (element.Number) {
+            const auto& number=*element.Number;
+            const auto it=numberText_.find(element.Id);
+            const auto text=it!=numberText_.end() ? it->second :
+                number.InitialValue ? FormatUiNumber(*number.InitialValue) : std::string{};
+            if (!text.empty()) {element.Text=text;}
+            if (!number.Unit.empty()) {
+                if (!element.Text.empty()) {element.Text+=' ';}
+                element.Text+=number.Unit;
+            }
+            element.Typography.Wrap=false;
+            return;
+        }
         if (const auto it=runtimeText_.find(element.Id);it!=runtimeText_.end()) {
             element.Text=it->second;
             element.Runs.clear();
         }
     }
     std::array<float,2> MeasureText(const UiElement& element,float width,bool noWrap=false) const {
-        if (!noWrap && !runtimeText_.contains(element.Id)) {
+        if (!noWrap && !element.Number && !runtimeText_.contains(element.Id)) {
             return HasText(element) ? NativeMeasure(element,directory_,width,context_):std::array{1.f,1.f};
         }
         auto display=element;
@@ -59,7 +73,7 @@ class LayoutEngine {
                 naturalW=std::max(cw,absoluteW)+c.Padding[0]+c.Padding[2];naturalH=std::max(ch,absoluteH)+c.Padding[1]+c.Padding[3];
             }
             if (l.WidthSizing==UiSizing::Hug) {w=Limit(e,naturalW,true);}if (l.HeightSizing==UiSizing::Hug) {h=Limit(e,naturalH,false);}
-            if (l.HeightSizing==UiSizing::Hug&&e.Kind!=UiKind::Panel&&HasText(e)&&e.Typography.Wrap) {h=Limit(e,NativeMeasure(e,directory_,w,context_)[1],false);}
+            if (l.HeightSizing==UiSizing::Hug&&e.Kind!=UiKind::Panel&&!e.Number&&HasText(e)&&e.Typography.Wrap) {h=Limit(e,NativeMeasure(e,directory_,w,context_)[1],false);}
         }
         return measurements_.emplace(key,std::array{w,h}).first->second;
     }
@@ -95,7 +109,7 @@ class LayoutEngine {
         for (const auto& s:slots) {Place(s.Index,s.W,s.H,c.Padding[0]+s.X-r.Box.ScrollX,c.Padding[1]+s.Y-r.Box.ScrollY,r.Box.Transform,outIndex,r.Box.Visible,r.Box.Enabled,true);}
     }
 public:
-    LayoutEngine(const std::vector<UiElement>& items,const std::filesystem::path& directory,const UiScrollMap& scroll,const UiRuntimeTextMap& runtimeText,NativeTextContextSlot* context):items_(items),directory_(directory),scroll_(scroll),runtimeText_(runtimeText),context_(context),children_(items.size()) {for (std::size_t i=0;i<items.size();++i) {indices_[items[i].Id]=i;}for (std::size_t i=0;i<items.size();++i) {if (items[i].Parent) {children_[indices_.at(items[i].Parent)].push_back(i);}}for (auto& children:children_) {std::stable_sort(children.begin(),children.end(),[&](auto a,auto b){return items_[a].Layout.Order<items_[b].Layout.Order;});}}
+    LayoutEngine(const std::vector<UiElement>& items,const std::filesystem::path& directory,const UiScrollMap& scroll,const UiRuntimeTextMap& runtimeText,const UiRuntimeTextMap& numberText,NativeTextContextSlot* context):items_(items),directory_(directory),scroll_(scroll),runtimeText_(runtimeText),numberText_(numberText),context_(context),children_(items.size()) {for (std::size_t i=0;i<items.size();++i) {indices_[items[i].Id]=i;}for (std::size_t i=0;i<items.size();++i) {if (items[i].Parent) {children_[indices_.at(items[i].Parent)].push_back(i);}}for (auto& children:children_) {std::stable_sort(children.begin(),children.end(),[&](auto a,auto b){return items_[a].Layout.Order<items_[b].Layout.Order;});}}
     std::vector<UiResolved> Run(float width,float height) {std::vector<std::size_t> roots;for (std::size_t i=0;i<items_.size();++i) {if (!items_[i].Parent) {roots.push_back(i);}}std::stable_sort(roots.begin(),roots.end(),[&](auto a,auto b){return items_[a].Layout.Z<items_[b].Layout.Z;});for (auto i:roots) {const auto size=Measure(i,width,height);Place(i,size[0],size[1],items_[i].Layout.X+items_[i].Layout.AnchorX*width,items_[i].Layout.Y+items_[i].Layout.AnchorY*height,{1,0,0,1,0,0},-1,true,true,false);}return std::move(result_);}
 };
 }
@@ -105,7 +119,7 @@ void ValidateUiTree(const std::vector<UiElement>& items) {
         if (e.Parent) {const auto& p=*indices.at(e.Parent);if ((p.Layout.WidthSizing==UiSizing::Hug&&e.Layout.WidthSizing==UiSizing::Fill)||(p.Layout.HeightSizing==UiSizing::Hug&&e.Layout.HeightSizing==UiSizing::Fill)) {throw std::invalid_argument("Fill child cannot depend on a Hug parent on the same axis.");}if (p.Container.Flow==UiFlow::Absolute||e.Layout.Absolute) {if ((p.Layout.WidthSizing==UiSizing::Hug&&e.Layout.AnchorX!=0)||(p.Layout.HeightSizing==UiSizing::Hug&&e.Layout.AnchorY!=0)) {throw std::invalid_argument("Absolute child cannot anchor to a Hug parent on the same axis.");}}}
     }
 }
-std::vector<UiResolved> BuildUiLayout(const std::vector<UiElement>& items,const std::filesystem::path& directory,float width,float height,const UiScrollMap& scroll,const UiRuntimeTextMap& runtimeText,NativeTextContextSlot* context) {return LayoutEngine(items,directory,scroll,runtimeText,context).Run(width,height);}
+std::vector<UiResolved> BuildUiLayout(const std::vector<UiElement>& items,const std::filesystem::path& directory,float width,float height,const UiScrollMap& scroll,const UiRuntimeTextMap& runtimeText,const UiRuntimeTextMap& numberText,NativeTextContextSlot* context) {return LayoutEngine(items,directory,scroll,runtimeText,numberText,context).Run(width,height);}
 std::array<float,2> UiLocal(const UiLayoutBox& box,float x,float y) {const auto& m=box.Transform;x-=m[4];y-=m[5];const float d=m[0]*m[3]-m[1]*m[2];return {(m[3]*x-m[2]*y)/d,(-m[1]*x+m[0]*y)/d};}
 std::array<float,2> UiWorld(const UiLayoutBox& box,float x,float y) {const auto& m=box.Transform;return {m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]};}
 bool UiClipped(const std::vector<UiResolved>& resolved,std::size_t index,float x,float y) {

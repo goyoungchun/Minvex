@@ -3,16 +3,31 @@
 #include "UiLayout.h"
 #include "core/JsonFile.h"
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <limits>
 #include <thread>
 #include <cctype>
 #include <deque>
 #include <cstring>
+#if defined(__APPLE__)
+#include <cerrno>
+#include <xlocale.h>
+#endif
 
 namespace lv {
+namespace detail {
+std::string FormatUiNumber(double value) {
+    // A fixed decimal representation of any finite double fits in 384 bytes.
+    char buffer[384];
+    const auto [end,error]=std::to_chars(buffer,buffer+sizeof(buffer),value,std::chars_format::fixed);
+    if (error!=std::errc{}) {throw std::invalid_argument("Cannot format the UI number.");}
+    return std::string(buffer,end);
+}
+}
 namespace {
 constexpr std::size_t MaxElements=512,MaxText=16384,MaxQueue=1024;
+constexpr std::size_t MaxNumberText=384;
 struct UiBudgetExceeded : std::runtime_error {using std::runtime_error::runtime_error;};
 Error ErrorFromException(ErrorCode code=ErrorCode::InvalidArgument,const std::filesystem::path& path={}) {
     try {throw;}
@@ -23,6 +38,30 @@ Error ErrorFromException(ErrorCode code=ErrorCode::InvalidArgument,const std::fi
 }
 template<class T> Result<T> Fail(ErrorCode code,const char* message) {return Result<T>::Failure({code,message,"Use valid UI IDs and the canvas owner thread.",{}});}
 void Require(bool condition,const char* message) {if (!condition) {throw std::invalid_argument(message);}}
+bool NumberInRange(const UiNumberInput& field,double value) {
+    return std::isfinite(value)&&(!field.Minimum||value>=*field.Minimum)&&(!field.Maximum||value<=*field.Maximum);
+}
+std::optional<double> ParseNumber(const std::string& text) {
+    const auto* last=text.data()+text.size();
+#if defined(__APPLE__)
+    // The floating-point from_chars ABI is newer than the macOS 14 target.
+    struct NumericLocale {
+        locale_t Handle=newlocale(LC_NUMERIC_MASK,"C",nullptr);
+        ~NumericLocale() {if (Handle) {freelocale(Handle);}}
+    };
+    static const NumericLocale locale;
+    if (!locale.Handle) {throw std::runtime_error("Cannot initialize the C numeric locale.");}
+    char* end=nullptr;
+    errno=0;
+    const double value=strtod_l(text.c_str(),&end,locale.Handle);
+    if (end==text.c_str()||end!=last||(errno==ERANGE&&value==0)) {return std::nullopt;}
+#else
+    double value=0;
+    const auto [end,error]=std::from_chars(text.data(),last,value,std::chars_format::fixed);
+    if (error!=std::errc{}||end!=last) {return std::nullopt;}
+#endif
+    return value;
+}
 bool Utf8(std::string_view s) {
     for (std::size_t i=0;i<s.size();) {
         const auto c=static_cast<unsigned char>(s[i++]);if (c==0) {return false;}if (c<128) {continue;}
@@ -41,7 +80,16 @@ void ValidateStyle(const UiStyle& s) {
 void Validate(const UiElement& e) {
     Require(e.Name.size()<=256 && e.Text.size()<=MaxText && e.Typography.Family.size()<=256,"UI name/family/text is too long.");
     Require(Utf8(e.Name)&&Utf8(e.Text)&&Utf8(e.Typography.Family),"UI strings must be valid UTF-8 without NUL.");
-    Require(e.Kind>=UiKind::Text&&e.Kind<=UiKind::Panel,"Unknown UI kind.");
+    Require(e.Kind>=UiKind::Text&&e.Kind<=UiKind::NumberInput,"Unknown UI kind.");
+    Require(e.Number.has_value()==(e.Kind==UiKind::NumberInput),"Number input settings must accompany only a NumberInput element.");
+    if (e.Number) {
+        const auto& n=*e.Number;
+        Require(e.Runs.empty(),"Number inputs use plain placeholder text.");
+        Require(n.Unit.size()<=64&&Utf8(n.Unit),"Number input units must be at most 64 UTF-8 bytes without NUL.");
+        Require((!n.Minimum||std::isfinite(*n.Minimum))&&(!n.Maximum||std::isfinite(*n.Maximum))&&
+                (!n.Minimum||!n.Maximum||*n.Minimum<=*n.Maximum),"Invalid number input bounds.");
+        Require(!n.InitialValue||NumberInRange(n,*n.InitialValue),"Initial number is outside the supported range.");
+    }
     const auto& l=e.Layout;Range(l.X,-65536,65536);Range(l.Y,-65536,65536);Range(l.Width,1,2048);Range(l.Height,1,2048);
     Range(l.AnchorX,0,1);Range(l.AnchorY,0,1);Range(l.PivotX,0,1);Range(l.PivotY,0,1);Range(l.Rotation,-1000,1000);Range(l.ScaleX,.01f,16);Range(l.ScaleY,.01f,16);
     Require(l.Z>=-1000000&&l.Z<=1000000&&l.Order>=-1000000&&l.Order<=1000000,"UI Z/order is out of range.");
@@ -104,6 +152,7 @@ struct PaintItem {
 constexpr std::size_t RasterCacheBudget=32*1024*1024;
 std::size_t ElementBytes(const UiElement& e) {
     std::size_t bytes=sizeof(e)+e.Name.size()+e.Text.size()+e.Typography.Family.size()+e.Typography.FontFile.native().size()*sizeof(std::filesystem::path::value_type);
+    if (e.Number) {bytes+=e.Number->Unit.size();}
     for (const auto& r:e.Runs) {bytes+=sizeof(r)+r.Text.size()+(r.Family ? r.Family->size():0)+(r.FontFile ? r.FontFile->native().size()*sizeof(std::filesystem::path::value_type):0);}
     return bytes;
 }
@@ -163,6 +212,14 @@ Json ElementJson(const UiElement& e) {
     j["key"]=e.Id;j["parent"]=e.Parent;j["sizing"]={{"width",static_cast<int>(l.WidthSizing)},{"height",static_cast<int>(l.HeightSizing)},{"minWidth",l.MinWidth},{"minHeight",l.MinHeight},{"maxWidth",l.MaxWidth},{"maxHeight",l.MaxHeight},{"flex",l.Flex},{"absolute",l.Absolute},{"order",l.Order}};const auto& c=e.Container;
     j["container"]={{"flow",static_cast<int>(c.Flow)},{"padding",c.Padding},{"gapX",c.GapX},{"gapY",c.GapY},{"columns",c.Columns},{"justify",static_cast<int>(c.Justify)},{"align",static_cast<int>(c.Align)},{"overflow",static_cast<int>(c.Overflow)}};j["runs"]=Json::array();for (const auto& r:e.Runs) {j["runs"].push_back(RunJson(r));}
     if (e.Clip) {j["clip"]={e.Clip->X,e.Clip->Y,e.Clip->Width,e.Clip->Height};}
+    if (e.Number) {
+        const auto& n=*e.Number;
+        auto& number=j["number"];
+        number={{"unit",n.Unit}};
+        if (n.InitialValue) {number["initial"]=*n.InitialValue;}
+        if (n.Minimum) {number["minimum"]=*n.Minimum;}
+        if (n.Maximum) {number["maximum"]=*n.Maximum;}
+    }
     if (e.Hover) {j["hover"]=StyleJson(*e.Hover);}if (e.Pressed) {j["pressed"]=StyleJson(*e.Pressed);}if (e.Focused) {j["focused"]=StyleJson(*e.Focused);}if (e.Disabled) {j["disabled"]=StyleJson(*e.Disabled);}return j;
 }
 UiElement ReadElement(const Json& j) {
@@ -173,6 +230,14 @@ UiElement ReadElement(const Json& j) {
     if (j.contains("parent")) {e.Parent=Identifier(j.at("parent"));}if (j.contains("sizing")) {const auto& v=j.at("sizing");l.WidthSizing=static_cast<UiSizing>(Integer(v.at("width")));l.HeightSizing=static_cast<UiSizing>(Integer(v.at("height")));l.MinWidth=v.at("minWidth");l.MinHeight=v.at("minHeight");l.MaxWidth=v.at("maxWidth");l.MaxHeight=v.at("maxHeight");l.Flex=v.at("flex");l.Absolute=v.at("absolute");if (v.contains("order")) {l.Order=Integer(v.at("order"));}}
     if (j.contains("container")) {const auto& v=j.at("container");auto& c=e.Container;c.Flow=static_cast<UiFlow>(Integer(v.at("flow")));c.Padding=v.at("padding").get<std::array<float,4>>();c.GapX=v.at("gapX");c.GapY=v.at("gapY");c.Columns=Integer(v.at("columns"));c.Justify=static_cast<UiJustify>(Integer(v.at("justify")));c.Align=static_cast<UiCrossAlign>(Integer(v.at("align")));c.Overflow=static_cast<UiOverflow>(Integer(v.at("overflow")));}
     if (j.contains("runs")) {Require(j.at("runs").is_array()&&j.at("runs").size()<=128,"Invalid rich text run count.");for (const auto& r:j.at("runs")) {e.Runs.push_back(ReadRun(r));}}
+    if (j.contains("number")) {
+        const auto& number=j.at("number");
+        auto& n=e.Number.emplace();
+        n.Unit=number.at("unit").get<std::string>();
+        if (number.contains("initial")) {n.InitialValue=number.at("initial").get<double>();}
+        if (number.contains("minimum")) {n.Minimum=number.at("minimum").get<double>();}
+        if (number.contains("maximum")) {n.Maximum=number.at("maximum").get<double>();}
+    }
     if (j.contains("hover")) {e.Hover=ReadStyle(j.at("hover"));}if (j.contains("pressed")) {e.Pressed=ReadStyle(j.at("pressed"));}if (j.contains("focused")) {e.Focused=ReadStyle(j.at("focused"));}if (j.contains("disabled")) {e.Disabled=ReadStyle(j.at("disabled"));}Validate(e);return e;
 }
 }
@@ -181,6 +246,8 @@ struct UiCanvas::Impl {
     std::filesystem::path Directory="Font";UiId Next=1,Hover=0,Capture=0,Focus=0,KeyCapture=0;std::uint64_t Version=1;
     detail::UiScrollMap Scroll;
     detail::UiRuntimeTextMap RuntimeText;
+    detail::UiRuntimeTextMap NumberText;
+    bool NumberSelected=false;
     struct Snapshot {std::vector<UiElement> Items;std::filesystem::path Directory;std::uint64_t State;};
     std::deque<Snapshot> Past,Future;
     std::optional<Snapshot> Group;
@@ -193,18 +260,67 @@ struct UiCanvas::Impl {
     mutable detail::NativeTextContextSlot TextContext;
     auto Find(UiId id) {return std::find_if(Items.begin(),Items.end(),[=](const auto& e){return e.Id==id;});}
     auto Find(UiId id) const {return std::find_if(Items.begin(),Items.end(),[=](const auto& e){return e.Id==id;});}
-    const std::vector<detail::UiResolved>& Resolve(float width,float height) const {if (CachedEpoch!=LayoutEpoch||CachedWidth!=width||CachedHeight!=height) {auto candidate=detail::BuildUiLayout(Items,Directory,width,height,Scroll,RuntimeText,&TextContext);CachedLayout=std::move(candidate);CachedWidth=width;CachedHeight=height;CachedEpoch=LayoutEpoch;}return CachedLayout;}
+    const std::vector<detail::UiResolved>& Resolve(float width,float height) const {if (CachedEpoch!=LayoutEpoch||CachedWidth!=width||CachedHeight!=height) {auto candidate=detail::BuildUiLayout(Items,Directory,width,height,Scroll,RuntimeText,NumberText,&TextContext);CachedLayout=std::move(candidate);CachedWidth=width;CachedHeight=height;CachedEpoch=LayoutEpoch;}return CachedLayout;}
     Snapshot CaptureState() const {return {Items,Directory,State};}
     static std::size_t Bytes(const Snapshot& s) {std::size_t n=sizeof(s)+s.Directory.native().size()*sizeof(std::filesystem::path::value_type);for (const auto& e:s.Items) {n+=ElementBytes(e);}return n;}
     void Trim() {std::size_t bytes=Group ? Bytes(*Group):0;for (const auto& s:Past) {bytes+=Bytes(s);}for (const auto& s:Future) {bytes+=Bytes(s);}while (Past.size()+Future.size()>128||bytes>32*1024*1024) {if (!Past.empty()) {bytes-=Bytes(Past.front());Past.pop_front();}else if (!Future.empty()) {bytes-=Bytes(Future.front());Future.pop_front();}else {break;}}}
-    void ResetInput() {Events.clear();Hover=Capture=Focus=KeyCapture=0;Scroll.clear();}
+    void ResetInput() {Events.clear();Hover=Capture=Focus=KeyCapture=0;NumberSelected=false;Scroll.clear();}
     void PruneRuntimeText() {
         std::erase_if(RuntimeText,[&](const auto& entry) {
             const auto item=Find(entry.first);
-            return item==Items.end() || item->Kind==UiKind::Panel;
+            return item==Items.end() || (item->Kind!=UiKind::Text&&item->Kind!=UiKind::Button);
+        });
+        std::erase_if(NumberText,[&](const auto& entry) {
+            const auto item=Find(entry.first);
+            return item==Items.end() || !item->Number;
         });
     }
-    bool Active(UiId id,bool button=false) const {auto it=Find(id);if (it==Items.end()||(button&&it->Kind!=UiKind::Button)) {return false;}for (;;) {if (!it->Visible||!it->Enabled) {return false;}if (!it->Parent) {return true;}it=Find(it->Parent);if (it==Items.end()) {return false;}}}
+    bool Active(UiId id) const {auto it=Find(id);if (it==Items.end()) {return false;}for (;;) {if (!it->Visible||!it->Enabled) {return false;}if (!it->Parent) {return true;}it=Find(it->Parent);if (it==Items.end()) {return false;}}}
+    bool Focusable(UiId id) const {
+        const auto it=Find(id);
+        return it!=Items.end()&&(it->Kind==UiKind::Button||(it->Number&&it->BlocksInput))&&Active(id);
+    }
+    bool Button(UiId id) const {
+        const auto it=Find(id);
+        return it!=Items.end()&&it->Kind==UiKind::Button&&Active(id);
+    }
+    std::string ReadNumber(const UiElement& field) const {
+        const auto it=NumberText.find(field.Id);
+        if (it!=NumberText.end()) {return it->second;}
+        return field.Number->InitialValue ? detail::FormatUiNumber(*field.Number->InitialValue) : std::string{};
+    }
+    void WriteNumber(const UiElement& field,std::string text) {
+        if (ReadNumber(field)==text) {return;}
+        NumberText.insert_or_assign(field.Id,std::move(text));
+        ++Version;
+        ++LayoutEpoch;
+    }
+    bool EditNumber(const UiInput& in) {
+        const auto field=Find(Focus);
+        if (field==Items.end()||!field->Number) {return false;}
+        if (in.Type==UiInputType::SelectAll) {NumberSelected=true;return true;}
+        if (in.Type==UiInputType::Dismiss) {
+            Focus=Capture=0;
+            NumberSelected=false;
+            ++Version;
+            return true;
+        }
+        auto text=NumberSelected ? std::string{} : ReadNumber(*field);
+        if (in.Type==UiInputType::Character) {
+            const auto c=in.Character;
+            const bool digit=c>=U'0'&&c<=U'9';
+            if ((!digit&&!(c==U'-'&&text.empty())&&!(c==U'.'&&text.find('.')==std::string::npos))||
+                text.size()>=MaxNumberText) {return true;}
+            text.push_back(static_cast<char>(c));
+        } else if (in.Type==UiInputType::ClearNumber) {
+            text.clear();
+        } else if (!text.empty()) {
+            text.pop_back();
+        }
+        WriteNumber(*field,std::move(text));
+        NumberSelected=false;
+        return true;
+    }
     bool Apply(std::vector<UiElement> items,std::filesystem::path directory) {
         if (items==Items&&directory==Directory) {return false;}detail::ValidateUiTree(items);
         Snapshot next{std::move(items),std::move(directory),Serial+1};if (Bytes(next)>32*1024*1024) {throw UiBudgetExceeded("UI content exceeds the 32 MiB snapshot budget.");}
@@ -213,8 +329,10 @@ struct UiCanvas::Impl {
         Items=std::move(next.Items);Directory=std::move(next.Directory);State=++Serial;++Version;++LayoutEpoch;
         PruneRuntimeText();
         if (Items.empty()) {Raster.reset();}
-        if (!Active(Hover)) {Hover=0;}if (!Active(Capture)) {Capture=0;}if (!Active(Focus,true)) {Focus=0;}if (!Active(KeyCapture,true)) {KeyCapture=0;}
-        std::erase_if(Events,[&](UiId id){return !Active(id,true);});std::erase_if(Scroll,[&](const auto& pair){return Find(pair.first)==Items.end();});Trim();return true;
+        if (!Active(Hover)) {Hover=0;}if (!Active(Capture)) {Capture=0;}if (!Focusable(Focus)) {Focus=0;}
+        if (!Focus||!Find(Focus)->Number) {NumberSelected=false;}
+        if (!Button(KeyCapture)) {KeyCapture=0;}
+        std::erase_if(Events,[&](UiId id){return !Button(id);});std::erase_if(Scroll,[&](const auto& pair){return Find(pair.first)==Items.end();});Trim();return true;
     }
     void Restore(Snapshot state) {if (Directory!=state.Directory||state.Items.empty()) {TextContext.reset();}Items=std::move(state.Items);Directory=std::move(state.Directory);State=state.State;ResetInput();PruneRuntimeText();++Version;++LayoutEpoch;}
     bool Ready() const {return Owner==std::this_thread::get_id();}
@@ -240,7 +358,7 @@ Result<void> UiCanvas::SetRuntimeText(UiId id,std::optional<std::string_view> te
     if (!p.Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}
     const auto item=p.Find(id);
     if (item==p.Items.end()) {return Fail<void>(ErrorCode::InvalidHandle,"Unknown UI ID.");}
-    if (item->Kind==UiKind::Panel) {return Fail<void>(ErrorCode::InvalidArgument,"Runtime text requires a Text or Button element.");}
+    if (item->Kind!=UiKind::Text&&item->Kind!=UiKind::Button) {return Fail<void>(ErrorCode::InvalidArgument,"Runtime text requires a Text or Button element.");}
     try {
         if (text) {
             const auto current=p.RuntimeText.find(id);
@@ -254,6 +372,40 @@ Result<void> UiCanvas::SetRuntimeText(UiId id,std::optional<std::string_view> te
     } catch (...) {return Result<void>::Failure(ErrorFromException());}
 }
 Result<UiElement> UiCanvas::Get(UiId id) const {const auto& p=*impl_;if (!p.Ready()) {return Fail<UiElement>(ErrorCode::WrongThread,"UI accessed from another thread.");}const auto it=p.Find(id);return it==p.Items.end() ? Fail<UiElement>(ErrorCode::InvalidHandle,"Unknown UI ID."):Result<UiElement>::Success(*it);}
+Result<UiNumberValue> UiCanvas::GetNumberInput(UiId id) const {
+    const auto& p=*impl_;
+    if (!p.Ready()) {return Fail<UiNumberValue>(ErrorCode::WrongThread,"UI accessed from another thread.");}
+    const auto item=p.Find(id);
+    if (item==p.Items.end()) {return Fail<UiNumberValue>(ErrorCode::InvalidHandle,"Unknown UI ID.");}
+    if (!item->Number) {return Fail<UiNumberValue>(ErrorCode::InvalidArgument,"A NumberInput element is required.");}
+    try {
+        UiNumberValue result;
+        result.Text=p.ReadNumber(*item);
+        if (!result.Text.empty()) {
+            const auto value=ParseNumber(result.Text);
+            result.State=UiNumberState::Invalid;
+            if (value&&NumberInRange(*item->Number,*value)) {
+                result.Value=value;
+                result.State=UiNumberState::Valid;
+            }
+        }
+        return Result<UiNumberValue>::Success(std::move(result));
+    } catch (...) {return Result<UiNumberValue>::Failure(ErrorFromException());}
+}
+Result<void> UiCanvas::SetNumberInputValue(UiId id,std::optional<double> value) {
+    auto& p=*impl_;
+    if (!p.Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}
+    const auto item=p.Find(id);
+    if (item==p.Items.end()) {return Fail<void>(ErrorCode::InvalidHandle,"Unknown UI ID.");}
+    if (!item->Number|| (value&&!NumberInRange(*item->Number,*value))) {
+        return Fail<void>(ErrorCode::InvalidArgument,"A NumberInput element and an empty or in-range finite value are required.");
+    }
+    try {
+        p.WriteNumber(*item,value ? detail::FormatUiNumber(*value) : std::string{});
+        if (p.Focus==id) {p.NumberSelected=false;}
+        return Result<void>::Success();
+    } catch (...) {return Result<void>::Failure(ErrorFromException());}
+}
 Result<std::vector<UiElement>> UiCanvas::Elements() const {if (!impl_->Ready()) {return Fail<std::vector<UiElement>>(ErrorCode::WrongThread,"UI accessed from another thread.");}return Result<std::vector<UiElement>>::Success(impl_->Items);}
 Result<void> UiCanvas::Remove(UiId id) {auto& p=*impl_;if (!p.Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}if (p.Find(id)==p.Items.end()) {return Fail<void>(ErrorCode::InvalidHandle,"Unknown UI ID.");}try {auto candidate=p.Items;std::erase_if(candidate,[&](const UiElement& e){auto parent=e.Id;while (parent) {if (parent==id) {return true;}parent=p.Find(parent)->Parent;}return false;});p.Apply(std::move(candidate),p.Directory);return Result<void>::Success();}catch (...) {return Result<void>::Failure(ErrorFromException());}}
 Result<void> UiCanvas::Clear() {auto& p=*impl_;if (!p.Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}try {p.Apply({},p.Directory);p.ResetInput();return Result<void>::Success();}catch (...) {return Result<void>::Failure(ErrorFromException());}}
@@ -269,20 +421,25 @@ Result<void> UiCanvas::ClearHistory() {auto& p=*impl_;if (!p.Ready()) {return Fa
 Result<bool> UiCanvas::ProcessInput(const UiInput& in,float width,float height) {
     auto& p=*impl_;if (!p.Ready()) {return Fail<bool>(ErrorCode::WrongThread,"UI accessed from another thread.");}
     try {
-        Range(in.X,-1000000,1000000);Range(in.Y,-1000000,1000000);Range(width,0,65536);Range(height,0,65536);Range(in.ScrollX,-2000000,2000000);Range(in.ScrollY,-2000000,2000000);Require(in.Type>=UiInputType::Move&&in.Type<=UiInputType::Scroll,"Unknown UI input type.");
-        if (in.Type==UiInputType::Cancel) {if (p.Hover||p.Capture||p.Focus||p.KeyCapture) {p.Hover=p.Capture=p.Focus=p.KeyCapture=0;++p.Version;}return Result<bool>::Success(false);}
+        Range(in.X,-1000000,1000000);Range(in.Y,-1000000,1000000);Range(width,0,65536);Range(height,0,65536);Range(in.ScrollX,-2000000,2000000);Range(in.ScrollY,-2000000,2000000);Require(in.Type>=UiInputType::Move&&in.Type<=UiInputType::SelectAll,"Unknown UI input type.");
+        if (in.Type==UiInputType::Cancel) {if (p.Hover||p.Capture||p.Focus||p.KeyCapture) {p.Hover=p.Capture=p.Focus=p.KeyCapture=0;p.NumberSelected=false;++p.Version;}return Result<bool>::Success(false);}
+        if (in.Type>=UiInputType::Character) {return Result<bool>::Success(p.EditNumber(in));}
+        if (in.Type==UiInputType::ActivateDown||in.Type==UiInputType::ActivateUp) {
+            const auto field=p.Find(p.Focus);
+            if (field!=p.Items.end()&&field->Number) {return Result<bool>::Success(true);}
+        }
         const auto& resolved=p.Resolve(width,height);UiId hit=0;int hitIndex=-1;for (std::size_t i=0;i<resolved.size();++i) {const auto& r=resolved[i];const auto& e=r.Element;if (!r.Box.Visible||(!e.BlocksInput&&!(in.Type==UiInputType::Scroll&&e.Container.Overflow==UiOverflow::Scroll))||detail::UiClipped(resolved,i,in.X,in.Y)) {continue;}const auto xy=detail::UiLocal(r.Box,in.X,in.Y);if (Distance(xy[0],xy[1],r.Box.Width,r.Box.Height,p.Style(e).Radius)<=0) {hit=e.Id;hitIndex=static_cast<int>(i);}}
         const auto old=std::array{p.Hover,p.Capture,p.Focus,p.KeyCapture};bool consumed=false;UiId activate=0;
-        auto button=[&](UiId id) {return p.Active(id,true);};
+        auto button=[&](UiId id) {return p.Button(id);};
         switch (in.Type) {
         case UiInputType::Move:p.Hover=hit;consumed=hit||p.Capture;break;
-        case UiInputType::Down:p.Hover=hit;p.Capture=hit;p.Focus=button(hit) ? hit:0;p.KeyCapture=0;consumed=hit!=0;break;
+        case UiInputType::Down:p.Hover=hit;p.Capture=hit;p.Focus=p.Focusable(hit) ? hit:0;p.KeyCapture=0;p.NumberSelected=false;consumed=hit!=0;break;
         case UiInputType::Up:consumed=hit||p.Capture;if (hit==p.Capture&&button(hit)) {activate=hit;}p.Capture=0;p.Hover=hit;break;
-        case UiInputType::Cancel:p.Hover=p.Capture=p.Focus=p.KeyCapture=0;break;
-        case UiInputType::Tab:{std::vector<UiId> focus;for (const auto& e:p.Items) {if (button(e.Id)&&e.BlocksInput) {focus.push_back(e.Id);}}if (!focus.empty()) {auto it=std::find(focus.begin(),focus.end(),p.Focus);const auto index=it==focus.end() ? (in.Shift ? 0:static_cast<int>(focus.size())-1):static_cast<int>(it-focus.begin());p.Focus=focus[static_cast<std::size_t>((index+(in.Shift ? static_cast<int>(focus.size())-1:1))%static_cast<int>(focus.size()))];consumed=true;}p.KeyCapture=p.Capture=0;break;}
+        case UiInputType::Tab:{std::vector<UiId> focus;for (const auto& e:p.Items) {if (p.Focusable(e.Id)&&e.BlocksInput) {focus.push_back(e.Id);}}if (!focus.empty()) {auto it=std::find(focus.begin(),focus.end(),p.Focus);const auto index=it==focus.end() ? (in.Shift ? 0:static_cast<int>(focus.size())-1):static_cast<int>(it-focus.begin());p.Focus=focus[static_cast<std::size_t>((index+(in.Shift ? static_cast<int>(focus.size())-1:1))%static_cast<int>(focus.size()))];consumed=true;}p.KeyCapture=p.Capture=0;p.NumberSelected=false;break;}
         case UiInputType::ActivateDown:consumed=button(p.Focus);if (consumed&&!in.Repeat) {p.KeyCapture=p.Focus;}break;
         case UiInputType::ActivateUp:consumed=button(p.Focus);if (p.KeyCapture==p.Focus&&button(p.Focus)) {activate=p.Focus;}p.KeyCapture=0;break;
         case UiInputType::Scroll:consumed=hit!=0;for (int i=hitIndex;i>=0;i=resolved[static_cast<std::size_t>(i)].Parent) {const auto& r=resolved[static_cast<std::size_t>(i)];if (r.Element.Container.Overflow!=UiOverflow::Scroll||!r.Box.Enabled) {continue;}const auto& pad=r.Element.Container.Padding;const float x=std::clamp(r.Box.ScrollX+in.ScrollX,0.0f,std::max(0.0f,r.Box.ContentWidth-r.Box.Width+pad[0]+pad[2])),y=std::clamp(r.Box.ScrollY+in.ScrollY,0.0f,std::max(0.0f,r.Box.ContentHeight-r.Box.Height+pad[1]+pad[3]));if (x!=r.Box.ScrollX||y!=r.Box.ScrollY) {const auto changed=SetScroll(r.Box.Id,x,y);if (!changed) {return Result<bool>::Failure(changed.Error());}break;}}break;
+        default:break; // Keyboard editing and cancellation handled above.
         }
         if (old!=std::array{p.Hover,p.Capture,p.Focus,p.KeyCapture}) {++p.Version;}
         if (activate) {if (p.Events.size()>=MaxQueue) {return Fail<bool>(ErrorCode::InsufficientResource,"Drain the UI activation queue (1024 maximum).");}p.Events.push_back(activate);}
@@ -310,13 +467,13 @@ Result<void> UiCanvas::RefreshFonts() {if (!impl_->Ready()) {return Fail<void>(E
 Result<void> UiCanvas::Save(const std::filesystem::path& path) const {
     if (!impl_->Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}
     if (impl_->Group) {return Fail<void>(ErrorCode::InvalidState,"Commit or cancel the UI edit before saving.");}
-    try {Json a=Json::array();for (const auto& e:impl_->Items) {a.push_back(ElementJson(e));}const auto base=std::filesystem::absolute(path).parent_path();const auto folder=std::filesystem::weakly_canonical(impl_->Directory);const auto relative=std::filesystem::relative(folder,base);detail::WriteJsonFile({{"format","Minvex.UI"},{"version",2},{"fontDirectory",PathText(relative)},{"elements",a}},path,8*1024*1024);impl_->Saved=impl_->State;return Result<void>::Success();}catch (...) {return Result<void>::Failure(ErrorFromException(ErrorCode::InvalidData,path));}
+    try {Json a=Json::array();int version=2;for (const auto& e:impl_->Items) {a.push_back(ElementJson(e));if (e.Number) {version=3;}}const auto base=std::filesystem::absolute(path).parent_path();const auto folder=std::filesystem::weakly_canonical(impl_->Directory);const auto relative=std::filesystem::relative(folder,base);detail::WriteJsonFile({{"format","Minvex.UI"},{"version",version},{"fontDirectory",PathText(relative)},{"elements",a}},path,8*1024*1024);impl_->Saved=impl_->State;return Result<void>::Success();}catch (...) {return Result<void>::Failure(ErrorFromException(ErrorCode::InvalidData,path));}
 }
 Result<void> UiCanvas::Load(const std::filesystem::path& path) {
     auto& p=*impl_;if (!p.Ready()) {return Fail<void>(ErrorCode::WrongThread,"UI accessed from another thread.");}
     if (p.Group) {return Fail<void>(ErrorCode::InvalidState,"Commit or cancel the UI edit before loading.");}
-    try {const auto j=detail::ReadJsonFile(path,8*1024*1024);const int version=Integer(j.at("version"));Require(j.at("format")=="Minvex.UI"&&version>=1&&version<=2,"Unsupported UI document format/version.");Require(j.at("elements").is_array()&&j.at("elements").size()<=MaxElements,"UI element limit exceeded.");auto next=p.Next;std::vector<UiElement> candidate;std::unordered_map<UiId,UiId> remap;
-        for (const auto& value:j.at("elements")) {auto e=ReadElement(value);e.Id=next++;if (version==2) {const auto key=Identifier(value.at("key"));Require(key&&remap.emplace(key,e.Id).second,"Duplicate or zero persisted UI key.");}else {e.Parent=NoUi;e.Container={};e.Runs.clear();e.Layout.WidthSizing=e.Layout.HeightSizing=UiSizing::Fixed;}candidate.push_back(std::move(e));}
+    try {const auto j=detail::ReadJsonFile(path,8*1024*1024);const int version=Integer(j.at("version"));Require(j.at("format")=="Minvex.UI"&&version>=1&&version<=3,"Unsupported UI document format/version.");Require(j.at("elements").is_array()&&j.at("elements").size()<=MaxElements,"UI element limit exceeded.");auto next=p.Next;std::vector<UiElement> candidate;std::unordered_map<UiId,UiId> remap;
+        for (const auto& value:j.at("elements")) {auto e=ReadElement(value);Require(!e.Number||version>=3,"Number input requires UI document version 3.");e.Id=next++;if (version>=2) {const auto key=Identifier(value.at("key"));Require(key&&remap.emplace(key,e.Id).second,"Duplicate or zero persisted UI key.");}else {e.Parent=NoUi;e.Container={};e.Runs.clear();e.Layout.WidthSizing=e.Layout.HeightSizing=UiSizing::Fixed;}candidate.push_back(std::move(e));}
         for (auto& e:candidate) {if (e.Parent) {Require(remap.contains(e.Parent),"Missing persisted UI parent.");e.Parent=remap.at(e.Parent);}}
         const auto s=j.at("fontDirectory").get<std::string>();auto folder=(std::filesystem::absolute(path).parent_path()/std::filesystem::path(std::u8string(s.begin(),s.end()))).lexically_normal();
         p.Apply(std::move(candidate),std::move(folder));p.Next=next;p.ResetInput();p.Saved=p.State;return Result<void>::Success();

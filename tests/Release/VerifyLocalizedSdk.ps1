@@ -82,7 +82,8 @@ $SdkData = Join-Path $localizedSdk ([System.IO.Path]::GetRelativePath($SdkRoot, 
 $SdkHeader = Join-Path $localizedSdk ([System.IO.Path]::GetRelativePath($SdkRoot, $SdkHeader))
 $build = Join-Path $verificationRoot '빠른 시작 빌드'
 $options = @('-S', (Join-Path $SdkData 'examples/QuickStart'), '-B', $build, '-G', 'Ninja',
-    "-DCMAKE_PREFIX_PATH=$localizedSdk", "-DCMAKE_BUILD_TYPE=$Configuration", '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF')
+    "-DCMAKE_PREFIX_PATH=$localizedSdk", "-DCMAKE_BUILD_TYPE=$Configuration",
+    "-DCMAKE_TRY_COMPILE_CONFIGURATION=$Configuration", '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF')
 $manifest = Get-Content -LiteralPath (Join-Path $SdkData 'sdk-manifest.json') -Raw | ConvertFrom-Json
 $options += "-DCMAKE_MSVC_RUNTIME_LIBRARY=$($manifest.runtime)"
 & $CMake @options

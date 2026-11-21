@@ -277,6 +277,21 @@ Result<void> Viewer::FrameScene() {
     } catch (...) { return Result<void>::Failure(detail::CurrentException(ErrorCode::InvalidArgument, "Check visible Scene transforms and camera projection settings.")); }
 }
 
+Result<ObjectId> Viewer::PickObject(float x,float y) const {
+    const auto ready=Ready(*state_);
+    if (!ready) {return Result<ObjectId>::Failure(ready.Error());}
+    if (!std::isfinite(x)||!std::isfinite(y)) {
+        return Result<ObjectId>::Failure({ErrorCode::InvalidArgument,"Picking coordinates must be finite.","Pass a logical window position, such as ViewerInputEvent::X and Y.",{}});
+    }
+    const auto [width,height]=state_->LogicalSize();
+    if (x<0||y<0||x>=width||y>=height) {return Result<ObjectId>::Success(NoObject);}
+    try {
+        return Result<ObjectId>::Success(detail::PickSceneObject(state_->World,width/height,2*(x/width)-1,1-2*(y/height)));
+    } catch (...) {
+        return Result<ObjectId>::Failure(detail::CurrentException(ErrorCode::InvalidArgument,"Check the camera and visible model bounds."));
+    }
+}
+
 Result<void> Viewer::ProcessInput(const ViewerInputEvent& event) {
     auto ready = Ready(*state_); if (!ready) { return ready; }
     if (state_->DispatchingInput) { return Result<void>::Failure({ErrorCode::InvalidState,"Recursive input dispatch is not supported.","Change the camera or Scene directly inside OnInput instead of redispatching input.",{}}); }
@@ -286,6 +301,7 @@ Result<void> Viewer::ProcessInput(const ViewerInputEvent& event) {
     if (event.Type == ViewerInputType::Resized) {
         if (event.Width < 0 || event.Height < 0) { return Result<void>::Failure({ErrorCode::InvalidArgument, "Viewport dimensions cannot be negative.", "Use logical window dimensions; zero is allowed for a minimized window.", {}}); }
         state_->Width = event.Width; state_->Height = event.Height;
+        state_->HasViewportSize = true;
     }
     if (event.Type == ViewerInputType::FocusLost) { state_->Controls.Reset(); }
     // Release a button already held by the camera even when a UI element or
@@ -303,7 +319,25 @@ Result<void> Viewer::ProcessInput(const ViewerInputEvent& event) {
     if (event.Type==ViewerInputType::KeyDown&&event.Key==ViewerKey::Tab) {uiType=UiInputType::Tab;}
     if ((event.Key==ViewerKey::Enter||event.Key==ViewerKey::Space)&&event.Type==ViewerInputType::KeyDown) {uiType=UiInputType::ActivateDown;}
     if ((event.Key==ViewerKey::Enter||event.Key==ViewerKey::Space)&&event.Type==ViewerInputType::KeyUp) {uiType=UiInputType::ActivateUp;}
-    if (uiType&&!state_->Ui.Empty()) {const auto handled=state_->Ui.ProcessInput({*uiType,event.X,event.Y,event.Shift,event.Repeat,0,-event.ScrollY*32},state_->Running&&state_->UiLogicalWidth>0 ? state_->UiLogicalWidth:static_cast<float>(state_->Width>0 ? state_->Width:state_->Options.Width),state_->Running&&state_->UiLogicalHeight>0 ? state_->UiLogicalHeight:static_cast<float>(state_->Height>0 ? state_->Height:state_->Options.Height));if (!handled) {return Result<void>::Failure(handled.Error());}if (handled.Value()) {return Result<void>::Success();}}
+    char32_t character=event.Character;
+    if (event.Type==ViewerInputType::Character) {uiType=UiInputType::Character;}
+    if (event.Type==ViewerInputType::KeyDown) {
+        switch (event.Key) {
+        case ViewerKey::Backspace:uiType=UiInputType::Backspace;break;
+        case ViewerKey::Delete:uiType=UiInputType::ClearNumber;break;
+        case ViewerKey::Escape:uiType=UiInputType::Dismiss;break;
+        case ViewerKey::A:if (event.Shortcut) {uiType=UiInputType::SelectAll;}break;
+        // Suppress the frame-scene shortcut while editing a number.
+        case ViewerKey::F:uiType=UiInputType::Character;character=U'f';break;
+        default:break;
+        }
+    }
+    if (uiType&&!state_->Ui.Empty()) {
+        const auto [width,height]=state_->LogicalSize();
+        const auto handled=state_->Ui.ProcessInput({*uiType,event.X,event.Y,event.Shift,event.Repeat,0,-event.ScrollY*32,character},width,height);
+        if (!handled) {return Result<void>::Failure(handled.Error());}
+        if (handled.Value()) {return Result<void>::Success();}
+    }
     if (state_->ActiveRun && state_->ActiveRun->OnInput) {
         struct ResetDispatch { bool& Flag; ~ResetDispatch() { Flag = false; } } reset{state_->DispatchingInput};
         state_->DispatchingInput = true;

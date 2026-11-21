@@ -87,7 +87,8 @@ file(STRINGS "${BUILD_DIR}/CMakeCache.txt" _msvc_entry REGEX "^CMAKE_CXX_COMPILE
 set(_compiler_options)
 if(_msvc_entry AND POLICY CMP0141)
     # Keep compiler probes independent of MSVC's compiler PDB service.
-    list(APPEND _compiler_options -DCMAKE_POLICY_DEFAULT_CMP0141=NEW -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
+    list(APPEND _compiler_options "-DCMAKE_TRY_COMPILE_CONFIGURATION=${CONFIG}"
+        -DCMAKE_POLICY_DEFAULT_CMP0141=NEW -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
 endif()
 function(expect_missing name requirement)
     set(_probe "${_root}/${name}")
@@ -269,6 +270,7 @@ if(_flavor STREQUAL "native")
         run("${_quickstart_bin}/minvex_quickstart${_exe}" "${_model}" --frames 3)
         run("${_quickstart_bin}/minvex_quickstart_procedural${_exe}" --frames 3)
         run("${_quickstart_bin}/minvex_quickstart_skinning${_exe}" --frames 3)
+        run("${_quickstart_bin}/minvex_fitting${_exe}" --exercise --frames 3)
     endif()
     if(WIN32 AND VERIFY_KOREAN_NINJA)
         find_program(_pwsh NAMES pwsh REQUIRED)

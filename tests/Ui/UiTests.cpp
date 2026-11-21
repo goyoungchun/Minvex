@@ -5,8 +5,88 @@
 #include <limits>
 using namespace test;
 using namespace lv;
+
+void TestNumberInput() {
+    Viewer viewer;
+    auto& ui=viewer.GetUi();
+    UiElement field;
+    field.Kind=UiKind::NumberInput;
+    field.Number=UiNumberInput{std::nullopt,20,200,"cm"};
+    const auto authored=field.Number;
+    field.Text="Missing";
+    const auto id=ui.Add(field).Value();
+    TemporaryDirectory temp;
+    const auto document=temp.File("number.mvxui.json");
+    ui.Save(document).Value();
+    const auto original=Read(document);
+    Check(ui.GetNumberInput(id).Value().State==UiNumberState::Empty,"measurement starts empty");
+    const auto key=[&](ViewerKey code,bool shortcut=false) {
+        ViewerInputEvent event;
+        event.Type=ViewerInputType::KeyDown;
+        event.Key=code;
+        event.Shortcut=shortcut;
+        viewer.ProcessInput(event).Value();
+    };
+    const auto type=[&](std::u32string_view text) {
+        for (const auto c:text) {
+            ViewerInputEvent event;
+            event.Type=ViewerInputType::Character;
+            event.Character=c;
+            viewer.ProcessInput(event).Value();
+        }
+    };
+    type(U"180.5");
+    Check(!ui.GetNumberInput(id).Value().Value,"an unfocused field ignores characters");
+    key(ViewerKey::Tab);
+    Check(ui.Focused()==id,"Tab focuses a number field");
+    type(U"180.5");
+    Check(ui.GetNumberInput(id).Value().Value==180.5,"decimal measurement reaches the number field");
+#if defined(_WIN32) || defined(__APPLE__)
+    const auto withUnit=ui.Rasterize(400,100).Value();
+    field.Number->Unit="kg";
+    ui.Set(id,field).Value();
+    Check(ui.Rasterize(400,100).Value()!=withUnit&&ui.GetNumberInput(id).Value().Value==180.5,
+          "the displayed unit is independent of the parsed measurement");
+    ui.Undo().Value();
+    key(ViewerKey::Tab);
+#endif
+    key(ViewerKey::A,true);
+    type(U".");
+    auto input=ui.GetNumberInput(id).Value();
+    Check(input.State==UiNumberState::Invalid&&input.Text=="."&&!input.Value,"incomplete decimal differs from an empty measurement");
+    key(ViewerKey::Delete);
+    type(U"200.1");
+    input=ui.GetNumberInput(id).Value();
+    Check(input.State==UiNumberState::Invalid&&input.Text=="200.1"&&!input.Value,"out-of-range text remains editable");
+    key(ViewerKey::Backspace);
+    Check(ui.GetNumberInput(id).Value().Value==200,"backspace reaches the inclusive upper bound");
+    key(ViewerKey::Enter);
+    Check(ui.PollActivations().Value().empty(),"number fields never enqueue button activations");
+    key(ViewerKey::Escape);
+    Check(ui.Focused()==NoUi&&ui.GetNumberInput(id).Value().Value==200,"Escape leaves the field without discarding the measurement");
+    Check(!ui.SetNumberInputValue(id,201)&&ui.GetNumberInput(id).Value().Value==200,"an invalid programmatic write leaves the field unchanged");
+    ui.SetNumberInputValue(id,std::nullopt).Value();
+    Check(ui.GetNumberInput(id).Value().State==UiNumberState::Empty&&!ui.History().Value().Dirty,"clearing preserves an empty runtime value without dirtying the document");
+    ui.SetNumberInputValue(id,20).Value();
+    ui.Save(document).Value();
+    Check(Read(document)==original,"saving excludes the edited measurement");
+    ui.Load(document).Value();
+    const auto restored=ui.Elements().Value().front();
+    Check(restored.Number==authored,"document restores authored number settings");
+    Check(restored.Id!=id&&ui.GetNumberInput(restored.Id).Value().State==UiNumberState::Empty,"loading restores the authored empty value");
+    field.Number=UiNumberInput{};
+    const auto unbounded=ui.Add(field).Value();
+    ui.SetNumberInputValue(unbounded,0).Value();
+    Check(ui.GetNumberInput(unbounded).Value().Value==0,"zero is a valid measurement, distinct from no value");
+    for (const double value:{-.125,std::numeric_limits<double>::max(),std::numeric_limits<double>::denorm_min()}) {
+        ui.SetNumberInputValue(unbounded,value).Value();
+        Check(ui.GetNumberInput(unbounded).Value().Value==value,"finite doubles round trip as decimal input");
+    }
+}
+
 int main() {
     try {
+        TestNumberInput();
         UiCanvas ui;UiElement e;e.Kind=UiKind::Button;e.Text="Minvex 한글";e.Layout={10,10,180,56};e.Normal.Fill.fill({.2f,.4f,.8f,1});e.Normal.Radius.fill(12);
         const auto id=ui.Add(e).Value();Check(id!=0,"ID allocated");e.Layout.Width=-1;Check(!ui.Set(id,e)&&ui.Get(id).Value().Layout.Width==180,"invalid edit is transactional");e=ui.Get(id).Value();
         e.Normal.BorderWidth=2;e.Normal.Border={1,1,1,1};e.Normal.Shadow={0,0,0,.6f};e.Hover=e.Normal;e.Pressed=e.Normal;e.Focused=e.Normal;e.Disabled=e.Normal;ui.Set(id,e).Value();

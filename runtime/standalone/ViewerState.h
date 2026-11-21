@@ -23,6 +23,7 @@ struct ViewerState {
     bool DispatchingInput = false;
     const ViewerRunOptions* ActiveRun = nullptr;
     int Width = 0, Height = 0;
+    bool HasViewportSize = false;
     float UiLogicalWidth=0,UiLogicalHeight=0;
     QualityState Quality;
     std::function<Result<void>(const QualityProfile&)> ApplyQuality;
@@ -40,6 +41,11 @@ struct ViewerState {
     AssetHotReload Watcher;
     struct Reload {AssetLoadId Job;ModelHandle Before;bool Again=false;};std::vector<Reload> Reloads;
     std::optional<Error> LastAssetError;
+    std::array<float,2> LogicalSize() const {
+        if (Running && UiLogicalWidth>0 && UiLogicalHeight>0) {return {UiLogicalWidth,UiLogicalHeight};}
+        return {static_cast<float>(HasViewportSize ? Width : Options.Width),
+                static_cast<float>(HasViewportSize ? Height : Options.Height)};
+    }
     float Aspect() const {
         return static_cast<float>(Width > 0 ? Width : Options.Width) / static_cast<float>(Height > 0 ? Height : Options.Height);
     }

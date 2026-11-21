@@ -16,9 +16,9 @@ namespace lv {
 namespace detail { struct ViewerState; }
 class Viewer;
 
-enum class ViewerInputType { MouseDown, MouseUp, MouseMove, Scroll, KeyDown, FocusLost, Resized, KeyUp };
+enum class ViewerInputType { MouseDown, MouseUp, MouseMove, Scroll, KeyDown, FocusLost, Resized, KeyUp, Character };
 enum class ViewerMouseButton { None, Left, Right, Middle };
-enum class ViewerKey { Unknown, Escape, F, Space, Tab, Enter };
+enum class ViewerKey { Unknown, Escape, F, Space, Tab, Enter, Backspace, Delete, A };
 
 // Mouse deltas and viewport dimensions are in logical window pixels (HiDPI
 // independent). FrameInfo uses actual framebuffer pixels instead.
@@ -30,7 +30,9 @@ struct ViewerInputEvent {
     int Width = 0, Height = 0;
     bool Shift = false;
     bool Repeat = false;
-    float X = 0, Y = 0; // Absolute logical pointer position for UI hit testing.
+    float X = 0, Y = 0; // Absolute logical pointer position for UI and scene picking.
+    char32_t Character = 0; // Unicode code point for Character events.
+    bool Shortcut = false; // Ctrl or Command modifier.
 };
 
 struct CameraControlOptions {
@@ -71,7 +73,7 @@ struct ViewerRunOptions {
     std::uint64_t FrameLimit = 0;
     // Runs before upload/draw. May mutate this Viewer's Scene or request exit.
     std::function<void(Viewer&, const ViewerFrameInfo&)> OnFrame;
-    // Return true to consume a normalized event before the default controls.
+    // Runs after UI handling. Return true to consume an event before the default controls.
     std::function<bool(Viewer&, const ViewerInputEvent&)> OnInput;
     bool AdvanceAnimations = true; // Advance before OnFrame; disable for manual Scene updates.
 };
@@ -129,6 +131,9 @@ public:
     Result<void> SetPose(ObjectId id, const PoseAsset& pose); // Manual override after animation.
     Result<void> ResetPose(ObjectId id);
     Result<void> ProcessInput(const ViewerInputEvent& event);
+    // Closest visible model bounds at a top-left logical window position.
+    // Returns NoObject for a miss; call in OnInput to honor UI consumption.
+    Result<ObjectId> PickObject(float x, float y) const;
     Result<void> SetQuality(const QualityProfile& profile);
     Result<QualityState> GetQuality() const;
     Result<QualityCapabilities> GetQualityCapabilities() const;

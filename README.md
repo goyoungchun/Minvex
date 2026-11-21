@@ -31,6 +31,7 @@ cmake --build --preset windows-release --parallel 4
 ./out/build/windows-release/bin/minvex_rendering_enhancement.exe --morph
 ./out/build/windows-release/bin/minvex_equipment.exe
 ./out/build/windows-release/bin/minvex_ui_overlay.exe
+./out/build/windows-release/bin/minvex_fitting.exe
 ```
 
 ### macOS
@@ -60,14 +61,18 @@ target_link_libraries(my_viewer PRIVATE minvex::viewer)
 이 소스에서 설치한 SDK의 `MinvexMSVCDependencies.cmake`를 `find_package()` 뒤에 `include("${Minvex_DIR}/MinvexMSVCDependencies.cmake")`로 불러오면 MSVC와 Ninja의 `/showIncludes` 접두사를 맞출 수 있습니다. 구성과 빌드에는 같은 MSVC 언어 환경을 사용합니다. 아래 설치 SDK Quick Start에는 이 단계가 포함돼 있습니다.
 
 ```powershell
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:/path/to/out/sdk-native"
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_TRY_COMPILE_CONFIGURATION=Release "-DCMAKE_PREFIX_PATH=C:/path/to/out/sdk-native"
 cmake --build build
 ```
 
-### 설치 SDK로 움직이는 장면 시작
+Windows에서 아직 구성하지 않은 빌드 디렉터리를 사용합니다. `CMAKE_TRY_COMPILE_CONFIGURATION=Release`는 `find_package(Minvex)` 이전에 실행되는 컴파일러 검사에도 Release를 적용합니다. `CMAKE_BUILD_TYPE=Release`를 지정했는데도 초기 검사가 `/Zi`·`/MDd`를 사용하며 `C1902`로 중단되면 새 빌드 디렉터리에서 위 명령으로 다시 구성합니다. [CMake 컴파일러 검사 구성](https://cmake.org/cmake/help/latest/variable/CMAKE_TRY_COMPILE_CONFIGURATION.html)
+
+### 설치 SDK로 장면과 UI 시작
 
 이 소스에서 설치한 네이티브 SDK의 `share/minvex/examples/QuickStart`에서 C++20 예제를 빌드합니다.
 
+- `minvex_fitting`은 절차적 마네킹과 의상으로 숫자 입력, 모델 교체, 3D 경계 상자 선택을 보여 줍니다. 가슴 너비를 cm로 입력하고 의상을 클릭해 여유량 행을 강조합니다. 버튼으로 티셔츠와 재킷을 바꾸면 카메라를 유지하면서 3D 치수선을 갱신합니다.
 - `minvex_quickstart_skinning`은 모델 파일 없이 두 본과 가중치로 팔꿈치를 굽힙니다. **Space**로 재생하고 **Shift+Space**로 정지하면 첫 자세로 돌아옵니다.
 - `minvex_quickstart_capture`는 같은 팔을 화면 밖에서 렌더링합니다. 현재 디렉터리에 `straight.ppm`과 `bent.ppm`을 저장하고 실루엣 변화와 정지 후 복원을 확인합니다.
 - `minvex_quickstart_procedural`은 `MakeCube()`로 만든 팔을 Scene 관절의 자식으로 배치합니다. **Space**와 **Shift+Space**로 관절을 돌립니다.
@@ -75,8 +80,10 @@ cmake --build build
 
 ```powershell
 $sdk = "C:/path/to/extracted/Minvex-SDK"
-cmake -S "$sdk/share/minvex/examples/QuickStart" -B quickstart-build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$sdk"
+cmake -S "$sdk/share/minvex/examples/QuickStart" -B quickstart-build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_TRY_COMPILE_CONFIGURATION=Release "-DCMAKE_PREFIX_PATH=$sdk"
 cmake --build quickstart-build
+./quickstart-build/minvex_fitting.exe
 ./quickstart-build/minvex_quickstart_skinning.exe
 ./quickstart-build/minvex_quickstart_capture.exe
 ./quickstart-build/minvex_quickstart_procedural.exe
@@ -84,6 +91,8 @@ cmake --build quickstart-build
 ```
 
 macOS에서는 실행 파일 이름의 `.exe`를 뺍니다. Viewer를 띄우는 예제에 `--frames 3`을 전달하면 세 프레임을 렌더링한 뒤 자동 종료합니다.
+
+`minvex_fitting --exercise --frames 3`은 실측 입력, 클릭과 드래그, 모델 교체를 재현합니다. 적용된 Low·1280×720, 장면·UI·치수선 렌더링을 확인하고 프레임 수와 렌더 해상도를 출력합니다.
 
 같은 절차적 장면을 Emscripten으로 빌드해 브라우저에서 버튼으로 조작할 수 있습니다. [C++ 장면 연결](docs/API.md#c-장면-연결)
 
@@ -97,8 +106,8 @@ macOS에서는 실행 파일 이름의 `.exe`를 뺍니다. Viewer를 띄우는 
 | **Morph**                | Morph Target, GPU Morph, 노드별 독립 Weight, Weight Animation                                                                                                |
 | **Material·Lighting**    | Base Color·Texture·Normal Map, 독립 Ambient·Directional·Point·Spot·LTC Rect Light, Sun Basic/PCF/PCSS·Point/Spot Hard/PCF 그림자, HDR·FXAA                                                            |
 | **PBR**                  | Metallic/Roughness Material·Texture                                                                                                                     |
-| **Camera**               | Perspective/Orthographic, Orbit·Pan·Zoom, 자동 Focus, Bounds Picking                                                                                      |
-| **화면 UI**                | 텍스트·버튼·패널, 시스템/Font 폴더 폰트, 계층·Row/Column/Grid 자동 배치·Fixed/Fill/Hug·scroll/clip, 리치텍스트, UI Undo/Redo, 상태별 디자인, UI Designer·별도 UI 파일                      |
+| **Camera**               | Perspective/Orthographic, Orbit·Pan·Zoom, 자동 Focus, Standalone Viewer·Editor Bounds Picking                                                             |
+| **화면 UI**                | 텍스트·버튼·패널·숫자 입력, 시스템/Font 폴더 폰트, 계층·Row/Column/Grid 자동 배치·Fixed/Fill/Hug·scroll/clip, 리치텍스트, UI Undo/Redo, 상태별 디자인, UI Designer·별도 UI 파일                      |
 | **Skeleton·Pose**        | Bone Transform, Reference/Full/Partial Pose, Override, Pose 저장·불러오기, Shared Skeleton·Leader Pose 의상/파츠 동기화                                              |
 | **Animation**            | Clip 재생·정지·반복·역재생, 속도·시간 제어, Pose Blending·채널 마스크, Blend1D/Blend2D, Additive Animation·Joint Mask, Animation Event, Clip Cross-fade, Timeline Scrubbing |
 | **실행 방식**                | Standalone Viewer, Embedded Runtime, Editor                                                                                                             |

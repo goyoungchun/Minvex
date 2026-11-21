@@ -1,6 +1,6 @@
 # Minvex API
 
-**C++20 Graphics SDK · Version 1.0.3 · Namespace `lv`**
+**C++20 Graphics SDK · Version 1.0.4 · Namespace `lv`**
 
 모듈별 주요 타입과 API를 정리한 사용 안내임. 전체 선언은 연결된 공개 헤더에서 확인할 수 있음.
 
@@ -22,13 +22,13 @@ target_link_libraries(my_viewer PRIVATE minvex::viewer)
 
 | 모듈 / 헤더 | 주요 타입·함수 |
 |---|---|
-| **ui** · [Ui.h](../include/minvex/Ui.h) | `UiCanvas`, `UiElement`, `UiLayout/UiContainer/UiLayoutBox`, `UiStyle`, `UiTextStyle/UiTextRun`, `UiHistoryState`, `UiInput`, `UiFont`. `Add/Set/Get/SetRuntimeText`, `ResolveLayout/SetScroll`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo/History`, `ProcessInput/PollActivations`, `Fonts`, `SetFontDirectory`, `Save/Load`, `Rasterize` |
+| **ui** · [Ui.h](../include/minvex/Ui.h) | `UiCanvas`, `UiElement`, `UiLayout/UiContainer/UiLayoutBox`, `UiStyle`, `UiTextStyle/UiTextRun`, `UiNumberInput/UiNumberValue`, `UiHistoryState`, `UiInput`, `UiFont`. `Add/Set/Get/SetRuntimeText`, `GetNumberInput/SetNumberInputValue`, `ResolveLayout/SetScroll`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo/History`, `ProcessInput/PollActivations`, `Fonts`, `SetFontDirectory`, `Save/Load`, `Rasterize` |
 | **core** · [Math.h](../include/minvex/Math.h), [Mesh.h](../include/minvex/Mesh.h) | `Vec3`, `Quaternion`, `Mat4`, `Transform`, `Bounds`, `MeshData`, `MakeCube()`, `DecomposeTRS()`. 생성 헤더 `Version.h`의 `Version`, `BuildInfo`, `GetBuildInfo()` |
 | **assets** · [Asset.h](../include/minvex/Asset.h), [AssetLoading.h](../include/minvex/AssetLoading.h) | `ModelHandle`, `MorphTarget`, `MaterialAsset`, `ShadingModel`, `ImportSettings`, `ImporterRegistry`, `AssetRegistry::LoadModel/PrepareModel/ReimportModel`, `InspectModel()`, `ValidateModel()`, `CopyModelToProject()`, `AssetLoader`, `AssetHotReload` |
 | **scene** · [Scene.h](../include/minvex/Scene.h) | `Scene`, `ObjectId`, `Camera`, `AmbientLight`, `DirectionalLight`, `PointLight`, `SpotLight`, `RectLight`, `LocalShadowSettings`. `AddModel()`, `CreateObject()`, `SetParent()`, `SetTransform()`, `SetModel()`, `GetMaterial/SetMaterial/ResetMaterial`, `GetAnimation()`, `UpdateAnimations()`, `SceneAnimationEvent`, `PollAnimationEvents/DispatchAnimationEvents()` |
 | **animation** · [Animation.h](../include/minvex/Animation.h) | `SkeletonAsset`, `SkinAsset`, `PoseAsset`, `PoseBuffer`, `PoseChannels`, `AdditivePose/AdditiveAnimationState`, `AnimationClip`, `AnimationEvent/AnimationEventTrack/AnimationEventOccurrence`, `AnimationBlendState`, `BlendTreeDesc/BlendTreeAsset/BlendTreeState`, `MorphTrack`, `MorphPose`, `AnimationPlayer`. `EvaluateAnimation()`, `BlendPoses()`, `ComposePose()`, `CreateBlendTree()`, `EvaluateBlendWeights/EvaluateBlendTree()`, `Play/PlayBlendTree()`, `CrossFade()`, `SetBlendParameter()`, `Seek/SeekBlendTree()`, `EvaluatePose/Evaluate()`, `SetAdditiveAnimation()`, `MakeAdditivePose/ApplyAdditivePose()`, `CapturePose()` |
 | **scene_io** · [SceneIO.h](../include/minvex/SceneIO.h), [PoseIO.h](../include/minvex/PoseIO.h) | `SceneArchive`, `SaveScene(scene, path, library={})`, `LoadScene(path, registry)`, `SavePose(pose, skeleton, path)`, `LoadPose(path, skeleton)` |
-| **viewer** · [Viewer.h](../include/minvex/Viewer.h) | `ViewerOptions`, `ModelOptions`, `ViewerRunOptions`, `Viewer`. `AddModel()`, `AddModelAsync()`, `GetAssetLoad()`, `CommitModelLoad()`, `SetHotReload()`, `SetCamera()`, `SetMaterial/ResetMaterial`, `SetQuality()`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `GetScene()`, `Run()` |
+| **viewer** · [Viewer.h](../include/minvex/Viewer.h) | `ViewerOptions`, `ModelOptions`, `ViewerRunOptions`, `Viewer`. `AddModel()`, `AddModelAsync()`, `GetAssetLoad()`, `CommitModelLoad()`, `SetHotReload()`, `SetCamera()`, `ProcessInput()`, `PickObject()`, `SetMaterial/ResetMaterial`, `SetQuality()`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `GetScene()`, `Run()` |
 | **embedded** · [EmbeddedRenderer.h](../include/minvex/EmbeddedRenderer.h) | `HostGraphicsContext`, `HostRenderTarget`, `EmbeddedFrameOptions`, `EmbeddedRenderer`. `Initialize()`, `Update()`, `Render()`, `WaitIdle()`, `DetachTarget()`, `Shutdown()` |
 | **editor_document** · [EditorDocument.h](../include/minvex/EditorDocument.h) | `EditorDocument`는 Editor의 Scene·선택·미저장 상태 관리 모델. `OpenModel()`, `Open()`, `Save()`, `ImportModel()`, `PlaceModel()`, `SetWorldTransform()`, `SetMaterial/ResetMaterial`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo`, `ClearUndoHistory()`, `SetMorphWeights/ClearMorphWeights` |
 | **quality** · [Quality.h](../include/minvex/Quality.h) | `QualityPreset`, `QualityProfile`, `QualityOverrides`, `QualityCapabilities`, `QualityState`. `MakeQualityProfile()`, `ExpandQuality()`, `ResolveQuality()`, `SaveQuality()`, `LoadQuality()` |
@@ -67,7 +67,7 @@ run.OnFrame = [](lv::Viewer& v, const lv::ViewerFrameInfo&) {
 
 | API / 타입 | 계약 |
 |---|---|
-| `Add / Set / Get / Elements / Remove / Clear` | 텍스트·버튼·패널 작성, 독립 복사본 조회. Set은 ID를 유지하고 전체 description을 교체함. Add는 입력의 ID를 무시함. 실패한 검증/로드는 기존 요소를 유지함 |
+| `Add / Set / Get / Elements / Remove / Clear` | 텍스트·버튼·패널·숫자 필드 작성, 독립 복사본 조회. Set은 ID를 유지하고 전체 description을 교체함. Add는 입력의 ID를 무시함. 실패한 검증/로드는 기존 요소를 유지함 |
 | `SetRuntimeText(id, text)` | `Text`/`Button`의 표시 문자열과 `Hug` 측정을 plain text로 덮어씀. 문자열은 복사되며 최대 16,384바이트의 NUL 없는 UTF-8을 허용함. 빈 문자열은 문구를 숨기고 `std::nullopt`는 authored `Text`/`Runs`를 복원함 |
 | `UiLayout` | 좌상단 원점 logical pixel. 절대 배치에서 pivot 위치 = 부모 content 크기 × anchor + X/Y. 루트의 부모 영역은 viewport임. Width/Height·Fixed/Fill/Hug·Min/Max·Flex, pivot·회전 radians·ScaleX/Y·형제 Z 지원. 부모의 affine transform을 상속함 |
 | `Parent / UiContainer` | 부모 Panel의 Row·Column·균등 Grid·Absolute, L/T/R/B padding, gap, justify·cross align, Visible/Clip/Scroll overflow. 부모 삭제는 subtree 삭제임. cycle·없는/비 Panel 부모·깊이 초과를 거부함 |
@@ -76,16 +76,41 @@ run.OnFrame = [](lv::Viewer& v, const lv::ViewerFrameInfo&) {
 | `UiTextStyle / UiTextRun` | OS 기본 font, Family/FontFile, Size·Weight·Italic·Underline·StrikeThrough·Wrap·LineHeight·LetterSpacing·align·Padding. `Runs`가 있으면 run Text를 이어 붙여 표시하고 기존 Text는 표시하지 않음. run별 선택적 font·size·weight·color·장식·자간 override는 나머지 속성을 상속함. 넘친 글자는 content box에서 잘림. IME/caret 편집은 제공하지 않음 |
 | 상태별 style | `Hover / Pressed / Focused / Disabled`는 선택적 **완전 교체**임. 우선순위 disabled → pressed/captured → hover → focused → normal. 값이 없는 상태는 다음 가능한 style을 사용함 |
 | `Clip / Visible / Enabled / BlocksInput` | clip은 viewport logical rectangle이며 글자·도형·그림자·hit test에 적용함. disabled 버튼은 입력을 차단하지만 활성화하지 않음. BlocksInput=false인 요소는 입력을 통과시킴 |
-| `ProcessInput / PollActivations` | 계층 paint 순서·ancestor clip·동일 affine transform으로 rounded hit-test. 같은 버튼에서 down/release해야 활성화함. Cancel/삭제/상위 비활성화는 capture를 해제함. Tab/Shift+Tab은 표시/활성 상태의 생성 순서, Enter/Space는 focus 활성화. ScrollX/Y는 logical pixel delta(오른쪽/아래 양수)이며 가장 안쪽 scroll ancestor부터 처리함 |
+| `ProcessInput / PollActivations` | 계층 paint 순서·ancestor clip·동일 affine transform으로 rounded hit-test. 같은 버튼에서 down/release해야 활성화함. Cancel/삭제/상위 비활성화는 capture를 해제함. Tab/Shift+Tab으로 버튼과 숫자 필드에 생성 순서대로 포커스를 이동하고 Enter/Space로 포커스된 버튼을 활성화함. ScrollX/Y는 logical pixel delta(오른쪽/아래 양수)이며 가장 안쪽 scroll ancestor부터 처리함 |
 | `SetFontDirectory / FontDirectory / Fonts / RefreshFonts` | Font 폴더는 기본 CWD/Font이며 create=true로 생성 가능. `Fonts()`는 OS와 폴더의 TTF/OTF/TTC family를 조회하고 `Fonts(false)`는 폴더만 조회함. FontFile은 폴더 상대 경로이며 경로 탈출을 거부함. 파일을 바꾼 뒤 RefreshFonts를 명시적으로 호출함 |
-| `Save / Load` | `Minvex.UI` writer v2 / reader v1~v2, 권장 `.mvxui.json`, atomic 저장. 계층·배치·rich run과 상대 FontDirectory를 저장하고 font bytes·history·scroll은 내장하지 않음. Load는 전체 검증 후 ID/parent를 재매핑하고 입력을 초기화함. 성공한 Save/Load는 현재 상태를 clean으로 표시함. Load 자체도 Undo 가능함. Scene v13에는 UI를 저장하지 않음 |
+| `Save / Load` | `Minvex.UI` reader v1~v3, 권장 `.mvxui.json`, atomic 저장. 숫자 필드가 있는 문서는 v3으로 저장하고 그 외에는 v2를 사용함. 계층·배치·rich run·숫자 필드 설정·상대 FontDirectory를 저장함. Load는 전체 검증 후 ID/parent를 재매핑하고 입력을 초기화함. 성공한 Save/Load는 현재 상태를 clean으로 표시함. Load 자체도 Undo 가능함. Scene v13에는 UI를 저장하지 않음 |
 | `BeginEdit / CommitEdit / CancelEdit` | 여러 속성/요소 변경을 하나의 Undo로 묶거나 시작 상태로 취소함. 중첩 편집을 지원하지 않으며 활성 편집 중 Save/Load/Undo/Redo/ClearHistory는 InvalidState임. 빈 묶음은 이력을 추가하지 않음 |
 | `Undo / Redo / History / ClearHistory` | UI 전용 content snapshot과 dirty/saved 상태를 복원함. History는 CanUndo/CanRedo/Editing/Dirty와 이력 수를 반환함. no-op·검증 실패는 redo를 지우지 않으며 새 성공 편집은 redo를 지움. ClearHistory는 content·dirty를 유지함 |
 | `Rasterize` | native shaping, top-left origin의 premultiplied sRGB RGBA8 복사본. UI 변경·DPI·resize 때만 viewer bitmap을 갱신하고 Scene 품질 축소 뒤의 full-resolution pass에서 합성함. UI 합성 자원은 telemetry와 render debugger에 포함함 |
 
 모든 canvas 수정·조회·저장·로드·입력·raster는 생성 스레드에서 호출함. `Revision / Focused / Empty`는 owner thread 전용의 unchecked query임. GetUi는 소유자의 수명 동안만 유효한 참조이며 Viewer/Embedded의 thread-safe 예외에 포함하지 않음. 독립 `UiCanvas`는 GPU 없이 Windows/macOS native text를 생성할 수 있음. 다른 플랫폼의 native font/text는 `UnsupportedFeature`임.
 
-`SetRuntimeText`는 편집 트랜잭션 중에도 호출할 수 있습니다. 런타임 문자열은 `Get`/`Elements`, 저장 파일, Undo/Redo 및 dirty 상태에서 제외됩니다. 편집 이력의 이동 후에도 동일한 텍스트/버튼 ID가 남아 있으면 표시값이 유지됩니다. 요소가 삭제되거나 패널로 바뀌면 덮어쓰기가 해제됩니다. 같은 값을 다시 전달하면 `Revision`을 유지합니다. 없는 ID는 `InvalidHandle`, 패널이나 잘못된 문자열은 `InvalidArgument`, 다른 스레드의 호출은 `WrongThread`를 반환합니다.
+`SetRuntimeText`는 편집 트랜잭션 중에도 호출할 수 있습니다. 런타임 문자열은 `Get`/`Elements`, 저장 파일, Undo/Redo 및 dirty 상태에서 제외됩니다. 편집 이력의 이동 후에도 동일한 텍스트/버튼 ID가 남아 있으면 표시값이 유지됩니다. 요소가 삭제되거나 텍스트·버튼 이외의 종류로 바뀌면 덮어쓰기가 해제됩니다. 같은 값을 다시 전달하면 `Revision`을 유지합니다. 없는 ID는 `InvalidHandle`, 텍스트·버튼 이외의 요소나 잘못된 문자열은 `InvalidArgument`, 다른 스레드의 호출은 `WrongThread`를 반환합니다.
+
+### 숫자 입력
+
+`UiKind::NumberInput`에 `UiElement::Number`를 지정합니다. `InitialValue`, `Minimum`, `Maximum`은 선택적이고 유한한 `double`입니다. 범위에는 양쪽 경곗값이 포함됩니다. `Text`는 빈 상태의 안내 문구이고, `Unit`은 최대 64 UTF-8 바이트의 표시 접미사입니다. 필드는 단일 행으로 표시되며 숫자 뒤에 단위를 붙입니다.
+
+```cpp
+lv::UiElement field;
+field.Kind = lv::UiKind::NumberInput;
+field.Text = "Enter chest width";
+field.Number = lv::UiNumberInput{std::nullopt, 20.0, 90.0, "cm"};
+const auto added = viewer.GetUi().Add(field);
+if (added) {
+    const auto measurement = viewer.GetUi().GetNumberInput(added.Value());
+    if (measurement && measurement.Value().Value) {
+        const double widthCm = *measurement.Value().Value;
+        // Update the fit calculation using widthCm.
+    }
+}
+```
+
+`GetNumberInput()`은 단위를 뺀 입력 문자열의 복사본과 `UiNumberState`를 반환합니다. 빈 문자열은 `Empty`, 소수 표기 미완성이나 범위 초과는 `Invalid`, 범위 안의 수는 `Valid`입니다. `Value`는 `Valid`일 때만 있으며 0도 유효한 값으로 표현합니다. `SetNumberInputValue(id, std::nullopt)`는 빈 상태를 설정합니다. 잘못된 수나 다른 종류의 요소는 `InvalidArgument`, 없는 ID는 `InvalidHandle`, 다른 스레드 호출은 `WrongThread`입니다. 설정 오류가 나면 기존 입력을 유지합니다.
+
+포커스된 필드는 ASCII 숫자, 맨 앞의 음수 부호, 소수점 `.`을 최대 384자로 받습니다. 글자는 끝에 추가합니다. Backspace는 마지막 글자를 지우고 Delete는 전체를 비웁니다. Ctrl+A 또는 Command+A 뒤에 입력하면 전체를 교체합니다. Escape는 현재 값을 유지하고 포커스를 해제합니다. 숫자 입력은 버튼 활성화 큐와 별개입니다. Embedded Host는 문자와 편집 키를 `UiInputType::Character`, `Backspace`, `ClearNumber`, `SelectAll`, `Dismiss`로 전달할 수 있습니다.
+
+런타임 입력은 동일한 숫자 필드 ID가 있는 동안 유지되며 저장·편집 이력·dirty 상태와 별개입니다. 저장에는 단위·범위·초깃값이 포함되며 로드된 필드는 초깃값에서 시작합니다. UI v3 문서는 v3 reader가 필요합니다. 기존 정적 SDK 소비자는 같은 SDK 패키지의 헤더와 라이브러리를 사용해 다시 빌드합니다.
 
 UI는 이전 CPU bitmap을 보관하고 요소·상태·변환·상위 clip의 변경 영역을 갱신함. 이동·삭제 전의 영역도 지운 뒤 겹치는 요소를 paint 순서대로 다시 그리며, 정적 UI는 bitmap을 재사용함. 첫 raster·DPI/viewport 변경·Font 폴더 변경·`RefreshFonts()`는 전체를 다시 그림. 실패한 raster는 보관된 이미지를 부분 갱신하지 않으며 반환한 pixel 배열은 독립 복사본임.
 
@@ -133,7 +158,7 @@ Undo는 삭제/로드 이전의 ID를 복원할 수 있으나, 버린 redo branc
 
 `InvalidArgument`는 속성/입력 검증, `InvalidHandle`은 제거/로드 후의 ID, `WrongThread`는 소유 스레드 위반, `InsufficientResource`는 요소/큐/할당 한도, `InvalidData`는 UI JSON·font 파일·native raster 실패임. UI IO 오류에는 SourcePath를 제공함. 잘못된 폰트 선택은 렌더링 때도 진단되며 다른 폰트로 조용히 바꾸지 않음. 선택된 폰트에 없는 glyph의 OS fallback은 native text engine을 따름. 시스템 font bytes를 복사/재배포하거나 사용자 font를 OS 전역에 설치하지 않음.
 
-Standalone은 absolute `ViewerInputEvent::X/Y`와 `KeyUp`을 UI에 먼저 전달함. UI가 소비한 입력은 OnInput/기본 카메라에 전달하지 않음. Embedded Host는 `GetUi().ProcessInput()`에 **viewport 내부 logical 좌표와 logical 크기**를 전달하고 소비 결과에 따라 자체 입력을 차단함. `EmbeddedFrameOptions::UiScale`은 framebuffer/logical 비율이며 기본 1임. UI를 사용하면 Host viewport도 축당 4096 이하로 제한됨.
+Standalone은 absolute `ViewerInputEvent::X/Y`, 키 입력, `Character` 이벤트를 UI에 먼저 전달함. UI가 소비한 입력은 OnInput/기본 카메라에 전달하지 않음. 이미 시작된 카메라 드래그는 UI가 소비한 버튼 해제에서도 종료함. Embedded Host는 `GetUi().ProcessInput()`에 **viewport 내부 logical 좌표와 logical 크기**를 전달하고 소비 결과에 따라 자체 입력을 차단함. `EmbeddedFrameOptions::UiScale`은 framebuffer/logical 비율이며 기본 1임. UI를 사용하면 Host viewport도 축당 4096 이하로 제한됨.
 
 Editor의 **UI Designer**에서 계층·container/sizing·run별 서식·style·font를 편집하고 별도의 UI Undo/Redo를 제공함. Drag/typing의 연속 속성 변경은 하나의 편집으로 묶고 Escape로 취소할 수 있음. UI Designer에 focus가 있고 text input이 자체 편집 키를 사용하지 않을 때 Ctrl+Z·Ctrl+Y/Ctrl+Shift+Z·Ctrl+S를 UI에 전달하며 Scene 이력은 별도임. New UI·Load UI·Quit은 미저장 UI의 Save/Discard/Cancel을 제공함. Scene의 New/Open은 독립 UI를 유지함. UI는 Save UI로 따로 저장함.
 
@@ -172,6 +197,14 @@ CPU에서 직접 Scene을 사용할 때 `UpdateAnimations(deltaSeconds)`로 시�
 | 자원·품질 추천 | `EstimateQualityResources()`는 엔진의 논리적 자원 비용을 계산함. `RecommendQuality()`는 capability·메모리·현재 Scene 관측으로 프로파일을 추천함. 논리적 크기는 드라이버 실제 할당량과 다를 수 있음 |
 | 렌더링 진단 | `SetDebugView/SetDebugOptions`로 Lit·Unlit·Wireframe·Normal·UV·Depth·Skeleton·BoneWeight·Shadow 진단을 선택함. `DebugDraw`로 선·화살표·상자·구·캡슐·축·Skeleton·카메라 frustum을 작성하고 `SetDebugDraw()`로 복사 전달함 |
 | 자원 조회 | `GetRenderDebugInfo()`는 pass·draw·shader·pipeline·texture·buffer 및 최적화 통계를 반환함. native GPU handle의 소유권을 넘기지 않음. `InspectJoint/InspectBoneInfluences`로 본 행렬과 가중치를 조회함 |
+
+### Standalone Viewer 경계 상자 피킹
+
+`Viewer::PickObject(float x, float y)`는 좌상단 원점의 논리 창 좌표를 받습니다. `ViewerInputEvent::X/Y`를 그대로 사용할 수 있습니다. 실행 중에는 DPI가 반영된 논리 창 크기를 사용하고, 창 없이 호출하면 `ViewerOptions` 또는 마지막 `Resized` 입력의 크기를 사용합니다. 화면 밖·크기가 0인 viewport·적중 없음은 모두 성공 결과의 `lv::NoObject`로 반환합니다. 비유한 좌표나 유효하지 않은 카메라·경계 상자는 `InvalidArgument`, 소유 스레드 밖에서는 `WrongThread`입니다.
+
+현재 Scene의 원근/직교 카메라와 near/far 구간으로 광선을 계산합니다. 보이는 모델의 포즈·모프가 반영된 경계를 월드 축 정렬 상자로 변환하고, 가장 가까운 교차를 선택합니다. 같은 거리에서는 Scene 순서의 첫 객체를 반환합니다. 마네킹과 옷의 상자가 겹치면 앞선 경계 상자가 선택됩니다. 빈 공간이나 몸 뒤쪽까지 포함할 수 있는 보수적인 상자 판정이며 결과는 `ObjectId`입니다.
+
+UI가 마우스 입력을 먼저 처리합니다. `OnInput`에서 UI를 통과한 왼쪽 버튼 누름을 기록하고, 허용 이동 거리를 넘은 경우 기본 Orbit 컨트롤에 움직임을 넘깁니다. 허용 거리 안에서 놓았을 때 `PickObject(event.X, event.Y)`를 호출하면 클릭으로 선택할 수 있습니다. 피킹 호출 자체는 UI를 검사하지 않으므로 임의 좌표 조회에도 사용할 수 있습니다. `minvex_fitting`은 이 처리 순서와 `Scene::SetModel()`·`SetDebugDraw()`를 한 프로그램에서 보여 줍니다. [피팅 Quick Start](../examples/QuickStart/Fitting.cpp)
 
 ## Editor 문서 통합
 

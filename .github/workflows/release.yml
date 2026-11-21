@@ -8,7 +8,7 @@ on:
         description: Existing release tag to build and publish
         type: string
         required: true
-        default: v1.0.3
+        default: v1.0.4
 permissions:
   contents: read
 concurrency:
@@ -87,16 +87,16 @@ jobs:
 
           The Windows archive filename includes the required MSVC compiler major.minor (for example, MSVC-19.51). Check your compiler with cl /Bv. If the versions differ, select the matching MSVC toolset or build the SDK from this release tag with your compiler.
 
-          New in 1.0.3
+          New in 1.0.4
 
-          - The procedural skinning Quick Start builds and animates a two-bone mesh from C++ without loading a model file.
-          - The frame capture Quick Start renders offscreen with EmbeddedRenderer and saves PPM images for pixel checks.
-          - The installed Quick Start configures Ninja to track SDK header dependencies with localized MSVC.
-          - Native mesh upload errors identify the full GPU resource pool and report its occupied slots and capacity.
+          - Number inputs support decimal values, display units, inclusive bounds, and distinct empty and invalid states.
+          - Standalone Viewer exposes bounds picking through Viewer::PickObject(). Pass a logical window position to get the nearest visible object's ID or NoObject.
+          - The fitting Quick Start combines numeric UI, picking, model swaps, camera preservation, and dimension lines in one C++ program.
+          - The Windows Ninja setup guide uses CMAKE_TRY_COMPILE_CONFIGURATION=Release for initial compiler checks.
 
           The examples are in share/minvex/examples/QuickStart.
 
-          UiCanvas::SetRuntimeText updates live labels without changing saved UI or edit history. The Web source build accepts C++ scene initialization, frame and command callbacks so a procedural scene can be shared with the native Viewer.
+          UI documents with number fields use Minvex.UI v3. Existing v1 and v2 documents remain readable. Rebuild C++ consumers using the headers and libraries from the same SDK package.
 
           Building from source requires a C++20 standard library with std::jthread and std::stop_token. Each binary SDK records its compiler and runtime in share/minvex/sdk-manifest.json.
 

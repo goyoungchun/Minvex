@@ -14,7 +14,7 @@ namespace lv {
 using UiId = std::uint64_t;
 inline constexpr UiId NoUi = 0;
 using UiColor = std::array<float,4>; // Straight sRGB + linear alpha, [0,1].
-enum class UiKind { Text, Button, Panel };
+enum class UiKind { Text, Button, Panel, NumberInput };
 enum class UiAlign { Start, Center, End };
 struct UiRect { float X=0,Y=0,Width=0,Height=0; bool operator==(const UiRect&) const = default; };
 enum class UiSizing { Fixed, Fill, Hug };
@@ -72,6 +72,17 @@ struct UiStyle {
     float BorderWidth=0,ShadowX=0,ShadowY=4,ShadowBlur=8,Opacity=1;
     bool operator==(const UiStyle&) const = default;
 };
+struct UiNumberInput {
+    std::optional<double> InitialValue, Minimum, Maximum; // Inclusive bounds.
+    std::string Unit; // Display suffix, UTF-8, at most 64 bytes.
+    bool operator==(const UiNumberInput&) const = default;
+};
+enum class UiNumberState { Empty, Valid, Invalid };
+struct UiNumberValue {
+    UiNumberState State = UiNumberState::Empty;
+    std::string Text; // Current decimal buffer without the unit.
+    std::optional<double> Value; // Present only in the Valid state.
+};
 struct UiElement {
     UiId Id=NoUi; // Assigned by Add; ignored in Add's description.
     std::string Name,Text;
@@ -86,6 +97,7 @@ struct UiElement {
     UiId Parent=NoUi; // Parent must be a Panel; Remove removes its subtree.
     UiContainer Container;
     std::vector<UiTextRun> Runs; // When nonempty, replaces Text for display.
+    std::optional<UiNumberInput> Number; // Required for NumberInput; Text is its empty placeholder.
     bool operator==(const UiElement&) const = default;
 };
 struct UiLayoutBox {
@@ -97,8 +109,14 @@ struct UiLayoutBox {
 };
 struct UiHistoryState { bool CanUndo=false,CanRedo=false,Editing=false,Dirty=false; std::size_t UndoCount=0,RedoCount=0; };
 struct UiFont { std::string Family; std::filesystem::path File; };
-enum class UiInputType { Move,Down,Up,Cancel,Tab,ActivateDown,ActivateUp,Scroll };
-struct UiInput { UiInputType Type=UiInputType::Move; float X=0,Y=0; bool Shift=false,Repeat=false; float ScrollX=0,ScrollY=0; };
+enum class UiInputType { Move,Down,Up,Cancel,Tab,ActivateDown,ActivateUp,Scroll,Character,Backspace,ClearNumber,Dismiss,SelectAll };
+struct UiInput {
+    UiInputType Type=UiInputType::Move;
+    float X=0,Y=0;
+    bool Shift=false,Repeat=false;
+    float ScrollX=0,ScrollY=0;
+    char32_t Character=0;
+};
 // Retained, viewport-space overlay; construct/use/destroy on one owner thread.
 // No global font installation, callbacks, graphics handles or Scene ownership.
 class UiCanvas final {
@@ -112,6 +130,9 @@ public:
     // Plain display text for Text/Button, including an empty string. Pass nullopt
     // to restore authored Text/Runs. Excluded from Get, save and edit history.
     Result<void> SetRuntimeText(UiId id,std::optional<std::string_view> text);
+    Result<UiNumberValue> GetNumberInput(UiId id) const;
+    // Updates the runtime buffer. nullopt clears it; invalid numbers leave it unchanged.
+    Result<void> SetNumberInputValue(UiId id,std::optional<double> value);
     Result<UiElement> Get(UiId id) const; // Independent copy.
     Result<std::vector<UiElement>> Elements() const;
     Result<void> Remove(UiId id);
