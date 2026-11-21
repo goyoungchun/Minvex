@@ -75,18 +75,28 @@ if (!(Test-Path -LiteralPath $koreanMessages) -and $env:GITHUB_ACTIONS -eq 'true
 if (!(Test-Path -LiteralPath $koreanMessages)) { throw 'The active MSVC toolset requires Korean compiler resources (1042/clui.dll).' }
 $env:VSLANG = '1042'
 
+# Use the Visual Studio installation's native Ninja when available. A PATH
+# shim can report a different build-file code page without a console.
+$ninja = if ($env:VSINSTALLDIR) {
+    Join-Path $env:VSINSTALLDIR 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe'
+}
+if (!$ninja -or !(Test-Path -LiteralPath $ninja)) {
+    $ninja = (Get-Command ninja.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+}
+Write-Host "Verifying Ninja at $ninja"
+
 $localizedSdk = Join-Path $verificationRoot '설치 SDK'
 & $CMake -E copy_directory $SdkRoot $localizedSdk
 if ($LASTEXITCODE -ne 0) { throw 'Could not stage the SDK in a Korean path.' }
 $SdkData = Join-Path $localizedSdk ([System.IO.Path]::GetRelativePath($SdkRoot, $SdkData))
 $SdkHeader = Join-Path $localizedSdk ([System.IO.Path]::GetRelativePath($SdkRoot, $SdkHeader))
 $build = Join-Path $verificationRoot '빠른 시작 빌드'
-$options = @('-S', (Join-Path $SdkData 'examples/QuickStart'), '-B', $build, '-G', 'Ninja',
+$options = @('-S', (Join-Path $SdkData 'examples/QuickStart'), '-G', 'Ninja', "-DCMAKE_MAKE_PROGRAM=$ninja",
     "-DCMAKE_PREFIX_PATH=$localizedSdk", "-DCMAKE_BUILD_TYPE=$Configuration",
     "-DCMAKE_TRY_COMPILE_CONFIGURATION=$Configuration", '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF')
 $manifest = Get-Content -LiteralPath (Join-Path $SdkData 'sdk-manifest.json') -Raw | ConvertFrom-Json
 $options += "-DCMAKE_MSVC_RUNTIME_LIBRARY=$($manifest.runtime)"
-& $CMake @options
+& $CMake @options -B $build
 if ($LASTEXITCODE -ne 0) { throw 'Korean Ninja Quick Start configuration failed.' }
 $prefix = Get-Content -LiteralPath (Join-Path $build 'CMakeFiles/rules.ninja') |
     Where-Object { $_ -like 'msvc_deps_prefix = *' }
@@ -112,15 +122,33 @@ if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $object).LastWriteTimeUtc -le
 Write-Host 'Verified Korean MSVC /showIncludes and incremental rebuild from an installed SDK header.'
 
 function Invoke-HeadlessCMake([string[]]$Arguments) {
-    $info = [System.Diagnostics.ProcessStartInfo]::new($CMake)
+    $info = [System.Diagnostics.ProcessStartInfo]::new((Get-Process -Id $PID).Path)
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
-    foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $info.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $info.Environment['MINVEX_TEST_CMAKE_DRIVER'] = Join-Path $SdkData 'examples/QuickStart/Invoke-MinvexCMake.ps1'
+    $info.Environment['MINVEX_TEST_CMAKE'] = $CMake
+    $info.Environment['MINVEX_TEST_CMAKE_ARGS'] = ConvertTo-Json -InputObject $Arguments -Compress
+    $command = @'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+& $env:MINVEX_TEST_CMAKE_DRIVER -CMake $env:MINVEX_TEST_CMAKE -CMakeArguments (ConvertFrom-Json $env:MINVEX_TEST_CMAKE_ARGS)
+exit $LASTEXITCODE
+'@
+    foreach ($argument in @('-NoProfile', '-NonInteractive', '-Command', $command)) {
+        $info.ArgumentList.Add($argument)
+    }
     $process = [System.Diagnostics.Process]::Start($info)
     try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
+        if ($output.Result) { Write-Host $output.Result.TrimEnd() }
+        if ($errors.Result) { Write-Host $errors.Result.TrimEnd() }
         if ($process.ExitCode -ne 0) {
-            throw "Headless Korean Ninja CMake failed with exit code $($process.ExitCode)."
+            throw "Headless Korean Ninja CMake failed for '$($Arguments -join ' ')' with exit code $($process.ExitCode)."
         }
     } finally {
         $process.Dispose()
@@ -128,13 +156,20 @@ function Invoke-HeadlessCMake([string[]]$Arguments) {
 }
 
 $headlessBuild = Join-Path $verificationRoot '콘솔 없는 빌드'
-Invoke-HeadlessCMake @('-S', (Join-Path $SdkData 'examples/QuickStart'), '-B', $headlessBuild,
-    '-G', 'Ninja', "-DCMAKE_PREFIX_PATH=$localizedSdk", "-DCMAKE_BUILD_TYPE=$Configuration",
-    "-DCMAKE_TRY_COMPILE_CONFIGURATION=$Configuration", '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF',
-    "-DCMAKE_MSVC_RUNTIME_LIBRARY=$($manifest.runtime)", '-DMINVEX_QUICKSTART_BUILD_EXTRAS=OFF')
+if ($Configuration -eq 'Release' -and $manifest.runtime -eq 'MultiThreadedDLL') {
+    Invoke-HeadlessCMake @('-S', (Join-Path $SdkData 'examples/QuickStart'),
+        '--preset', 'windows-release', '-B', $headlessBuild, "-DMinvex_ROOT=$localizedSdk",
+        '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF')
+} else {
+    Invoke-HeadlessCMake ($options + @('-B', $headlessBuild, '-DMINVEX_QUICKSTART_BUILD_EXTRAS=OFF'))
+}
 Invoke-HeadlessCMake @('--build', $headlessBuild)
 $headlessObject = Join-Path $headlessBuild 'CMakeFiles/minvex_quickstart.dir/Main.cpp.obj'
 $headlessTimestamp = (Get-Item -LiteralPath $headlessObject).LastWriteTimeUtc
+Invoke-HeadlessCMake @('--build', $headlessBuild)
+if ((Get-Item -LiteralPath $headlessObject).LastWriteTimeUtc -ne $headlessTimestamp) {
+    throw 'The unchanged headless Quick Start unexpectedly rebuilt.'
+}
 Add-Content -LiteralPath $SdkHeader -Value '// Minvex SDK headless dependency rebuild probe'
 Invoke-HeadlessCMake @('--build', $headlessBuild)
 if ((Get-Item -LiteralPath $headlessObject).LastWriteTimeUtc -le $headlessTimestamp) {

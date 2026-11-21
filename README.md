@@ -41,6 +41,16 @@ cmake --build --preset windows-release
 
 Quick Start를 다른 위치에 복사했다면 구성 전에 `$env:MINVEX_SDK_ROOT = "<sdk>"`를 지정하고 구성 명령에 `-B <빌드 경로>`를 추가합니다. 이 경우 `cmake --build <빌드 경로>`로 빌드합니다. 설치 폴더가 깊어 Windows 경로 길이 한도에 걸릴 때도 짧은 빌드 경로를 지정할 수 있습니다.
 
+Windows 프리셋은 Developer PowerShell에 연결된 Visual Studio의 Ninja를 먼저 찾습니다. 설치 경로에 시스템 코드 페이지로 표현할 수 없는 문자가 있으면 `ninja -t wincodepage`에서 `UTF-8`을 보고하는 Ninja를 사용합니다. 구성할 때 `-DCMAKE_MAKE_PROGRAM=<ninja.exe 경로>`로 직접 지정할 수 있습니다.
+
+콘솔이 없는 Windows 자동화에서 한글 경로를 사용하려면 Quick Start의 `Invoke-MinvexCMake.ps1`로 구성과 빌드를 실행합니다. 스크립트는 MSVC가 경로를 UTF-8로 출력할 수 있도록 보이지 않는 콘솔을 준비합니다.
+
+```powershell
+$minvexCMake = (Get-Command cmake.exe).Source
+./Invoke-MinvexCMake.ps1 -CMake $minvexCMake -CMakeArguments @('--preset', 'windows-release')
+./Invoke-MinvexCMake.ps1 -CMake $minvexCMake -CMakeArguments @('--build', '--preset', 'windows-release')
+```
+
 **macOS Apple Silicon arm64**에서는 Release 구성과 SDK 경로를 지정합니다.
 
 ```sh

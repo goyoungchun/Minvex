@@ -9,6 +9,10 @@ on:
         type: string
         required: true
         default: v1.0.5
+      verify_existing:
+        description: Verify archives from this revision for an existing release
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -16,6 +20,8 @@ concurrency:
   cancel-in-progress: false
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_SOURCE: ${{ inputs.verify_existing && github.sha || inputs.tag || github.ref_name }}
+  VERIFY_EXISTING: ${{ inputs.verify_existing }}
 jobs:
   sdk:
     strategy:
@@ -26,11 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_SOURCE }}
+          fetch-depth: ${{ inputs.verify_existing && '0' || '1' }}
       - name: Verify tagged source and native architecture
         shell: pwsh
         run: |
           if ($IsMacOS -and (uname -m) -ne 'arm64') { throw 'macOS release requires native arm64.' }
+          if ($env:VERIFY_EXISTING -eq 'true') {
+            git merge-base --is-ancestor "refs/tags/$env:RELEASE_TAG" HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'The verification revision must descend from the release tag.' }
+          }
           cmake "-DRELEASE_TAG=$env:RELEASE_TAG" -P cmake/VerifyReleaseVersion.cmake
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $options = @('-S', '.', '-B', 'out/release', '-DCMAKE_BUILD_TYPE=Release', '-DBUILD_TESTING=ON', '-DMINVEX_INSTALL_DOCS=ON')
@@ -67,7 +78,7 @@ jobs:
           pattern: Minvex-*
           path: release-assets
           merge-multiple: true
-      - name: Publish native C++ SDKs
+      - name: Verify archives and publish new releases
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -78,6 +89,10 @@ jobs:
           while IFS= read -r -d '' checksum; do
             (cd "$(dirname "$checksum")" && sha256sum --check "$(basename "$checksum")")
           done < <(find release-assets -type f -name '*.sha256' -print0)
+          if [[ "$VERIFY_EXISTING" == true ]]; then
+            gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' | grep -x false
+            exit 0
+          fi
           cat > release-notes.txt <<'NOTES'
           Minvex is a lightweight C++20 graphics SDK for Windows x64 / D3D11 and macOS 14+ / Apple Silicon arm64 / Metal.
 
