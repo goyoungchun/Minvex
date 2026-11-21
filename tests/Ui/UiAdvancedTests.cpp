@@ -96,6 +96,17 @@ void RuntimeText() {
     ui.Remove(id).Value();
     ui.Undo().Value();
     Check(ui.Rasterize(400,120).Value()==authoredPixels,"undo removal restores authored text only");
+
+    UiCanvas wrapped;
+    label.Layout.HeightSizing=UiSizing::Hug;
+    label.Layout.MaxWidth=125;
+    label.Typography.Vertical=UiAlign::Start;
+    const auto wrappedId=wrapped.Add(label).Value();
+    const auto shortHeight=Box(wrapped,wrappedId).Height;
+    wrapped.SetRuntimeText(wrappedId,"덮개를 분리한 뒤 내부 기어의 맞물림과 회전 상태를 확인하세요.").Value();
+    Check(Box(wrapped,wrappedId).Height>shortHeight*2,"wrapped Hug height uses runtime text instead of authored runs");
+    wrapped.SetRuntimeText(wrappedId,"").Value();
+    Check(Box(wrapped,wrappedId).Height<shortHeight,"empty runtime text collapses wrapped Hug height");
 #endif
 }
 void History() {

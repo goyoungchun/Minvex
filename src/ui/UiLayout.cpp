@@ -73,7 +73,7 @@ class LayoutEngine {
                 naturalW=std::max(cw,absoluteW)+c.Padding[0]+c.Padding[2];naturalH=std::max(ch,absoluteH)+c.Padding[1]+c.Padding[3];
             }
             if (l.WidthSizing==UiSizing::Hug) {w=Limit(e,naturalW,true);}if (l.HeightSizing==UiSizing::Hug) {h=Limit(e,naturalH,false);}
-            if (l.HeightSizing==UiSizing::Hug&&e.Kind!=UiKind::Panel&&!e.Number&&HasText(e)&&e.Typography.Wrap) {h=Limit(e,NativeMeasure(e,directory_,w,context_)[1],false);}
+            if (l.HeightSizing==UiSizing::Hug&&l.WidthSizing==UiSizing::Hug&&e.Kind!=UiKind::Panel&&!e.Number&&e.Typography.Wrap) {h=Limit(e,MeasureText(e,w)[1],false);}
         }
         return measurements_.emplace(key,std::array{w,h}).first->second;
     }

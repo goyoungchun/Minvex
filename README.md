@@ -16,7 +16,72 @@ Minvex is a lightweight C++20 graphics SDK for integrating 3D rendering into C++
 Supports glTF/GLB, OBJ, FBX, scenes, skeletal animation, and rendering diagnostics.  
 Offers Standalone, Embedded, and Editor modes with Low, Medium, High, and Custom quality settings.
 
-## 빠른 설치 및 실행
+## C++ 프로젝트에 연결
+
+| 하려는 작업 | CMake 타깃 | 첫 헤더 |
+|---|---|---|
+| Minvex가 관리하는 창에 3D 표시 | `minvex::viewer` | `<minvex/Viewer.h>` |
+| 앱의 D3D11 또는 Metal 타깃에 렌더링 | `minvex::embedded` | `<minvex/EmbeddedRenderer.h>` |
+| 창 없이 모델 로드·검사 | `minvex::assets` | `<minvex/Asset.h>` |
+| 장면을 구성하고 저장·불러오기 | `minvex::scene_io` | `<minvex/SceneIO.h>` |
+
+### 설치 SDK로 첫 장면 실행
+
+Windows x64 또는 macOS Apple Silicon arm64용 네이티브 Release SDK를 쓰기 가능한 폴더에 풉니다. 아래 명령에서 `<sdk>`를 SDK 루트 경로로 바꿉니다. CMake 3.24 이상과 Ninja가 필요합니다.
+
+**Windows x64**에서는 ZIP 이름의 `MSVC-19.xx`와 같은 버전 계열의 Developer PowerShell x64를 엽니다. 설치된 Quick Start의 프리셋이 SDK 경로, Release 구성, `/MD` 런타임, Release 컴파일러 검사를 설정합니다. 빌드 결과는 SDK 루트의 `build`에 생성됩니다.
+
+```powershell
+$minvexSdk = "<sdk>"
+Set-Location "$minvexSdk/share/minvex/examples/QuickStart"
+cmake --preset windows-release
+cmake --build --preset windows-release
+& "$minvexSdk/build/windows-release/minvex_quickstart.exe" --frames 3
+```
+
+Quick Start를 다른 위치에 복사했다면 구성 전에 `$env:MINVEX_SDK_ROOT = "<sdk>"`를 지정하고 구성 명령에 `-B <빌드 경로>`를 추가합니다. 이 경우 `cmake --build <빌드 경로>`로 빌드합니다. 설치 폴더가 깊어 Windows 경로 길이 한도에 걸릴 때도 짧은 빌드 경로를 지정할 수 있습니다.
+
+**macOS Apple Silicon arm64**에서는 Release 구성과 SDK 경로를 지정합니다.
+
+```sh
+cmake -S "<sdk>/share/minvex/examples/QuickStart" -B quickstart-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 "-DCMAKE_PREFIX_PATH=<sdk>" -DMINVEX_QUICKSTART_BUILD_EXTRAS=OFF
+cmake --build quickstart-build
+./quickstart-build/minvex_quickstart --frames 3
+```
+
+`--frames`를 생략하면 창을 닫을 때까지 회전하는 큐브를 표시합니다. 모델 경로를 첫 인자로 주면 해당 모델을 표시합니다.
+
+앱 코드에서 실제 렌더 프레임 수와 제출 통계는 `Viewer::GetTelemetry()`로 확인합니다. [Viewer 실행 검사](docs/API.md#viewer-실행-검사)
+
+#### GLB 정비 매뉴얼 실행
+
+Windows의 설치된 Quick Start 디렉터리에서 전체 예제 프리셋을 구성하고 정비 매뉴얼을 실행합니다. **이전**, **다음** 버튼으로 분해·조립 순서를 살펴보고 **모델 교체** 버튼으로 GLB를 바꿉니다. 모델 영역은 드래그로 회전하고 휠로 확대·축소합니다. 안내 패널에서 휠을 돌리면 부품 목록이 스크롤됩니다.
+
+```powershell
+cmake --preset windows-release-examples
+cmake --build --preset windows-release-examples --target minvex_maintenance
+& "$minvexSdk/build/windows-release-examples/minvex_maintenance.exe" ../assets/MaintenanceGearbox.glb --replacement ../assets/MaintenanceGearboxAlt.glb
+```
+
+macOS에서는 위 Ninja 구성에서 `MINVEX_QUICKSTART_BUILD_EXTRAS=ON`을 지정하고 `minvex_maintenance` 타깃을 빌드합니다. 실행 파일에 SDK의 `share/minvex/examples/assets`에 있는 GLB 경로를 전달합니다. 자체 GLB를 연결하는 기준은 API 문서에서 확인할 수 있습니다. [정비 매뉴얼 Quick Start](docs/API.md#glb-정비-매뉴얼-quick-start)
+
+### 기존 CMake 앱에 추가
+
+프로젝트의 `CMakeLists.txt`에서 실제 앱 타깃 이름으로 `my_app`을 바꿉니다. 창 또는 네이티브 렌더링이 필요할 때 `graphics` component를 요청하면 CPU 전용 SDK를 구성 단계에서 구분할 수 있습니다.
+
+```cmake
+find_package(Minvex 1.0 CONFIG REQUIRED COMPONENTS viewer graphics)
+include("${Minvex_DIR}/MinvexMSVCDependencies.cmake" OPTIONAL)
+target_link_libraries(my_app PRIVATE minvex::viewer)
+```
+
+SDK 경로를 `CMAKE_PREFIX_PATH`에 추가하고 SDK와 같은 빌드 구성을 선택합니다. Release SDK를 다중 구성 생성기에서 쓰려면 `-DCMAKE_CONFIGURATION_TYPES=Release`로 구성한 뒤 `cmake --build build --config Release`로 빌드합니다.
+
+위 `include()`는 MSVC·Ninja에서 설치 헤더 변경을 추적하는 데 필요한 `/showIncludes` 접두사를 설정합니다. Windows Release SDK의 초기 컴파일러 검사에서 `C1902`가 발생하면 새 빌드 디렉터리에서 `-DCMAKE_TRY_COMPILE_CONFIGURATION=Release`를 지정합니다. [CMake 컴파일러 검사 구성](https://cmake.org/cmake/help/latest/variable/CMAKE_TRY_COMPILE_CONFIGURATION.html)
+
+SDK의 컴파일러, 아키텍처, 빌드 구성, component는 기본 경로 `share/minvex/sdk-manifest.json`에서 확인할 수 있습니다. 작업별 API와 설치 예제는 [SDK 통합 안내](docs/API.md#sdk-연결)를 참고하세요.
+
+## 소스에서 빌드 및 실행
 
 ### Windows
 **CMake 3.24+, C++20 컴파일러, Ninja, Developer PowerShell x64**
@@ -43,58 +108,13 @@ cmake --build --preset macos-release --parallel 4
 ./out/build/macos-release/bin/minvex_editor
 ```
 
-### 기존 C++ 프로젝트에 SDK 연결
-**CMake 설치 및 `minvex::viewer` 연결**
-
-Windows 릴리스 ZIP 이름의 `MSVC-19.xx`가 필요한 컴파일러 버전 계열입니다. Developer PowerShell x64에서 `cl /Bv`로 확인하고, 같은 `major.minor`의 MSVC와 아키텍처·빌드 구성·C++ 런타임을 사용합니다. 컴파일러 버전이 다르면 `find_package(Minvex)`가 SDK와 현재 컴파일러 버전을 표시합니다. 일치하는 도구 집합을 선택하거나 같은 릴리스 태그에서 현재 컴파일러로 Minvex를 빌드할 수 있습니다.
+### 로컬 SDK 설치
 
 ```powershell
 cmake --install out/build/windows-release --config Release --prefix out/sdk-native
 ```
 
-```cmake
-find_package(Minvex 1.0 CONFIG REQUIRED COMPONENTS viewer graphics)
-add_executable(my_viewer main.cpp)
-target_link_libraries(my_viewer PRIVATE minvex::viewer)
-```
-
-이 소스에서 설치한 SDK의 `MinvexMSVCDependencies.cmake`를 `find_package()` 뒤에 `include("${Minvex_DIR}/MinvexMSVCDependencies.cmake")`로 불러오면 MSVC와 Ninja의 `/showIncludes` 접두사를 맞출 수 있습니다. 구성과 빌드에는 같은 MSVC 언어 환경을 사용합니다. 아래 설치 SDK Quick Start에는 이 단계가 포함돼 있습니다.
-
-```powershell
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
-  -DCMAKE_TRY_COMPILE_CONFIGURATION=Release "-DCMAKE_PREFIX_PATH=C:/path/to/out/sdk-native"
-cmake --build build
-```
-
-Windows에서 아직 구성하지 않은 빌드 디렉터리를 사용합니다. `CMAKE_TRY_COMPILE_CONFIGURATION=Release`는 `find_package(Minvex)` 이전에 실행되는 컴파일러 검사에도 Release를 적용합니다. `CMAKE_BUILD_TYPE=Release`를 지정했는데도 초기 검사가 `/Zi`·`/MDd`를 사용하며 `C1902`로 중단되면 새 빌드 디렉터리에서 위 명령으로 다시 구성합니다. [CMake 컴파일러 검사 구성](https://cmake.org/cmake/help/latest/variable/CMAKE_TRY_COMPILE_CONFIGURATION.html)
-
-### 설치 SDK로 장면과 UI 시작
-
-이 소스에서 설치한 네이티브 SDK의 `share/minvex/examples/QuickStart`에서 C++20 예제를 빌드합니다.
-
-- `minvex_fitting`은 절차적 마네킹과 의상으로 숫자 입력, 모델 교체, 3D 경계 상자 선택을 보여 줍니다. 가슴 너비를 cm로 입력하고 의상을 클릭해 여유량 행을 강조합니다. 버튼으로 티셔츠와 재킷을 바꾸면 카메라를 유지하면서 3D 치수선을 갱신합니다.
-- `minvex_quickstart_skinning`은 모델 파일 없이 두 본과 가중치로 팔꿈치를 굽힙니다. **Space**로 재생하고 **Shift+Space**로 정지하면 첫 자세로 돌아옵니다.
-- `minvex_quickstart_capture`는 같은 팔을 화면 밖에서 렌더링합니다. 현재 디렉터리에 `straight.ppm`과 `bent.ppm`을 저장하고 실루엣 변화와 정지 후 복원을 확인합니다.
-- `minvex_quickstart_procedural`은 `MakeCube()`로 만든 팔을 Scene 관절의 자식으로 배치합니다. **Space**와 **Shift+Space**로 관절을 돌립니다.
-- `minvex_quickstart`는 GLB를 로드해 프레임 경과 시간에 따라 모델을 회전합니다.
-
-```powershell
-$sdk = "C:/path/to/extracted/Minvex-SDK"
-cmake -S "$sdk/share/minvex/examples/QuickStart" -B quickstart-build -G Ninja -DCMAKE_BUILD_TYPE=Release `
-  -DCMAKE_TRY_COMPILE_CONFIGURATION=Release "-DCMAKE_PREFIX_PATH=$sdk"
-cmake --build quickstart-build
-./quickstart-build/minvex_fitting.exe
-./quickstart-build/minvex_quickstart_skinning.exe
-./quickstart-build/minvex_quickstart_capture.exe
-./quickstart-build/minvex_quickstart_procedural.exe
-./quickstart-build/minvex_quickstart.exe "$sdk/share/minvex/examples/assets/SharedBox.glb"
-```
-
-macOS에서는 실행 파일 이름의 `.exe`를 뺍니다. Viewer를 띄우는 예제에 `--frames 3`을 전달하면 세 프레임을 렌더링한 뒤 자동 종료합니다.
-
-`minvex_fitting --exercise --frames 3`은 실측 입력, 클릭과 드래그, 모델 교체를 재현합니다. 적용된 Low·1280×720, 장면·UI·치수선 렌더링을 확인하고 프레임 수와 렌더 해상도를 출력합니다.
-
-같은 절차적 장면을 Emscripten으로 빌드해 브라우저에서 버튼으로 조작할 수 있습니다. [C++ 장면 연결](docs/API.md#c-장면-연결)
+macOS에서는 `out/build/macos-release`를 사용합니다. 설치한 SDK의 `out/sdk-native`를 `CMAKE_PREFIX_PATH`에 지정합니다.
 
 ## 분야별 지원 기능
 

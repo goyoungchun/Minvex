@@ -110,3 +110,34 @@ if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $object).LastWriteTimeUtc -le
     throw 'Ninja did not recompile the Quick Start after changing the installed Viewer.h.'
 }
 Write-Host 'Verified Korean MSVC /showIncludes and incremental rebuild from an installed SDK header.'
+
+function Invoke-HeadlessCMake([string[]]$Arguments) {
+    $info = [System.Diagnostics.ProcessStartInfo]::new($CMake)
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "Headless Korean Ninja CMake failed with exit code $($process.ExitCode)."
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+$headlessBuild = Join-Path $verificationRoot '콘솔 없는 빌드'
+Invoke-HeadlessCMake @('-S', (Join-Path $SdkData 'examples/QuickStart'), '-B', $headlessBuild,
+    '-G', 'Ninja', "-DCMAKE_PREFIX_PATH=$localizedSdk", "-DCMAKE_BUILD_TYPE=$Configuration",
+    "-DCMAKE_TRY_COMPILE_CONFIGURATION=$Configuration", '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF',
+    "-DCMAKE_MSVC_RUNTIME_LIBRARY=$($manifest.runtime)", '-DMINVEX_QUICKSTART_BUILD_EXTRAS=OFF')
+Invoke-HeadlessCMake @('--build', $headlessBuild)
+$headlessObject = Join-Path $headlessBuild 'CMakeFiles/minvex_quickstart.dir/Main.cpp.obj'
+$headlessTimestamp = (Get-Item -LiteralPath $headlessObject).LastWriteTimeUtc
+Add-Content -LiteralPath $SdkHeader -Value '// Minvex SDK headless dependency rebuild probe'
+Invoke-HeadlessCMake @('--build', $headlessBuild)
+if ((Get-Item -LiteralPath $headlessObject).LastWriteTimeUtc -le $headlessTimestamp) {
+    throw 'Headless Ninja did not recompile the Quick Start after changing the installed Viewer.h.'
+}
+Write-Host 'Verified headless Korean MSVC Ninja build and incremental rebuild.'

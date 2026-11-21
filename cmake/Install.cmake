@@ -49,7 +49,8 @@ set(_sdk_share "${CMAKE_INSTALL_DATADIR}/minvex")
 install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" "${PROJECT_SOURCE_DIR}/NOTICE" DESTINATION .)
 install(DIRECTORY examples/SdkConsumer DESTINATION "${_sdk_share}/examples")
 if(MINVEX_BUILD_RENDERER)
-    install(DIRECTORY examples/QuickStart DESTINATION "${_sdk_share}/examples")
+    install(DIRECTORY examples/QuickStart DESTINATION "${_sdk_share}/examples"
+        PATTERN "build" EXCLUDE PATTERN "CMakeUserPresets.json" EXCLUDE)
 endif()
 install(FILES examples/EmbeddedViewer/MainD3D11.cpp examples/EmbeddedViewer/MainMetal.mm
     DESTINATION "${_sdk_share}/examples/EmbeddedViewer")
@@ -58,13 +59,26 @@ install(FILES examples/UiOverlay/Main.cpp DESTINATION "${_sdk_share}/examples/Ui
 install(FILES examples/Equipment/Main.cpp examples/Equipment/EquipmentScene.h examples/Equipment/Diagnostics.h
     DESTINATION "${_sdk_share}/examples/Equipment")
 install(DIRECTORY examples/assets/ DESTINATION "${_sdk_share}/examples/assets")
-install(DIRECTORY benchmarks/ DESTINATION "${_sdk_share}/benchmarks")
+# Keep the paired AI experiment aggregator with its source-side checks.
+install(DIRECTORY benchmarks/ DESTINATION "${_sdk_share}/benchmarks"
+    PATTERN "EvaluateAiUsage.ps1" EXCLUDE)
 # Install only public product documentation; local planning documents stay local.
 option(MINVEX_INSTALL_DOCS "Include README and API reference in the SDK" ON)
 if(MINVEX_INSTALL_DOCS)
     install(FILES README.md DESTINATION .)
     install(FILES assets/branding/Minvex_banner_transparent.png DESTINATION assets/branding)
-    install(FILES docs/API.md DESTINATION docs)
+    # The same reference opens source files in a checkout and public examples in an installed SDK.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/docs/API.md")
+    file(READ "${PROJECT_SOURCE_DIR}/docs/API.md" _sdk_api)
+    if(NOT MINVEX_BUILD_RENDERER)
+        string(REGEX REPLACE "\\[([^]\r\n]+)\\]\\(\\.\\./examples/QuickStart/[^)]+\\)" "\\1" _sdk_api "${_sdk_api}")
+    endif()
+    file(RELATIVE_PATH _sdk_examples_link "${CMAKE_CURRENT_BINARY_DIR}/docs" "${CMAKE_CURRENT_BINARY_DIR}/${_sdk_share}/examples")
+    file(RELATIVE_PATH _sdk_include_link "${CMAKE_CURRENT_BINARY_DIR}/docs" "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_INSTALL_INCLUDEDIR}")
+    string(REGEX REPLACE "\\]\\(\\.\\./examples/([^)]+)\\)" "](<${_sdk_examples_link}/\\1>)" _sdk_api "${_sdk_api}")
+    string(REGEX REPLACE "\\]\\(\\.\\./include/([^)]+)\\)" "](<${_sdk_include_link}/\\1>)" _sdk_api "${_sdk_api}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/docs/API.md" "${_sdk_api}")
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/docs/API.md" DESTINATION docs)
 endif()
 install(FILES third_party/versions.json DESTINATION "${_sdk_share}/licenses")
 install(FILES third_party/cgltf/LICENSE DESTINATION "${_sdk_share}/licenses" RENAME cgltf-LICENSE)
@@ -80,8 +94,11 @@ if(MINVEX_BUILD_RENDERER)
 endif()
 
 set(MINVEX_PACKAGE_FLAVOR cpu)
+string(JOIN "\", \"" _sdk_manifest_components ${_sdk_public})
+set(_sdk_manifest_components "\"${_sdk_manifest_components}\"")
 if(MINVEX_BUILD_RENDERER)
     set(MINVEX_PACKAGE_FLAVOR native)
+    string(APPEND _sdk_manifest_components ", \"graphics\"")
 endif()
 configure_file("${CMAKE_CURRENT_LIST_DIR}/sdk-manifest.json.in"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/sdk-manifest.json.in" @ONLY)

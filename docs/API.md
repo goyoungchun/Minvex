@@ -1,6 +1,6 @@
 # Minvex API
 
-**C++20 Graphics SDK · Version 1.0.4 · Namespace `lv`**
+**C++20 Graphics SDK · Version 1.0.5 · Namespace `lv`**
 
 모듈별 주요 타입과 API를 정리한 사용 안내임. 전체 선언은 연결된 공개 헤더에서 확인할 수 있음.
 
@@ -10,11 +10,22 @@
 
 ```cmake
 find_package(Minvex 1.0 CONFIG REQUIRED COMPONENTS viewer graphics)
+include("${Minvex_DIR}/MinvexMSVCDependencies.cmake" OPTIONAL)
 add_executable(my_viewer main.cpp)
 target_link_libraries(my_viewer PRIVATE minvex::viewer)
 ```
 
-필요한 모듈을 `minvex::<모듈명>`으로 연결함. CPU 도구는 `assets`·`animation`·`scene_io`, Host 통합은 `embedded`, 편집 상태 관리는 `editor_document` 등을 사용함. `graphics`는 그래픽 SDK 여부를 검사하는 component임.
+| 통합 목적 | 요청할 component | 관련 예제 |
+|---|---|---|
+| 독립 창과 카메라·입력 | `viewer graphics` | [Standalone Viewer](#standalone-viewer) |
+| 앱이 관리하는 GPU 타깃에 그리기 | `embedded graphics` | [Embedded Runtime](#embedded-runtime) |
+| 모델 검사·변환, 장면 파일 입출력 | `assets` 또는 `scene_io` | [CPU 소비자](../examples/SdkConsumer/Cpu.cpp) · [Asset 로딩과 Scene 구성](#asset-로딩과-scene-구성) |
+| 본·포즈·클립 평가 | `animation` | [Pose Blending Core](#pose-blending-core) |
+| UI와 Scene·애니메이션 조작 | `viewer graphics` | [화면 UI](#화면-ui) |
+
+각 모듈을 `minvex::<모듈명>`으로 연결합니다. `graphics`는 네이티브 그래픽 SDK를 확인하는 component입니다. `viewer`와 `embedded`는 CPU 패키지에서도 연결할 수 있고, 이 구성에서 창이나 GPU가 필요한 호출은 `UnsupportedFeature`를 반환합니다. MSVC·Ninja에서는 위의 설치 모듈을 `find_package()` 뒤에 불러와 헤더 의존성 추적을 설정합니다.
+
+설치 SDK의 `Minvex_DATA_DIR` CMake 변수는 예제·라이선스·`sdk-manifest.json`이 있는 디렉터리를 가리킵니다. manifest의 `components` 배열에서 해당 패키지에 요청할 수 있는 component를 확인할 수 있습니다. Windows SDK에는 필요한 MSVC `major.minor`가 `msvcToolset`에 기록됩니다. `find_package()`가 다른 MSVC 계열을 진단하면 SDK에 맞는 도구 집합을 선택하거나 같은 릴리스 태그를 현재 컴파일러로 빌드합니다.
 
 공개 헤더 경로는 `<minvex/...>`, CMake 옵션 접두사는 `MINVEX_`, SDK 데이터 경로는 `share/minvex`임. 이전 이름의 패키지·타깃·헤더 별칭은 제공하지 않으므로 SDK 소비자는 참조를 갱신하고 다시 빌드해야 함. 문서 형식은 새 저장 시 Minvex 식별자를 쓰며 이름 변경 이전의 Scene·Pose·Quality·Editor 설정 식별자는 읽기 호환을 유지함. C++ 네임스페이스는 기존 `lv`를 사용함.
 
@@ -255,11 +266,36 @@ int main() {
 
 기본값은 1280×720, VSync·기본 입력·자동 Focus 활성화, Medium 품질임. `ViewerRunOptions::OnFrame`에서 Scene을 갱신할 수 있으며 `PlayAnimation()`으로 재생 중인 애니메이션은 기본적으로 callback 전에 진행합니다. 직접 진행하려면 `AdvanceAnimations=false`로 설정하고 `Scene::UpdateAnimations()`를 한 번 호출합니다. `ViewerFrameInfo::DeltaTimeSeconds`는 업데이트 사이의 경과 시간을 최대 0.25초로 제한한 값입니다. 이동 속도가 초당 단위라면 이 값을 곱해 프레임별 변위를 구합니다.
 
-설치 SDK의 `share/minvex/examples/QuickStart`에는 Viewer와 Embedded 예제를 공개 CMake 타깃으로 빌드하는 프로젝트가 있습니다. [빠른 시작 빌드 명령](../README.md#설치-sdk로-움직이는-장면-시작)
+네이티브 SDK의 `share/minvex/examples/QuickStart`를 `MINVEX_QUICKSTART_BUILD_EXTRAS=OFF`로 구성하면 `minvex_quickstart`만 빌드합니다. 첫 인자가 없으면 `MakeCube()`로 생성한 메시를 `Scene::AddModel()`로 배치합니다. GLB, glTF, OBJ 또는 FBX 경로를 주면 `Viewer::AddModel()`로 로드합니다. 두 경로 모두 `OnFrame`에서 경과 시간에 따라 회전합니다. [Quick Start 소스](../examples/QuickStart/Main.cpp) · [빌드 명령](../README.md#설치-sdk로-첫-장면-실행)
+
+기본 구성에서는 다음 예제도 빌드합니다.
+
+| 실행 파일 | 통합 기능 |
+|---|---|
+| `minvex_quickstart_procedural` | `MakeCube()`, 부모·자식 Transform, 입력에 따른 관절 회전과 실시간 텍스트 |
+| `minvex_quickstart_skinning` | 두 본과 정점 가중치, **Space** 재생 및 **Shift+Space** 정지 |
+| `minvex_quickstart_capture` | Embedded 렌더링, `straight.ppm`·`bent.ppm` 비교 |
+| `minvex_fitting` | 숫자 입력, 객체 피킹, 모델 교체와 치수선 갱신. `--exercise --frames 3`으로 입력·교체를 재현 |
+| `minvex_maintenance` | GLB 부품별 단계 이동·가시성·강조, 모델 교체, 한글 안내 및 부품 목록 |
+
+#### GLB 정비 매뉴얼 Quick Start
+
+`minvex_maintenance <assembly.glb> [--replacement <variant.glb>]`는 강체 모델 한 개를 절차의 부품 단위로 나눠 표시합니다. 설치 SDK에는 샘플 `MaintenanceGearbox.glb`와 같은 ID를 다른 노드 순서로 구성한 `MaintenanceGearboxAlt.glb`가 포함됩니다. 두 경로와 `--exercise`를 전달하면 Viewer에서 정·역순 전환, 이동 중 역전, 연속 입력, 모델 교체를 자동으로 재현하고 종료합니다. [실행 명령](../README.md#glb-정비-매뉴얼-실행)
+
+- **부품 ID.** GLB의 렌더링 노드 이름을 애플리케이션의 지속 ID로 사용합니다. 샘플은 `housing`, `cover`, `drive_gear`, `driven_gear`, `bolt_fl`, `bolt_fr`, `bolt_bl`, `bolt_br`를 각각 한 번 요구합니다. 부모 그룹의 이름은 자유입니다. 노드 순서와 메시 이름은 바꿀 수 있습니다. 입력의 누락·중복·추가 렌더링 노드나 강체 계약 위반은 로드 오류로 처리합니다. 부모 변환이 포함된 `ModelPart::Transform`은 TRS로 분해 가능해야 합니다. 자체 제품의 부품 구성이나 좌표계가 다르면 ID 목록, 단계별 상태, 이동 방향과 거리를 제품에 맞춰 정의합니다. [부품 매핑 소스](../examples/QuickStart/MaintenanceModel.h)
+- **Scene 연결.** 실행할 때 ID를 `Scene::AddModel()`로 받은 `ObjectId`에 연결합니다. 같은 GLB 메시를 쓰는 노드는 하나의 불변 `ModelHandle`을 공유하며, 이동·숨김·재질 강조는 각 `ObjectId`에 적용합니다. 모델 교체는 새 후보의 모든 부품을 검사한 뒤 `Scene::SetModel()`로 기존 객체에 연결합니다. 같은 단계의 위치·가시성·재질을 새 모델에 다시 적용하고 카메라를 유지합니다.
+- **단계 전환.** `UiCanvas::PollActivations()`를 순서대로 읽어 새 목표 단계를 정합니다. 새 움직임은 마지막으로 Scene에 적용한 위치에서 시작해 `ViewerFrameInfo::DeltaTimeSeconds`로 진행합니다. 단계 종료 위치는 GLB 조립 자세를 기준으로 계산하고, 분리된 부품은 목표 위치에 도달할 때 숨깁니다. 이전 단계로 돌아가면 그 위치에서 부품을 다시 표시합니다. [단계 전환 소스](../examples/QuickStart/Maintenance.cpp)
+- **한글 레이아웃.** 논리 창 크기를 기준으로 패널 너비와 안내 글자 크기를 조절합니다. 안내문은 `WidthSizing=Fill`과 `HeightSizing=Hug`로 줄 수가 달라질 때 높이를 다시 계산합니다. 샘플은 U+2060 WORD JOINER로 어절 내부의 줄바꿈을 억제하고 공백에서 줄을 나눕니다. 글자 크기와 최소 패널 너비는 가장 긴 어절이 들어가도록 선택합니다. 설명과 부품 목록은 세로 스크롤 영역에 두고 단계 버튼은 패널 하단에 둡니다. [UI 소스](../examples/QuickStart/Maintenance.cpp)
 
 macOS Metal에서 `VSync=false`는 display sync 해제를 요청함. `OnFrame` 호출 빈도와 표시 FPS는 OS의 display callback 및 창 가림 상태의 영향을 받을 수 있으므로, 이 옵션만으로 주사율을 넘는 무제한 FPS를 보장하지 않음.
 
 Standalone·Editor의 기본 창 아이콘은 실행 파일에 포함되며 별도 이미지 파일이나 실행 디렉터리에 의존하지 않음.
+
+#### Viewer 실행 검사
+
+`ViewerRunOptions::FrameLimit`을 지정하면 자동 종료할 수 있습니다. `Run()` 성공 뒤 `GetTelemetry()`에서 종료 시점의 스냅샷을 읽습니다. 품질·디버그 설정을 유지하는 짧은 검사에서는 `Frames.TotalRenderedFrames`로 집계된 렌더 프레임 수를 확인할 수 있습니다.
+
+`Frames.DrawCalls`와 `Frames.Triangles`는 최근 프레임의 제출 통계이며, 해당 프레임에서 수행된 그림자·후처리·UI 작업도 포함합니다. 장면의 일반 삼각형 제출 수는 같은 스냅샷의 `Optimization.SubmittedTriangles`에서 확인합니다. 활성 그래픽 세션에서 장면 패스를 조사하려면 `GetRenderDebugInfo()`의 `Passes`에서 `Scene`을 찾습니다. `OnFrame`은 다음 제출 전에 실행되므로 이 콜백에서 조회하는 진단은 이전 제출까지 반영합니다. 인스턴싱을 사용하면 여러 객체를 한 번의 draw call로 제출할 수 있습니다.
 
 ### 파일 없이 스켈레탈 메시 만들기
 
@@ -272,7 +308,7 @@ Standalone·Editor의 기본 창 아이콘은 실행 파일에 포함되며 별�
 | 역바인드 행렬 | 예제 정점은 모델 공간에 있습니다. 각 슬롯에는 해당 본의 모델 공간 바인드 행렬을 역행렬로 넣습니다. 팔꿈치의 바인드 행렬은 X축으로 1만큼 이동하므로 역바인드는 X축으로 −1만큼 이동합니다. 렌더러는 현재 본의 모델 공간 행렬과 역바인드를 곱해 정점에 적용합니다. |
 | 메시 연결과 재생 | 메시 프리미티브에 `HasSkinning`을 설정하고 렌더링하는 `ModelPart`에 메시 노드와 스킨 인덱스를 지정합니다. `PlayAnimation(arm, 0)`은 첫 클립을 재생하고 `StopAnimation(arm)`은 재생을 멈춰 클립의 첫 자세로 돌아갑니다. Viewer는 기본 설정에서 경과 시간에 맞춰 애니메이션을 진행합니다. |
 
-같은 형상의 공장 상자처럼 색만 다른 객체에는 동일한 `ModelHandle`을 전달합니다. `Scene::GetMaterial()`로 재질을 복사한 뒤 `BaseColor`를 변경하고 `Scene::SetMaterial()`로 인스턴스에 적용합니다. 네이티브 렌더링의 메시 업로드가 GPU 리소스 풀 한도에 도달하면 `ErrorCode::InsufficientResource`와 함께 메시·프리미티브, 리소스 종류, 점유 슬롯 수와 한도가 표시됩니다.
+같은 형상에 다른 색을 적용하는 객체에는 동일한 `ModelHandle`을 전달합니다. `Scene::GetMaterial()`로 재질을 복사한 뒤 `BaseColor`를 변경하고 `Scene::SetMaterial()`로 인스턴스에 적용합니다. 네이티브 렌더링의 메시 업로드가 GPU 리소스 풀 한도에 도달하면 `ErrorCode::InsufficientResource`와 함께 메시·프리미티브, 리소스 종류, 점유 슬롯 수와 한도가 표시됩니다.
 
 ### Animation / Cross-fade
 
@@ -579,7 +615,7 @@ auto changed = viewer.SetQuality(quality); // Result<void> 확인 필요
 
 ```sh
 python -m pip wheel . --wheel-dir out/wheels
-python -m pip install --force-reinstall out/wheels/minvex-1.0.4-cp312-cp312-win_amd64.whl
+python -m pip install --force-reinstall out/wheels/minvex-1.0.5-cp312-cp312-win_amd64.whl
 python python/examples/viewer.py examples/assets/MorphRibbon.gltf --frames 60
 ```
 
@@ -747,7 +783,7 @@ Minvex 자체 코드는 Apache-2.0을 적용함. SDK 설치 접두사 최상위�
 
 ## 지원 범위
 
-이 문서는 SDK 1.0.4의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
+이 문서는 SDK 1.0.5의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
 
 CPU-only 구성의 native 초기화·실행은 `UnsupportedFeature`를 반환함.
 

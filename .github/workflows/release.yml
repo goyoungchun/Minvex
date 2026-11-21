@@ -8,7 +8,7 @@ on:
         description: Existing release tag to build and publish
         type: string
         required: true
-        default: v1.0.4
+        default: v1.0.5
 permissions:
   contents: read
 concurrency:
@@ -87,12 +87,11 @@ jobs:
 
           The Windows archive filename includes the required MSVC compiler major.minor (for example, MSVC-19.51). Check your compiler with cl /Bv. If the versions differ, select the matching MSVC toolset or build the SDK from this release tag with your compiler.
 
-          New in 1.0.4
+          New in 1.0.5
 
-          - Number inputs support decimal values, display units, inclusive bounds, and distinct empty and invalid states.
-          - Standalone Viewer exposes bounds picking through Viewer::PickObject(). Pass a logical window position to get the nearest visible object's ID or NoObject.
-          - The fitting Quick Start combines numeric UI, picking, model swaps, camera preservation, and dimension lines in one C++ program.
-          - The Windows Ninja setup guide uses CMAKE_TRY_COMPILE_CONFIGURATION=Release for initial compiler checks.
+          - The maintenance Quick Start maps persistent GLB node names to scene objects. It shows reversible disassembly, smooth retargeting during a move, and model replacement that preserves the stage and camera.
+          - The Korean directions reflow at word boundaries and the parts list scrolls independently of the navigation buttons. Runtime text changes now update the measured height of wrapping labels.
+          - The installed Windows Quick Start includes Ninja presets for Release and the matching MSVC runtime. The basic Viewer opens a procedural cube when no model path is supplied. The SDK manifest lists the available CMake components.
 
           The examples are in share/minvex/examples/QuickStart.
 

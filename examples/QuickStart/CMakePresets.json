@@ -1,0 +1,32 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-release",
+      "displayName": "Windows x64 Release SDK (Developer PowerShell)",
+      "generator": "Ninja",
+      "architecture": { "value": "x64", "strategy": "external" },
+      "binaryDir": "${sourceDir}/../../../../build/${presetName}",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TRY_COMPILE_CONFIGURATION": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/../../../..",
+        "Minvex_ROOT": "$env{MINVEX_SDK_ROOT}",
+        "MINVEX_QUICKSTART_BUILD_EXTRAS": "OFF"
+      }
+    },
+    {
+      "name": "windows-release-examples",
+      "inherits": "windows-release",
+      "displayName": "Windows x64 Release SDK examples",
+      "cacheVariables": { "MINVEX_QUICKSTART_BUILD_EXTRAS": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "windows-release-examples", "configurePreset": "windows-release-examples" }
+  ]
+}
