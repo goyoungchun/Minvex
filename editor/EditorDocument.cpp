@@ -138,6 +138,15 @@ Result<ObjectId> EditorDocument::PlaceModel(AssetId asset, const Transform& tran
         const auto id = world_.AddModel(std::move(model),transform,parent); selection_ = id; MarkChanged(); return id;
     });
 }
+Result<void> EditorDocument::SetModel(ObjectId object, AssetId asset) {
+    return Change([&] {
+        auto model = asset ? registry_.Find(asset) : ModelHandle{};
+        if (asset && !model) { throw std::invalid_argument("Asset is not imported in this document."); }
+        if (world_.GetObject(object).Model == model) { return; }
+        world_.SetModel(object,std::move(model));
+        MarkChanged();
+    });
+}
 Result<ObjectId> EditorDocument::CreateTerrain(const TerrainGrid& grid) {
     return Change([&] {
         const auto id = world_.AddModel(MakeTerrainModel(grid));

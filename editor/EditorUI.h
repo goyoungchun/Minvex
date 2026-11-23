@@ -6,6 +6,9 @@
 #include <minvex/EditorDocument.h>
 #include <minvex/AssetLoading.h>
 #include <minvex/Terrain.h>
+#if MINVEX_EDITOR_PHYSICS
+#include "BoxPreview.h"
+#endif
 
 namespace lv::editor {
 enum class ConsoleLevel { Info, Warning, Error };
@@ -43,6 +46,7 @@ public:
     void RequestClearUi();
     void ResolveUiPending(UnsavedChoice choice);
     bool HasPendingUi() const noexcept {return uiPending_!=UiPending::None;}
+    void SetUiPreview(bool enabled) noexcept {uiPreview_=enabled;}
     bool QuitRequested() const noexcept { return quit_; }
     void SetDirectory(std::filesystem::path path) { directory_ = std::move(path); }
     void ShowError(const Error& error,ObjectId object=NoObject);
@@ -66,8 +70,11 @@ private:
     void ApplyUiPending();
     void UiUnsavedDialog();
     bool UiViewportInput(float x,float y,float width,float height,bool hovered,bool modal);
+    bool EditUiNumber(UiElement& element);
     UiId uiSelected_=NoUi;
-    bool uiDesigner_=true,uiPreview_=false,uiPointerDown_=false;
+    bool uiDesigner_=true,uiPreview_=false,uiPointerDown_=false,uiNumberFocus_=false;
+    UiId uiNumberObject_=NoUi;
+    UiNumberInput uiNumberSource_,uiNumberDraft_;
     std::string uiPath_="screen.mvxui.json",uiFontPath_="Font",uiStatus_;
     std::vector<UiFont> uiFonts_;
     enum class UiPending { None,Load,Clear,Quit } uiPending_=UiPending::None;
@@ -92,6 +99,17 @@ private:
     std::string hierarchyFilter_;
     std::array<float,4> viewportRect_{};
     int transformTool_=0;
+    bool worldTransformTool_=false, surfacePick_=false, surfacePanel_=false;
+    std::vector<SurfaceHit> surfaceHits_;
+#if MINVEX_EDITOR_PHYSICS
+    bool boxPhysics_ = false, rigidBoxes_ = false, physicsOverlay_ = false;
+    double gravitySeconds_ = 0.25, rigidSeconds_ = 0.25;
+    BoxPreviewOptions boxOptions_;
+    std::vector<BoxCollider> boxColliders_;
+    std::optional<BoxPreview> boxPreview_;
+    void BoxPhysicsPanel();
+    void UpdateBoxOverlay();
+#endif
     float crossFadeSeconds_=.3f;
     ObjectId equipmentObject_=NoObject, socketParent_=NoObject;
     SkeletonSocket socketDraft_{"Socket", ""};
@@ -120,11 +138,20 @@ private:
     bool quality_ = true;
     bool performance_ = true;
     bool assetInspector_=true,copyImport_=false;
+    struct LocalityAnalysis {
+        std::weak_ptr<const ModelAsset> Model;
+        std::size_t Mesh = 0, Primitive = 0;
+        MeshLocalityStatistics Stats;
+    };
+    std::optional<LocalityAnalysis> locality_;
+    bool analyzeOverdraw_ = false;
     bool renderDebugger_=false,animationDebugger_=false;
     int inspectedTarget_=0;
     DebugDraw editorDebugDraw_;
     bool terrainPanel_ = false, terrainContours_ = false, terrainStroke_ = false;
     int terrainColumns_ = 65, terrainRows_ = 65, terrainTool_ = 0;
+    int terrainSampleColumn_ = 0, terrainSampleRow_ = 0;
+    double terrainSampleHeight_ = 0;
     TerrainLayout terrainLayout_;
     MountainPreset mountain_;
     double terrainInterval_ = 2, brushRadius_ = 4, brushStrength_ = 1;
@@ -172,7 +199,8 @@ private:
     void Console();
     bool Save(const std::filesystem::path& path);
     bool SaveDialog(Dialog type, const std::filesystem::path& path);
-    void FrameScene();
+    void SceneHistory(bool redo = false);
+    void FrameScene(bool selected = true);
     void Dockspace();
     void Menu();
     void Hierarchy();
@@ -197,6 +225,9 @@ private:
     void ReimportAsset(AssetId asset);
     void CancelPreviewJob();
     void ViewportPanel();
+    void SurfacePanel();
+    bool SurfaceInput(float x, float y, ViewportSize size, bool hovered, bool blocked);
+    void DrawSurfaceMarks(float x, float y, ViewportSize size);
     void TransformTools(float x,float y,float width,float height,bool enabled,bool showGizmo);
     void StopCameraEdit(bool cancel);
     void Dialogs();

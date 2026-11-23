@@ -19,6 +19,15 @@ bool StyleEditor(UiStyle& s) {
     changed=ImGui::ColorEdit4("Shadow",s.Shadow.data())||changed;changed=ImGui::DragFloat("Shadow X",&s.ShadowX,.5f,-1024,1024)||changed;changed=ImGui::DragFloat("Shadow Y",&s.ShadowY,.5f,-1024,1024)||changed;changed=ImGui::DragFloat("Shadow blur",&s.ShadowBlur,.5f,0,128)||changed;changed=ImGui::SliderFloat("Opacity",&s.Opacity,0,1)||changed;return changed;
 }
 template<class T> bool InheritToggle(const char* label,std::optional<T>& value,const T& fallback) {bool override=value.has_value();if (!ImGui::Checkbox(label,&override)) {return false;}if (override) {value=fallback;}else {value.reset();}return true;}
+void OptionalNumber(const char* label, std::optional<double>& value) {
+    ImGui::PushID(label);
+    InheritToggle(label,value,0.0);
+    if (value) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputDouble("##value",&*value,0,0,"%.15g");
+    }
+    ImGui::PopID();
+}
 bool RunEditor(UiTextRun& run,const UiElement& e,const std::vector<UiFont>& fonts) {
     bool changed=ImGui::InputTextMultiline("Run text",&run.Text);changed=InheritToggle("Override color",run.Color,e.Normal.Text)||changed;if (run.Color) {changed=ImGui::ColorEdit4("Run color",run.Color->data())||changed;}
     changed=InheritToggle("Override size",run.Size,e.Typography.Size)||changed;if (run.Size) {changed=ImGui::DragFloat("Run size",&*run.Size,.5f,1,256)||changed;}
@@ -41,19 +50,70 @@ void EditorUI::RequestClearUi() {FinishUiEdit();uiPending_=UiPending::Clear;cons
 void EditorUI::ApplyUiPending() {const auto action=uiPending_;uiPending_=UiPending::None;if (action==UiPending::Load) {if (Report(Viewport.Ui.Load(uiPendingPath_))) {uiSelected_=NoUi;uiSavedPath_=uiPendingPath_;const auto text=uiPendingPath_.u8string();uiPath_={text.begin(),text.end()};const auto directory=Viewport.Ui.FontDirectory().Value().u8string();uiFontPath_={directory.begin(),directory.end()};}}else if (action==UiPending::Clear) {Report(Viewport.Ui.Clear());uiSelected_=NoUi;uiSavedPath_.clear();uiPath_="screen.mvxui.json";}else if (action==UiPending::Quit) {uiAllowQuit_=true;RequestQuit();uiAllowQuit_=false;}}
 void EditorUI::ResolveUiPending(UnsavedChoice choice) {if (choice==UnsavedChoice::Cancel) {uiPending_=UiPending::None;return;}if (choice==UnsavedChoice::Save&&!SaveUi(detail::PathFromUtf8(uiSavePath_))) {return;}ApplyUiPending();}
 void EditorUI::UiUnsavedDialog() {if (uiPending_!=UiPending::None&&error_.empty()) {ImGui::OpenPopup("Unsaved UI changes");}if (ImGui::BeginPopupModal("Unsaved UI changes",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {ImGui::TextUnformatted("Save UI changes before continuing?");ImGui::InputText("Save UI to",&uiSavePath_);if (ImGui::Button("Save UI")) {ResolveUiPending(UnsavedChoice::Save);if (uiPending_==UiPending::None) {ImGui::CloseCurrentPopup();}}ImGui::SameLine();if (ImGui::Button("Discard UI")) {ResolveUiPending(UnsavedChoice::Discard);ImGui::CloseCurrentPopup();}ImGui::SameLine();if (ImGui::Button("Cancel")) {ResolveUiPending(UnsavedChoice::Cancel);ImGui::CloseCurrentPopup();}ImGui::EndPopup();}}
+bool EditorUI::EditUiNumber(UiElement& element) {
+    if (!ImGui::CollapsingHeader("Number input",ImGuiTreeNodeFlags_DefaultOpen)) { return false; }
+    if (uiNumberObject_ != element.Id || uiNumberSource_ != *element.Number) {
+        uiNumberObject_ = element.Id;
+        uiNumberSource_ = uiNumberDraft_ = *element.Number;
+    }
+    OptionalNumber("Initial value",uiNumberDraft_.InitialValue);
+    OptionalNumber("Minimum",uiNumberDraft_.Minimum);
+    OptionalNumber("Maximum",uiNumberDraft_.Maximum);
+    ImGui::InputText("Unit",&uiNumberDraft_.Unit);
+    ImGui::BeginDisabled(uiNumberDraft_ == uiNumberSource_);
+    const bool apply = ImGui::Button("Apply number settings");
+    ImGui::EndDisabled();
+    if (apply) { element.Number = uiNumberDraft_; }
+
+    if (uiPreview_) {
+        const auto reading = Viewport.Ui.GetNumberInput(element.Id);
+        if (reading) {
+            const auto& value = reading.Value();
+            if (value.State == UiNumberState::Empty) { ImGui::TextDisabled("Preview value is empty"); }
+            else { ImGui::TextWrapped("Preview: %s%s",value.Text.c_str(),value.State == UiNumberState::Invalid ? " (invalid)" : ""); }
+        }
+        if (ImGui::SmallButton("Reset preview value")) { Report(Viewport.Ui.SetNumberInputValue(element.Id,uiNumberSource_.InitialValue)); }
+    }
+    return apply;
+}
 void EditorUI::UiDesigner() {
     if (!uiDesigner_) {FinishUiEdit();return;}if (const auto* inspector=ImGui::FindWindowByName("Inspector")) {if (inspector->DockId) {ImGui::SetNextWindowDockID(inspector->DockId,ImGuiCond_FirstUseEver);}}if (!ImGui::Begin("UI Designer",&uiDesigner_)) {FinishUiEdit();ImGui::End();return;}
     auto& canvas=Viewport.Ui;
-    ImGui::TextUnformatted("Screen UI / logical pixels");ImGui::Checkbox("Interact with buttons in viewport",&uiPreview_);
+    ImGui::TextUnformatted("Screen UI / logical pixels");ImGui::Checkbox("Interact with UI in viewport",&uiPreview_);
     const auto history=canvas.History().Value();ImGui::BeginDisabled(!history.CanUndo&&!history.Editing);if (ImGui::Button("Undo UI")) {UiUndo();}ImGui::EndDisabled();ImGui::SameLine();ImGui::BeginDisabled(!history.CanRedo);if (ImGui::Button("Redo UI")) {UiUndo(true);}ImGui::EndDisabled();ImGui::SameLine();ImGui::TextUnformatted(history.Dirty ? "Unsaved UI changes":"UI saved");
-    for (int i=0;i<3;++i) {if (i) {ImGui::SameLine();}if (ImGui::Button(i==0 ? "+ Text":i==1 ? "+ Button":"+ Panel")) {FinishUiEdit();UiElement e;e.Kind=static_cast<UiKind>(i);e.Name=i==0 ? "Text":i==1 ? "Button":"Panel";e.Text=i==0 ? "Minvex 텍스트":i==1 ? "Button":"";e.Layout.Y=24+static_cast<float>(canvas.Elements().Value().size())*64;const auto parent=canvas.Get(uiSelected_);if (parent&&parent.Value().Kind==UiKind::Panel) {e.Parent=uiSelected_;e.Layout.X=e.Layout.Y=0;}
-        if (i>0) {e.Normal.Fill.fill({.16f,.22f,.32f,1});e.Normal.Radius.fill(12);e.Normal.Shadow={0,0,0,.25f};}if (i==1) {e.Typography.Horizontal=UiAlign::Center;e.Hover=e.Normal;e.Hover->Fill.fill({.25f,.42f,.8f,1});e.Pressed=e.Normal;e.Pressed->Fill.fill({.12f,.23f,.52f,1});e.Focused=e.Normal;e.Focused->Border={.5f,.75f,1,1};e.Focused->BorderWidth=2;}auto added=canvas.Add(e);if (added) {uiSelected_=added.Value();}else {ShowError(added.Error());}}}
+    const char* elementNames[]{"Text","Button","Panel","Number"};
+    for (int i=0; i<4; ++i) {
+        const auto label = std::string("+ ")+elementNames[i];
+        const float rowEnd = ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x;
+        if (i && rowEnd-ImGui::GetItemRectMax().x >= ImGui::CalcTextSize(label.c_str()).x+24) { ImGui::SameLine(); }
+        if (!ImGui::Button(label.c_str())) { continue; }
+        FinishUiEdit();
+        UiElement e;
+        e.Kind = static_cast<UiKind>(i);
+        e.Name = elementNames[i];
+        e.Layout.Y = 24+static_cast<float>(canvas.Elements().Value().size())*64;
+        const auto parent = canvas.Get(uiSelected_);
+        if (parent && parent.Value().Kind == UiKind::Panel) { e.Parent=uiSelected_; e.Layout.X=e.Layout.Y=0; }
+        if (e.Kind != UiKind::Text) { e.Normal.Fill.fill({.16f,.22f,.32f,1}); e.Normal.Radius.fill(12); e.Normal.Shadow={0,0,0,.25f}; }
+        if (e.Kind == UiKind::Text) { e.Text="Minvex 텍스트"; }
+        if (e.Kind == UiKind::Button || e.Kind == UiKind::NumberInput) {
+            e.Text = e.Kind == UiKind::Button ? "Button" : "Enter a number";
+            if (e.Kind == UiKind::NumberInput) { e.Number.emplace(); }
+            else { e.Typography.Horizontal = UiAlign::Center; }
+            e.Hover = e.Normal; e.Hover->Fill.fill({.25f,.42f,.8f,1});
+            e.Pressed = e.Normal; e.Pressed->Fill.fill({.12f,.23f,.52f,1});
+            e.Focused = e.Normal; e.Focused->Border={.5f,.75f,1,1}; e.Focused->BorderWidth=2;
+        }
+        const auto added = canvas.Add(e);
+        if (Report(added)) { uiSelected_ = added.Value(); }
+    }
     ImGui::InputText("UI file",&uiPath_);if (ImGui::Button("Save UI")) {SaveUi(detail::PathFromUtf8(uiPath_));}ImGui::SameLine();if (ImGui::Button("Load UI")) {RequestLoadUi(detail::PathFromUtf8(uiPath_));}ImGui::SameLine();if (ImGui::Button("New UI")) {RequestClearUi();}
     ImGui::InputText("Font directory",&uiFontPath_);if (ImGui::Button("Create / use Font folder")) {FinishUiEdit();Report(canvas.SetFontDirectory(detail::PathFromUtf8(uiFontPath_),true));}
     ImGui::SameLine();if (ImGui::Button("Refresh fonts")) {auto fonts=canvas.Fonts();if (fonts) {uiFonts_=std::move(fonts.Value());Report(canvas.RefreshFonts());}else {ShowError(fonts.Error());}}
     ImGui::TextWrapped("Font files: TTF, OTF, TTC. Save UI separately from Scene. Fonts stay on this computer or in the selected folder.");
     const auto elements=canvas.Elements().Value();for (const auto& e:elements) {ImGui::PushID(static_cast<int>(e.Id));const auto label=(e.Parent ? "  ":"")+(e.Name.empty() ? std::string("Unnamed"):e.Name);if (ImGui::Selectable(label.c_str(),e.Id==uiSelected_)) {FinishUiEdit();uiSelected_=e.Id;}ImGui::PopID();}
-    auto selected=canvas.Get(uiSelected_);if (selected) {auto e=selected.Value();bool changed=false;ImGui::Separator();changed=ImGui::InputText("Name",&e.Name)||changed;if (e.Kind!=UiKind::Panel&&e.Runs.empty()) {changed=ImGui::InputTextMultiline("Text",&e.Text)||changed;}
+    auto selected=canvas.Get(uiSelected_);if (selected) {auto e=selected.Value();bool changed=false;ImGui::Separator();changed=ImGui::InputText("Name",&e.Name)||changed;if (e.Kind!=UiKind::Panel&&e.Runs.empty()) {changed=ImGui::InputTextMultiline(e.Number ? "Placeholder" : "Text",&e.Text)||changed;}
+        if (e.Number) { changed = EditUiNumber(e) || changed; }
         std::string parentLabel="Viewport";for (const auto& item:elements) {if (item.Id==e.Parent) {parentLabel=item.Name;}}if (ImGui::BeginCombo("Parent panel",parentLabel.c_str())) {if (ImGui::Selectable("Viewport",e.Parent==NoUi)) {e.Parent=NoUi;changed=true;}for (const auto& item:elements) {if (item.Id==e.Id||item.Kind!=UiKind::Panel) {continue;}ImGui::PushID(static_cast<int>(item.Id));if (ImGui::Selectable(item.Name.empty() ? "Unnamed panel":item.Name.c_str(),item.Id==e.Parent)) {e.Parent=item.Id;changed=true;}ImGui::PopID();}ImGui::EndCombo();}
         changed=ImGui::Checkbox("Visible",&e.Visible)||changed;ImGui::SameLine();changed=ImGui::Checkbox("Enabled",&e.Enabled)||changed;changed=ImGui::Checkbox("Block scene input",&e.BlocksInput)||changed;
         auto& l=e.Layout;changed=ImGui::DragFloat("X",&l.X,1,-65536,65536)||changed;changed=ImGui::DragFloat("Y",&l.Y,1,-65536,65536)||changed;changed=ImGui::DragFloat("Width",&l.Width,1,1,2048)||changed;changed=ImGui::DragFloat("Height",&l.Height,1,1,2048)||changed;
@@ -79,16 +139,39 @@ void EditorUI::UiDesigner() {
     if (!uiStatus_.empty()) {ImGui::TextWrapped("%s",uiStatus_.c_str());}ImGui::End();
 }
 bool EditorUI::UiViewportInput(float x,float y,float width,float height,bool hovered,bool modal) {
-    auto& ui=Viewport.Ui;const auto& io=ImGui::GetIO();if (!uiPreview_||io.AppFocusLost||modal) {ui.ProcessInput({UiInputType::Cancel},width,height).Value();uiPointerDown_=false;return false;}
+    auto& ui=Viewport.Ui;const auto& io=ImGui::GetIO();uiNumberFocus_=false;
+    if (!uiPreview_||io.AppFocusLost||modal) {Report(ui.ProcessInput({UiInputType::Cancel},0,0));uiPointerDown_=false;return false;}
     const float logicalWidth=Viewport.OutputWidth()/sapp_dpi_scale(),logicalHeight=Viewport.OutputHeight()/sapp_dpi_scale();
     const float px=(io.MousePos.x-x)*logicalWidth/width,py=(io.MousePos.y-y)*logicalHeight/height;width=logicalWidth;height=logicalHeight;bool blocked=false;
-    auto send=[&](UiInputType type) {const auto r=ui.ProcessInput({type,px,py,io.KeyShift},width,height);if (!r) {ShowError(r.Error());return false;}return r.Value();};
-    if (hovered||uiPointerDown_) {blocked=send(UiInputType::Move);}
-    else {send(UiInputType::Move);}
-    if (hovered&&ImGui::IsMouseClicked(0)) {uiPointerDown_=send(UiInputType::Down);blocked=uiPointerDown_||blocked;}
+    auto send=[&](UiInputType type, char32_t character = 0) {
+        const auto r=ui.ProcessInput({type,std::clamp(px,-1000000.f,1000000.f),std::clamp(py,-1000000.f,1000000.f),io.KeyShift,false,0,0,character},width,height);
+        return Report(r) && r.Value();
+    };
+    const bool moved = send(UiInputType::Move);
+    blocked = (hovered||uiPointerDown_) && moved;
+    if (hovered&&ImGui::IsMouseClicked(0)) {
+        uiPointerDown_=send(UiInputType::Down);blocked=uiPointerDown_||blocked;
+        if (uiPointerDown_) { ImGui::SetWindowFocus(); }
+    }
     if (hovered&&io.MouseWheel!=0) {const auto r=ui.ProcessInput({UiInputType::Scroll,px,py,false,false,0,-io.MouseWheel*32},width,height);if (r) {blocked=r.Value()||blocked;}else {ShowError(r.Error());}}
     if (ImGui::IsMouseReleased(0)) {blocked=send(UiInputType::Up)||blocked;uiPointerDown_=false;}
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)&&!io.WantTextInput) {if (ImGui::IsKeyPressed(ImGuiKey_Tab,false)) {blocked=send(UiInputType::Tab)||blocked;}if (ImGui::IsKeyPressed(ImGuiKey_Enter,false)||ImGui::IsKeyPressed(ImGuiKey_Space,false)) {blocked=send(UiInputType::ActivateDown)||blocked;}if (ImGui::IsKeyReleased(ImGuiKey_Enter)||ImGui::IsKeyReleased(ImGuiKey_Space)) {blocked=send(UiInputType::ActivateUp)||blocked;}}
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)&&!io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab,false) && !io.KeyCtrl && !io.KeySuper) { blocked=send(UiInputType::Tab)||blocked; }
+        uiNumberFocus_ = ui.Focused() && bool(ui.GetNumberInput(ui.Focused()));
+        if (uiNumberFocus_) {
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape,false)) { send(UiInputType::Dismiss); }
+            else if (io.KeyCtrl || io.KeySuper) {
+                if (ImGui::IsKeyPressed(ImGuiKey_A,false)) { send(UiInputType::SelectAll); }
+            } else {
+                if (ImGui::IsKeyPressed(ImGuiKey_Backspace)) { send(UiInputType::Backspace); }
+                if (ImGui::IsKeyPressed(ImGuiKey_Delete,false)) { send(UiInputType::ClearNumber); }
+                for (const auto character : io.InputQueueCharacters) { send(UiInputType::Character,character); }
+            }
+        } else {
+            if (ImGui::IsKeyPressed(ImGuiKey_Enter,false)||ImGui::IsKeyPressed(ImGuiKey_Space,false)) {blocked=send(UiInputType::ActivateDown)||blocked;}
+            if (ImGui::IsKeyReleased(ImGuiKey_Enter)||ImGui::IsKeyReleased(ImGuiKey_Space)) {blocked=send(UiInputType::ActivateUp)||blocked;}
+        }
+    }
     const auto events=ui.PollActivations();if (events) {for (auto id:events.Value()) {uiStatus_="Activated UI #"+std::to_string(id);}}return blocked;
 }
 }

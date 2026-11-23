@@ -34,6 +34,7 @@ struct Application {
     bool UiAdvanced=false;
     lv::UiId UiButton=lv::NoUi;
     lv::UiId UiParent=lv::NoUi;
+    lv::UiId UiNumber=lv::NoUi;
     std::size_t UiUndoCount=0;
     std::optional<lv::QualityProfile> InitialQuality;
     std::optional<lv::QualityPreset> RecommendedQuality;
@@ -312,15 +313,49 @@ void UiAdvancedBefore(Application& app) {
     if (app.Frames==5) {Require(ui.Undo());app.UI->RequestQuit();Require(app.UI->HasPendingUi()&&!app.UI->QuitRequested(),"Quit bypassed unsaved UI protection.");app.UI->ResolveUiPending(lv::editor::UnsavedChoice::Cancel);const auto elements=ui.Elements().Value();app.UiParent=elements[0].Id;app.UiButton=elements[1].Id;Require(!app.UI->QuitRequested(),"Cancel quit closed the Editor.");}
     if (app.Frames==6) {auto panel=ui.Get(app.UiParent).Value();panel.Container.Flow=lv::UiFlow::Row;Require(ui.Set(app.UiParent,panel));app.UI->Viewport.Resize(480,240);}
     if (app.Frames==7) {Require(ui.Remove(app.UiParent));Require(ui.Empty(),"Subtree deletion left children.");Require(ui.Undo());auto e=ui.Get(app.UiButton).Value();e.Name="Shortcut edit";Require(ui.Set(e.Id,e));app.UiUndoCount=ui.History().Value().UndoCount;ImGui::SetWindowFocus("UI Designer");}
+    if (app.Frames==12) {
+        lv::UiElement field;
+        field.Kind=lv::UiKind::NumberInput;field.Text="Width";field.Number=lv::UiNumberInput{std::nullopt,20,90,"cm"};
+        field.Layout={18,18,150,48};field.Layout.Z=100;
+        app.UiNumber=ui.Add(field).Value();
+        app.UiUndoCount=ui.History().Value().UndoCount;
+        app.UI->SetUiPreview(true);
+    }
 }
 void UiAdvancedAfter(Application& app) {
     auto& ui=app.UI->Viewport.Ui;
-    if (app.Frames>0) {Require(app.UI->Viewport.Texture().id&&!app.UI->Viewport.UiError,"Advanced UI preview failed.");const auto boxes=ui.ResolveLayout(app.UI->Viewport.OutputWidth()/sapp_dpi_scale(),app.UI->Viewport.OutputHeight()/sapp_dpi_scale());Require(boxes);Require(boxes.Value().size()==3&&boxes.Value()[1].Width>24,"Editor lost responsive layout.");}
+    if (app.Frames>0) {Require(app.UI->Viewport.Texture().id&&!app.UI->Viewport.UiError,"Advanced UI preview failed.");const auto boxes=ui.ResolveLayout(app.UI->Viewport.OutputWidth()/sapp_dpi_scale(),app.UI->Viewport.OutputHeight()/sapp_dpi_scale());Require(boxes);Require(boxes.Value().size()==(app.UiNumber ? 4u : 3u)&&boxes.Value()[1].Width>24,"Editor lost responsive layout.");}
     auto& io=ImGui::GetIO();if (app.Frames==7) {io.AddKeyEvent(ImGuiMod_Ctrl,true);io.AddKeyEvent(ImGuiKey_Z,true);}
     if (app.Frames==8) {Require(ui.History().Value().UndoCount+1==app.UiUndoCount&&ui.Get(app.UiButton).Value().Name!="Shortcut edit","UI Ctrl+Z was routed to Scene or ignored.");io.AddKeyEvent(ImGuiKey_Z,false);io.AddKeyEvent(ImGuiMod_Ctrl,false);}
     if (app.Frames==9) {io.AddKeyEvent(ImGuiMod_Ctrl,true);io.AddKeyEvent(ImGuiKey_Y,true);}
     if (app.Frames==10) {Require(ui.Get(app.UiButton).Value().Name=="Shortcut edit","UI Ctrl+Y did not redo the edit.");io.AddKeyEvent(ImGuiKey_Y,false);io.AddKeyEvent(ImGuiMod_Ctrl,false);}
-    if (app.Frames==11) {std::puts("Editor advanced UI: auto layout, rich runs, grouped history, shortcuts, unsaved guards, subtree and resize passed.");}
+    if (app.Frames==12) {
+        const auto area=app.UI->ViewportArea();
+        io.AddMousePosEvent(area[0]+45,area[1]+35);io.AddMouseButtonEvent(0,true);
+    }
+    if (app.Frames==13) {
+        Require(ui.Focused()==app.UiNumber,"Clicking a Number Input in the Editor viewport did not focus it.");
+        io.AddMouseButtonEvent(0,false);
+    }
+    if (app.Frames==14) {
+        for (const char digit : std::string_view("48.5")) { io.AddInputCharacter(static_cast<unsigned char>(digit)); }
+    }
+    if (app.Frames==15) {
+        const auto value = ui.GetNumberInput(app.UiNumber).Value();
+        const auto history = ui.History().Value().UndoCount;
+        if (value.Value!=48.5 || history!=app.UiUndoCount || app.UI->Document.IsDirty()) {
+            const auto* nav = ImGui::GetCurrentContext()->NavWindow;
+            char detail[256];
+            std::snprintf(detail,sizeof(detail),"Editor decimal preview: value='%s', numeric focus=%d, window=%s, characters=%d, edits=%zu/%zu, dirty scene=%d",
+                value.Text.c_str(),ui.Focused()==app.UiNumber,nav ? nav->Name : "none",io.InputQueueCharacters.Size,history,app.UiUndoCount,app.UI->Document.IsDirty());
+            throw std::runtime_error(detail);
+        }
+        io.AddKeyEvent(ImGuiKey_Escape,true);
+    }
+    if (app.Frames==16) {
+        Require(ui.Focused()==lv::NoUi && ui.GetNumberInput(app.UiNumber).Value().Value==48.5,"Escape did not dismiss the number field while preserving its value.");
+        std::puts("Editor advanced UI: layout, runs, history, shortcuts, unsaved guards, resizing and numeric preview passed.");
+    }
 }
 void Frame(void* user) noexcept {
     auto& app = *static_cast<Application*>(user);
@@ -424,7 +459,7 @@ int Run(const std::vector<std::string>& args) {
         for (std::size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "--smoke-test") { app.Smoke = true; app.Limit = 10; }
             else if (args[i] == "--ui-smoke-test") {app.UiSmoke=true;app.Limit=8;}
-            else if (args[i] == "--ui-advanced-smoke-test") {app.UiAdvanced=true;app.Limit=12;}
+            else if (args[i] == "--ui-advanced-smoke-test") {app.UiAdvanced=true;app.Limit=17;}
             else if (args[i] == "--animation-smoke-test") { app.Smoke = app.AnimationSmoke = true; app.Limit = 10; }
             else if (args[i] == "--quality-smoke-test") {app.Smoke=app.AnimationSmoke=app.QualitySmoke=true;app.Limit=10;}
             else if (args[i] == "--telemetry-smoke-test") {app.Smoke=app.AnimationSmoke=app.TelemetrySmoke=true;app.Limit=10;}

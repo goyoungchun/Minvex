@@ -21,6 +21,15 @@ void Diagnostics(const ModelAsset& model) {
     for (const auto& missing:model.MissingDependencies) {ImGui::TextColored({1,.65f,.3f,1},"Missing: %s",Text(missing).c_str());}
     for (const auto& warning:model.Warnings) {ImGui::TextWrapped("Warning: %s",warning.c_str());}
 }
+template<class T>
+bool ImportLimit(const char* label, T& value, T maximum) {
+    auto editable = static_cast<int>(value);
+    if (!ImGui::InputInt(label,&editable,0,0)) { return false; }
+    const auto changed = static_cast<T>(std::clamp(editable,1,static_cast<int>(maximum)));
+    if (changed == value) { return false; }
+    value = changed;
+    return true;
+}
 }
 void EditorUI::ImportPreview() {
     if (importQueue_.empty()) {return;}
@@ -29,7 +38,7 @@ void EditorUI::ImportPreview() {
         ImGui::Text("%zu file(s) remaining",importQueue_.size());ImGui::TextWrapped("%s",Text(importQueue_.front().Path).c_str());
         ImGui::TextDisabled("Preview is CPU-only. The Scene/library changes only after Import.");
         bool changed=ImGui::Checkbox("Import Animation",&importSettings_.ImportAnimations);ImGui::SameLine();changed=ImGui::Checkbox("Import Material",&importSettings_.ImportMaterials)||changed;
-        if (ImGui::Checkbox("Background parsing",&backgroundImport_)) {CancelPreviewJob();importCandidate_.reset();}
+        changed=ImGui::Checkbox("Background parsing",&backgroundImport_)||changed;
         changed=ImGui::Checkbox("Generate Missing Normals",&importSettings_.GenerateMissingNormals)||changed;
         float rate=static_cast<float>(importSettings_.AnimationBakeRate);ImGui::SetNextItemWidth(170);
         if (ImGui::SliderFloat("FBX bake rate (Hz)",&rate,1,240,"%.0f")) {importSettings_.AnimationBakeRate=rate;changed=true;}
@@ -39,6 +48,30 @@ void EditorUI::ImportPreview() {
             FilePickerRequest request;request.Mode=FilePickerMode::Folder;request.Directory=directory_;request.Title="Texture search directory";
             const auto picked=picker_ ? picker_(request):nativeFiles_.Choose(request);
             if (!picked) {importError_=picked.Error();}else if (picked.Value() && !picked.Value()->empty()) {importSettings_.TextureDirectory=picked.Value()->front();changed=true;}
+        }
+        if (ImGui::TreeNode("Import limits")) {
+            const ImportSettings defaults;
+            ImGui::TextWrapped("Set budgets from 1 up to the default limits. Apply them with Refresh Preview.");
+            changed = ImportLimit("Source file (bytes)",importSettings_.MaxFileBytes,defaults.MaxFileBytes) || changed;
+            changed = ImportLimit("Decoded resources (bytes)",importSettings_.MaxResourceBytes,defaults.MaxResourceBytes) || changed;
+            changed = ImportLimit("Vertices",importSettings_.MaxVertices,defaults.MaxVertices) || changed;
+            changed = ImportLimit("Indices",importSettings_.MaxIndices,defaults.MaxIndices) || changed;
+            changed = ImportLimit("Nodes",importSettings_.MaxNodes,defaults.MaxNodes) || changed;
+            changed = ImportLimit("Image dimension (px)",importSettings_.MaxImageDimension,defaults.MaxImageDimension) || changed;
+            changed = ImportLimit("Animation samples",importSettings_.MaxAnimationSamples,defaults.MaxAnimationSamples) || changed;
+            changed = ImportLimit("Morph targets",importSettings_.MaxMorphTargets,defaults.MaxMorphTargets) || changed;
+            if (ImGui::Button("Reset limits")) {
+                importSettings_.MaxFileBytes = defaults.MaxFileBytes;
+                importSettings_.MaxResourceBytes = defaults.MaxResourceBytes;
+                importSettings_.MaxVertices = defaults.MaxVertices;
+                importSettings_.MaxIndices = defaults.MaxIndices;
+                importSettings_.MaxNodes = defaults.MaxNodes;
+                importSettings_.MaxImageDimension = defaults.MaxImageDimension;
+                importSettings_.MaxAnimationSamples = defaults.MaxAnimationSamples;
+                importSettings_.MaxMorphTargets = defaults.MaxMorphTargets;
+                changed = true;
+            }
+            ImGui::TreePop();
         }
         if (changed) {CancelPreviewJob();importCandidate_.reset();importError_.reset();}
         if (ImGui::Button("Refresh Preview")) {RefreshImportPreview(importSettings_);}
@@ -75,8 +108,10 @@ void EditorUI::AssetInspector() {
             ImGui::Text("Status: %s",model.Status == AssetImportStatus::Ready ? "Ready":"Ready with warnings");
             Summary(model);
             if (ImGui::CollapsingHeader("Bone influences")) {const auto stats=InspectBoneInfluences(model);ImGui::Text("Skinned / rigid vertices: %zu / %zu",stats.SkinnedVertices,stats.RigidVertices);ImGui::Text("Unweighted: %zu | weight sum: %.6f .. %.6f",stats.UnweightedVertices,stats.MinimumWeightSum,stats.MaximumWeightSum);for (unsigned n=0;n<=4;++n) {ImGui::Text("%u influences: %zu",n,stats.InfluenceCounts[n]);}}
-            if (ImGui::Button("Reimport source")) {ReimportAsset(model.Id);}
-            ImGui::SameLine();if (ImGui::Button("Open folder")) {Report(NativeFiles::OpenPath(model.SourcePath.parent_path()));}
+            if (!model.SourcePath.empty()) {
+                if (ImGui::Button("Reimport source")) {ReimportAsset(model.Id);}
+                ImGui::SameLine();if (ImGui::Button("Open folder")) {Report(NativeFiles::OpenPath(model.SourcePath.parent_path()));}
+            }
             if (ImGui::CollapsingHeader("Import Settings")) {
                 ImGui::Text("Animation: %s | Materials: %s | Generate normals: %s",model.Settings.ImportAnimations ? "on":"off",model.Settings.ImportMaterials ? "on":"off",model.Settings.GenerateMissingNormals ? "on":"off");
                 ImGui::Text("FBX bake: %.0f Hz | Key budget: %zu",model.Settings.AnimationBakeRate,model.Settings.MaxAnimationSamples);
@@ -85,7 +120,39 @@ void EditorUI::AssetInspector() {
             }
             if (ImGui::CollapsingHeader("Dependencies / Warnings")) {for (const auto& dependency:model.Dependencies) {ImGui::TextWrapped("%s",Text(dependency).c_str());}Diagnostics(model);}
             if (ImGui::CollapsingHeader("Meshes / Materials")) {
-                for (std::size_t i=0;i<model.Meshes.size();++i) {const auto& mesh=model.Meshes[i];ImGui::PushID(static_cast<int>(i));if (ImGui::TreeNode("mesh","%s (%zu primitives)",mesh.Name.c_str(),mesh.Primitives.size())) {for (const auto& primitive:mesh.Primitives) {ImGui::Text("%zu vertices / %zu indices | material %zu | %s",primitive.Geometry.Vertices.size(),primitive.Geometry.Indices.size(),primitive.MaterialIndex,primitive.HasSkinning ? "skin":"rigid");}ImGui::TreePop();}ImGui::PopID();}
+                ImGui::Checkbox("Include software overdraw",&analyzeOverdraw_);
+                for (std::size_t i=0; i<model.Meshes.size(); ++i) {
+                    const auto& mesh = model.Meshes[i];
+                    ImGui::PushID(static_cast<int>(i));
+                    if (ImGui::TreeNode("mesh","%s (%zu primitives)",mesh.Name.empty() ? "Mesh" : mesh.Name.c_str(),mesh.Primitives.size())) {
+                        for (std::size_t j=0; j<mesh.Primitives.size(); ++j) {
+                            const auto& primitive = mesh.Primitives[j];
+                            ImGui::PushID(static_cast<int>(j));
+                            if (ImGui::TreeNode("primitive","Primitive %zu | Material %zu",j,primitive.MaterialIndex)) {
+                                ImGui::Text("%zu vertices | %zu triangles | %s",primitive.Geometry.Vertices.size(),
+                                    primitive.Geometry.Indices.size()/3,primitive.HasSkinning ? "skinned" : "rigid");
+                                for (std::size_t lod=0; lod<primitive.Lods.size(); ++lod) {
+                                    ImGui::Text("LOD %zu: %zu triangles",lod+1,primitive.Lods[lod].Indices.size()/3);
+                                }
+                                if (ImGui::SmallButton("Analyze mesh locality")) {
+                                    try { locality_ = LocalityAnalysis{selected,i,j,AnalyzeMeshLocality(primitive.Geometry,analyzeOverdraw_)}; }
+                                    catch (const std::exception& e) { ShowError({ErrorCode::InvalidData,e.what(),"Choose a valid triangle mesh.",model.SourcePath}); }
+                                }
+                                if (locality_ && locality_->Model.lock() == selected && locality_->Mesh == i && locality_->Primitive == j) {
+                                    const auto& stats = locality_->Stats;
+                                    ImGui::TextDisabled("Software estimates for LOD 0");
+                                    ImGui::Text("Cache: ACMR %.3f | ATVR %.3f",stats.Acmr,stats.Atvr);
+                                    ImGui::Text("Fetch: %.3f overfetch",stats.Overfetch);
+                                    if (stats.HasOverdraw) { ImGui::Text("Overdraw: %.3f",stats.Overdraw); }
+                                }
+                                ImGui::TreePop();
+                            }
+                            ImGui::PopID();
+                        }
+                        ImGui::TreePop();
+                    }
+                    ImGui::PopID();
+                }
                 for (std::size_t i=0;i<model.Materials.size();++i) {const auto& material=model.Materials[i];ImGui::Text("Material %zu: %s",i,material.Name.c_str());ImGui::Text("Color: %.2f %.2f %.2f %.2f | Base texture: %s | Normal: %s",material.BaseColor[0],material.BaseColor[1],material.BaseColor[2],material.BaseColor[3],material.BaseColorTexture ? "yes":"none",material.NormalTexture ? "yes":"none");}
             }
             if (ImGui::CollapsingHeader("Node Hierarchy / Animation")) {

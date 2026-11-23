@@ -25,6 +25,11 @@ bool ModelFile(const std::filesystem::path& path) {
     return ext == ".gltf" || ext == ".glb" || ext == ".obj" || ext == ".fbx";
 }
 void Id(ObjectId id) { ImGui::PushID(reinterpret_cast<void*>(static_cast<std::uintptr_t>(id))); }
+bool ContainsText(std::string_view text, std::string_view filter) {
+    return filter.empty() || std::ranges::search(text,filter,[](unsigned char a, unsigned char b) {
+        return std::tolower(a) == std::tolower(b);
+    }).begin() != text.end();
+}
 bool VecInput(const char* label, Vec3& value, float speed = 0.05f) {
     float xyz[]{value.X,value.Y,value.Z};
     if (!ImGui::DragFloat3(label,xyz,speed)) { return false; } value = {xyz[0],xyz[1],xyz[2]}; return true;
@@ -88,10 +93,12 @@ bool EditorUI::ConfirmImportPreview() {
     for (const auto& warning:model->Warnings) {Record(ConsoleLevel::Warning,warning,model->SourcePath);}
     AdvanceImportPreview();return true;
 }
-void EditorUI::FrameScene() {
+void EditorUI::FrameScene(bool selected) {
+    if (Document.GetScene().Size() == 0) { status_ = "Add a model to frame the scene."; return; }
     try {
         const float aspect = Viewport.Aspect();
-        Report(Document.SetCamera(detail::FitSceneCamera(Document.GetScene(),aspect,Document.Selection())),Document.Selection());
+        const auto object = selected ? Document.Selection() : NoObject;
+        Report(Document.SetCamera(detail::FitSceneCamera(Document.GetScene(),aspect,object)),object);
     } catch (const std::exception& e) { ShowError({ErrorCode::InvalidState,e.what(),"Place a visible model in the Scene first.",{}}); }
 }
 void EditorUI::ReimportAsset(AssetId asset) {
@@ -105,10 +112,10 @@ void EditorUI::RequestNew() { Ask(Action::New); }
 void EditorUI::RequestQuit() { Ask(Action::Quit); }
 void EditorUI::ApplyPending() {
     switch (pending_) {
-    case Action::New: Document.New(); selectedAsset_ = 0; controls_.Reset();welcome_=false; status_ = "New Scene"; break;
+    case Action::New: Document.New(); surfaceHits_.clear(); selectedAsset_ = 0; controls_.Reset();welcome_=false; status_ = "New Scene"; break;
     case Action::Open:
         if (Report(Document.Open(openPath_))) {
-            selectedAsset_ = 0; controls_.Reset();welcome_=false;projectRoot_.clear();
+            surfaceHits_.clear(); selectedAsset_ = 0; controls_.Reset();welcome_=false;projectRoot_.clear();
             const auto scenes=Document.Path().parent_path();std::error_code ec;
             if (scenes.filename() == "scenes" && std::filesystem::is_directory(scenes.parent_path()/"assets",ec)) {projectRoot_=scenes.parent_path();}
             status_ = "Opened " + Text(openPath_);Remember(openPath_,RecentKind::Scene);Record(ConsoleLevel::Info,status_,openPath_);
@@ -117,7 +124,7 @@ void EditorUI::ApplyPending() {
     case Action::QuickOpen: {
         if (!ModelFile(openPath_)) {ShowError({ErrorCode::UnsupportedFeature,"Choose a supported glTF, GLB, OBJ or FBX model.","Check the file extension.",openPath_});break;}
         const auto opened=Document.OpenModel(openPath_,{},Viewport.Aspect());
-        if (Report(opened)) {selectedAsset_=Document.GetScene().GetObject(opened.Value()).Model->Id;controls_.Reset();welcome_=false;projectRoot_.clear();status_="Quick Open: "+Text(openPath_.filename());Remember(openPath_,RecentKind::Model);Record(ConsoleLevel::Info,status_,openPath_,opened.Value());for (const auto& warning:Document.Assets().front()->Warnings) {Record(ConsoleLevel::Warning,warning,openPath_);}}
+        if (Report(opened)) {surfaceHits_.clear();selectedAsset_=Document.GetScene().GetObject(opened.Value()).Model->Id;controls_.Reset();welcome_=false;projectRoot_.clear();status_="Quick Open: "+Text(openPath_.filename());Remember(openPath_,RecentKind::Model);Record(ConsoleLevel::Info,status_,openPath_,opened.Value());for (const auto& warning:Document.Assets().front()->Warnings) {Record(ConsoleLevel::Warning,warning,openPath_);}}
         break;
     }
     case Action::Project: {
@@ -129,7 +136,7 @@ void EditorUI::ApplyPending() {
         } catch (const std::exception& e) {
             ShowError({ErrorCode::SceneIo,e.what(),"Choose a writable project folder; the previous Scene was retained.",openPath_});break;
         }
-        Document.New();selectedAsset_=0;controls_.Reset();welcome_=false;
+        Document.New();surfaceHits_.clear();selectedAsset_=0;controls_.Reset();welcome_=false;
         projectRoot_=std::move(root);directory_=std::move(assets);PersistPreferences();
         status_="Workspace: "+Text(projectRoot_);Record(ConsoleLevel::Info,status_,projectRoot_);
         break;
@@ -184,6 +191,11 @@ bool EditorUI::Save(const std::filesystem::path& path) {
     if (pending_ != Action::None) { ApplyPending(); }
     return true;
 }
+void EditorUI::SceneHistory(bool redo) {
+    if ((redo ? Document.CanRedo() : Document.CanUndo()) && Report(redo ? Document.Redo() : Document.Undo())) {
+        status_ = redo ? "Redid scene edit." : "Undid scene edit.";
+    }
+}
 void EditorUI::Menu() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -216,8 +228,8 @@ void EditorUI::Menu() {
             if (ImGui::MenuItem("Undo UI",nullptr,false,uiHistory.CanUndo||uiHistory.Editing)) {UiUndo();}
             if (ImGui::MenuItem("Redo UI",nullptr,false,uiHistory.CanRedo)) {UiUndo(true);}
             ImGui::Separator();
-            if (ImGui::MenuItem("Undo","Ctrl+Z",false,Document.CanUndo())) {Report(Document.Undo());}
-            if (ImGui::MenuItem("Redo","Ctrl+Y / Ctrl+Shift+Z",false,Document.CanRedo())) {Report(Document.Redo());}
+            if (ImGui::MenuItem("Undo","Ctrl+Z",false,Document.CanUndo())) {SceneHistory();}
+            if (ImGui::MenuItem("Redo","Ctrl+Y / Ctrl+Shift+Z",false,Document.CanRedo())) {SceneHistory(true);}
             if (ImGui::MenuItem("Clear Undo History",nullptr,false,Document.CanUndo() || Document.CanRedo())) {Report(Document.ClearUndoHistory());}
             ImGui::EndMenu();
         }
@@ -229,6 +241,10 @@ void EditorUI::Menu() {
             ImGui::MenuItem("Quality Settings",nullptr,&quality_);
             ImGui::MenuItem("Performance",nullptr,&performance_);
             ImGui::MenuItem("Terrain",nullptr,&terrainPanel_);
+            ImGui::MenuItem("Surface Measure",nullptr,&surfacePanel_);
+#if MINVEX_EDITOR_PHYSICS
+            ImGui::MenuItem("Box Physics",nullptr,&boxPhysics_);
+#endif
             ImGui::MenuItem("Console",nullptr,&console_);
             ImGui::MenuItem("Asset Inspector",nullptr,&assetInspector_);
             ImGui::MenuItem("Welcome",nullptr,&welcome_);
@@ -243,8 +259,8 @@ void EditorUI::Menu() {
     const auto& io = ImGui::GetIO();
     if ((io.KeyCtrl || io.KeySuper) && !io.WantTextInput && !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId)) {
         const bool uiTarget=UiHasFocus();
-        if (ImGui::IsKeyPressed(ImGuiKey_Z,false)) {if (uiTarget) {UiUndo(io.KeyShift);}else if (io.KeyShift) {if (Document.CanRedo()) {Report(Document.Redo());}}else if (Document.CanUndo()) {Report(Document.Undo());}}
-        if (ImGui::IsKeyPressed(ImGuiKey_Y,false)) {if (uiTarget) {UiUndo(true);}else if (Document.CanRedo()) {Report(Document.Redo());}}
+        if (ImGui::IsKeyPressed(ImGuiKey_Z,false)) {if (uiTarget) {UiUndo(io.KeyShift);}else {SceneHistory(io.KeyShift);}}
+        if (ImGui::IsKeyPressed(ImGuiKey_Y,false)) {if (uiTarget) {UiUndo(true);}else {SceneHistory(true);}}
         if (ImGui::IsKeyPressed(ImGuiKey_S,false)) {
             if (uiTarget) {SaveUi(detail::PathFromUtf8(uiPath_));}else if (io.KeyShift || Document.Path().empty()) { FileDialog(Dialog::Save); } else { Save(Document.Path()); }
         }
@@ -273,34 +289,63 @@ void EditorUI::Dockspace() {
         ImGui::DockBuilderDockWindow("Asset Inspector",right);
         ImGui::DockBuilderDockWindow("Quality Settings",right);
         ImGui::DockBuilderDockWindow("Performance",right);
+        ImGui::DockBuilderDockWindow("Surface Measure",right);
+#if MINVEX_EDITOR_PHYSICS
+        ImGui::DockBuilderDockWindow("Box Physics",right);
+#endif
         ImGui::DockBuilderDockWindow("Render Debugger",right);ImGui::DockBuilderDockWindow("Animation Debugger",right);
         ImGui::DockBuilderFinish(dock);
     }
-    // Add Phase 5 panels to a saved Phase 4 layout without resetting user splits.
-    for (const auto& panel : {std::pair{"Bone Inspector","Inspector"},std::pair{"Animation Controls","Asset Browser"},std::pair{"Quality Settings","Inspector"},std::pair{"Performance","Inspector"},std::pair{"Console","Asset Browser"},std::pair{"Asset Inspector","Inspector"},std::pair{"Render Debugger","Inspector"},std::pair{"Animation Debugger","Inspector"},std::pair{"Terrain","Inspector"}}) {
+    // Attach new panels to existing docks when loading a saved layout.
+    for (const auto& panel : {std::pair{"Bone Inspector","Inspector"},std::pair{"Animation Controls","Asset Browser"},std::pair{"Quality Settings","Inspector"},std::pair{"Performance","Inspector"},std::pair{"Console","Asset Browser"},std::pair{"Asset Inspector","Inspector"},std::pair{"Render Debugger","Inspector"},std::pair{"Animation Debugger","Inspector"},std::pair{"Terrain","Inspector"},std::pair{"Surface Measure","Inspector"}}) {
         if (!ImGui::FindWindowSettingsByID(ImHashStr(panel.first))) {
             const auto* anchor = ImGui::FindWindowSettingsByID(ImHashStr(panel.second));
             ImGui::DockBuilderDockWindow(panel.first,anchor && anchor->DockId ? anchor->DockId : dock);
         }
     }
+#if MINVEX_EDITOR_PHYSICS
+    if (!ImGui::FindWindowSettingsByID(ImHashStr("Box Physics"))) {
+        const auto* anchor = ImGui::FindWindowSettingsByID(ImHashStr("Inspector"));
+        ImGui::DockBuilderDockWindow("Box Physics",anchor && anchor->DockId ? anchor->DockId : dock);
+    }
+#endif
 }
 void EditorUI::Hierarchy() {
     if (!hierarchy_) { return; }
     if (ImGui::Begin("Hierarchy",&hierarchy_)) {
+        const auto selection = Document.Selection();
+        ImGui::BeginDisabled(Document.IsEditing());
         if (ImGui::Button("+ Empty")) { Report(Document.CreateObject()); }
-        ImGui::SameLine(); if (ImGui::Button("Root")) { if (Document.Selection()) { Report(Document.SetParent(Document.Selection(),NoObject)); } }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!selection);
+        if (ImGui::Button("+ Child")) { Report(Document.CreateObject("Object",selection)); }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Move to Root") && selection && Document.GetScene().GetObject(selection).Parent) { Report(Document.SetParent(selection,NoObject)); }
         if (ImGui::BeginDragDropTarget()) {
-            if (const auto* p = ImGui::AcceptDragDropPayload("MVX_OBJECT")) { Report(Document.SetParent(*static_cast<const ObjectId*>(p->Data),NoObject)); }
+            if (const auto* p = ImGui::AcceptDragDropPayload("MVX_OBJECT")) {
+                const auto child = *static_cast<const ObjectId*>(p->Data);
+                if (Document.GetScene().GetObject(child).Parent) { Report(Document.SetParent(child,NoObject)); }
+            }
             ImGui::EndDragDropTarget();
         }
+        ImGui::SetItemTooltip("Drag an object here to make it a scene root.");
+        ImGui::EndDisabled();
         ImGui::Separator();
         std::unordered_map<ObjectId,std::vector<ObjectId>> children;
         for (auto id : Document.GetScene().ObjectIds()) { children[Document.GetScene().GetObject(id).Parent].push_back(id); }
         ImGui::InputTextWithHint("##hierarchy-search","Search object names...",&hierarchyFilter_);
-        const auto lower=[](std::string value) {for (auto& c:value) {c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));}return value;};
         std::unordered_set<ObjectId> matched;
-        if (!hierarchyFilter_.empty()) {const auto query=lower(hierarchyFilter_);for (auto id:Document.GetScene().ObjectIds()) {if (lower(Document.GetScene().GetObject(id).Name).find(query) != std::string::npos) {for (auto parent=id;parent;parent=Document.GetScene().GetObject(parent).Parent) {matched.insert(parent);}}}}
+        if (!hierarchyFilter_.empty()) {
+            for (auto id : Document.GetScene().ObjectIds()) {
+                if (!ContainsText(Document.GetScene().GetObject(id).Name,hierarchyFilter_)) { continue; }
+                for (auto parent=id; parent && matched.insert(parent).second; parent=Document.GetScene().GetObject(parent).Parent) {}
+            }
+        }
         std::vector<ObjectId> stack(children[NoObject].rbegin(),children[NoObject].rend());
+        std::optional<std::pair<ObjectId,ObjectId>> reparent;
+        std::optional<std::pair<AssetId,ObjectId>> place;
+        ObjectId createChild = NoObject;
         while (!stack.empty()) {
             const auto id = stack.back(); stack.pop_back();
             if (!id) { ImGui::TreePop(); continue; }
@@ -313,17 +358,31 @@ void EditorUI::Hierarchy() {
             const std::string label = (object.Visible ? "" : "[hidden] ") + (object.Name.empty() ? "Object" : object.Name);
             if (!hierarchyFilter_.empty()) {ImGui::SetNextItemOpen(true,ImGuiCond_Always);}
             const bool open = ImGui::TreeNodeEx("node",flags,"%s",label.c_str());
-            if (ImGui::IsItemClicked()) { Report(Document.Select(id)); }
+            if (!Document.IsEditing() && ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) { Report(Document.Select(id)); }
+            if (ImGui::BeginPopupContextItem()) {
+                if (ImGui::MenuItem("Select and frame","F",false,!Document.IsEditing())) { Report(Document.Select(id)); FrameScene(); }
+                if (ImGui::MenuItem("Add empty child",nullptr,false,!Document.IsEditing())) { createChild = id; }
+                if (ImGui::MenuItem("Move to root",nullptr,false,object.Parent && !Document.IsEditing())) { reparent = {{id,NoObject}}; }
+                if (ImGui::MenuItem("Delete subtree...",nullptr,false,!Document.IsEditing())) { deleteObject_ = id; }
+                ImGui::EndPopup();
+            }
             if (ImGui::BeginDragDropSource()) {
                 ImGui::SetDragDropPayload("MVX_OBJECT",&id,sizeof(id)); ImGui::TextUnformatted(label.c_str()); ImGui::EndDragDropSource();
             }
-            if (ImGui::BeginDragDropTarget()) {
-                if (const auto* p = ImGui::AcceptDragDropPayload("MVX_OBJECT")) { Report(Document.SetParent(*static_cast<const ObjectId*>(p->Data),id)); }
+            if (!Document.IsEditing() && ImGui::BeginDragDropTarget()) {
+                if (const auto* p = ImGui::AcceptDragDropPayload("MVX_OBJECT")) {
+                    const auto child = *static_cast<const ObjectId*>(p->Data);
+                    if (child != id && Document.GetScene().GetObject(child).Parent != id) { reparent = {{child,id}}; }
+                }
+                if (const auto* p = ImGui::AcceptDragDropPayload("MVX_ASSET")) { place = {{*static_cast<const AssetId*>(p->Data),id}}; }
                 ImGui::EndDragDropTarget();
             }
             ImGui::PopID();
             if (open) { stack.push_back(NoObject); for (auto it = children[id].rbegin(); it != children[id].rend(); ++it) { stack.push_back(*it); } }
         }
+        if (reparent) { Report(Document.SetParent(reparent->first,reparent->second),reparent->first); }
+        if (place) { Report(Document.PlaceModel(place->first,{},place->second),place->second); }
+        if (createChild) { Report(Document.CreateObject("Object",createChild),createChild); }
     }
     ImGui::End();
 }
@@ -336,18 +395,42 @@ void EditorUI::Inspector() {
             auto name = object.Name; if (ImGui::InputText("Name",&name)) { Report(Document.RenameObject(id,std::move(name))); }
             bool visible = object.Visible; if (ImGui::Checkbox("Visible",&visible)) { Report(Document.SetVisible(id,visible)); }
             if (ImGui::BeginCombo("Parent",object.Parent ? Document.GetScene().GetObject(object.Parent).Name.c_str() : "<root>")) {
-                if (ImGui::Selectable("<root>",!object.Parent)) { Report(Document.SetParent(id,NoObject)); }
-                for (auto parent : Document.GetScene().ObjectIds()) { if (parent == id) { continue; } Id(parent);
-                    if (ImGui::Selectable(Document.GetScene().GetObject(parent).Name.c_str(),object.Parent == parent)) { Report(Document.SetParent(id,parent)); } ImGui::PopID(); }
+                if (ImGui::Selectable("<root>",!object.Parent) && object.Parent) { Report(Document.SetParent(id,NoObject)); }
+                for (auto parent : Document.GetScene().ObjectIds()) {
+                    auto ancestor = parent;
+                    while (ancestor && ancestor != id) { ancestor = Document.GetScene().GetObject(ancestor).Parent; }
+                    if (ancestor == id) { continue; }
+                    Id(parent);
+                    if (ImGui::Selectable(Document.GetScene().GetObject(parent).Name.c_str(),object.Parent == parent) && object.Parent != parent) { Report(Document.SetParent(id,parent)); }
+                    ImGui::PopID();
+                }
                 ImGui::EndCombo();
             }
             auto t = object.LocalTransform;
             bool changed = VecInput("Position",t.Position); changed = RotationInput(t.Rotation) || changed; changed = VecInput("Scale",t.Scale,0.01f) || changed;
             if (changed) { Report(Document.SetTransform(id,t)); }
-            ImGui::TextWrapped("%s",object.Model ? Text(object.Model->SourcePath.filename()).c_str() : "Empty object");
+            const auto modelName = object.Model ? (object.Model->Terrain ? "Terrain" : Text(object.Model->SourcePath.filename())) : "<empty>";
+            // Copy handles so a transactional edit cannot invalidate the list being drawn.
+            ImGui::BeginDisabled(Document.IsEditing());
+            if (ImGui::BeginCombo("Model",modelName.c_str())) {
+                const auto library = Document.Assets();
+                if (ImGui::Selectable("<empty>",!object.Model) && object.Model) { Report(Document.SetModel(id),id); }
+                for (const auto& asset : library) {
+                    Id(asset->Id);
+                    if (ImGui::Selectable(Text(asset->SourcePath.filename()).c_str(),asset == object.Model) && asset != object.Model) {
+                        if (Report(Document.SetModel(id,asset->Id),id)) { selectedAsset_ = asset->Id; }
+                    }
+                    ImGui::SetItemTooltip("%s",Text(asset->SourcePath).c_str());
+                    ImGui::PopID();
+                }
+                if (library.empty()) { ImGui::TextDisabled("Import a model to assign it here."); }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip("Replace or detach the mesh on this object. The hierarchy and transform stay in place. Model animation and material overrides reset.");
+            ImGui::EndDisabled();
             EquipmentControls(id);
             if (ImGui::Button("Delete subtree...")) { deleteObject_=id; }
-            if (object.Model && ImGui::CollapsingHeader("Materials")) {
+            if (object.Model && object.Model == Document.GetScene().GetObject(id).Model && ImGui::CollapsingHeader("Materials")) {
                 ImGui::TextUnformatted("PBR uses Advanced lighting + PBR quality. Direct lights; no IBL.");
                 for (std::size_t index=0;index<object.Model->Materials.size();++index) {ImGui::PushID(static_cast<int>(index));auto material=Document.GetScene().GetMaterial(id,index);
                     const auto label=material.Name.empty() ? "Material "+std::to_string(index):material.Name;
@@ -355,6 +438,9 @@ void EditorUI::Inspector() {
                         bool materialChanged=false;int shading=material.Unlit ? 1:static_cast<int>(material.Shading);
                         if (ImGui::Combo("Shading",&shading,"Basic\0Unlit\0PBR\0")) {material.Shading=static_cast<ShadingModel>(shading);material.Unlit=shading == 1;materialChanged=true;}
                         materialChanged=ImGui::ColorEdit4("Base color",material.BaseColor.data()) || materialChanged;
+                        bool alphaMask = material.AlphaCutoff >= 0;
+                        if (ImGui::Checkbox("Alpha mask",&alphaMask)) { material.AlphaCutoff = alphaMask ? 0.5f : -1.0f; materialChanged = true; }
+                        if (alphaMask) { materialChanged = ImGui::SliderFloat("Alpha cutoff",&material.AlphaCutoff,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp) || materialChanged; }
                         materialChanged=ImGui::SliderFloat("Metallic",&material.MetallicFactor,0,1) || materialChanged;materialChanged=ImGui::SliderFloat("Roughness",&material.RoughnessFactor,0,1) || materialChanged;
                         materialChanged=ImGui::SliderFloat("Normal scale",&material.NormalScale,-16,16) || materialChanged;materialChanged=ImGui::Checkbox("Double sided",&material.DoubleSided) || materialChanged;
                         const auto texture=[&](const char* name,std::optional<std::size_t>& slot) {const auto preview=slot ? std::to_string(*slot):"<none>";bool edit=false;if (ImGui::BeginCombo(name,preview.c_str())) {if (ImGui::Selectable("<none>",!slot)) {slot.reset();edit=true;}for (std::size_t i=0;i<object.Model->Textures.size();++i) {const auto image=object.Model->Textures[i].ImageIndex;if (image>=object.Model->Images.size() || object.Model->Images[image].Rgba.empty()) {continue;}const auto text=std::to_string(i);if (ImGui::Selectable(text.c_str(),slot == i)) {slot=i;edit=true;}}ImGui::EndCombo();}return edit;};
@@ -367,7 +453,7 @@ void EditorUI::Inspector() {
         } else { ImGui::TextUnformatted("Select an object in Hierarchy."); }
         if (id && Document.GetScene().Contains(id)) {const auto model=Document.GetScene().GetObject(id).Model;if (model && ImGui::CollapsingHeader("Morph Targets")) {
             bool found=false;for (std::size_t i=0;i<model->Nodes.size();++i) {const auto& node=model->Nodes[i];if (!node.MeshIndex || model->Meshes[*node.MeshIndex].MorphWeights.empty()) {continue;}found=true;const auto joint=static_cast<JointId>(i);auto weights=Document.GetScene().GetObject(id).Animation.EvaluateMorphWeights(joint);ImGui::PushID(static_cast<int>(i));ImGui::Text("Node %zu: %s",i,node.Name.c_str());bool edited=false;
-                for (std::size_t t=0;t<weights.size();++t) {ImGui::PushID(static_cast<int>(t));const auto& name=model->Meshes[*node.MeshIndex].Primitives[0].MorphTargets[t].Name;edited=ImGui::SliderFloat(name.c_str(),&weights[t],-1,1,"%.3f") || edited;ImGui::PopID();}
+                for (std::size_t t=0;t<weights.size();++t) {ImGui::PushID(static_cast<int>(t));const auto& name=model->Meshes[*node.MeshIndex].Primitives[0].MorphTargets[t].Name;const auto label = name.empty() ? "Target "+std::to_string(t+1) : name;edited=ImGui::DragFloat(label.c_str(),&weights[t],.01f,-100,100,"%.3f",ImGuiSliderFlags_AlwaysClamp) || edited;ImGui::PopID();}
                 if (edited) {Report(Document.SetMorphWeights(id,joint,weights));}if (ImGui::Button("Reset morph override")) {Report(Document.ClearMorphWeights(id,joint));}ImGui::PopID();
             }ImGui::TextUnformatted(found ? "Overrides apply after animation. Reset resumes animated/default weights.":"This model has no morph targets.");
         }}
@@ -607,28 +693,36 @@ void EditorUI::AssetBrowser() {
         if (ImGui::Button("Import Assets...")) { FileDialog(Dialog::Import); }
         ImGui::SameLine(); if (ImGui::Button("Up")) { directory_ = directory_.parent_path(); }
         ImGui::SameLine(); ImGui::TextUnformatted(Text(directory_).c_str());
-        ImGui::SetNextItemWidth(200); ImGui::InputTextWithHint("##filter","Filter files",&filter_);
+        ImGui::SetNextItemWidth(200); ImGui::InputTextWithHint("##filter","Search assets...",&filter_);
         if (ImGui::BeginTabBar("Assets")) {
             if (ImGui::BeginTabItem("Imported")) {
-                ImGui::TextUnformatted("Drag an asset to Viewport, or select and Place.");
-                AssetId reimport = 0;
+                ImGui::TextWrapped("Drag to Viewport to place at the root, or onto a Hierarchy object to place as its child.");
+                AssetId place = 0, reimport = 0;
+                bool found = false;
                 for (const auto& model : Document.Assets()) {
+                    const auto name = Text(model->SourcePath.filename());
+                    if (!ContainsText(name,filter_)) { continue; }
+                    found = true;
                     Id(model->Id);
-                    if (ImGui::Selectable(Text(model->SourcePath.filename()).c_str(),selectedAsset_ == model->Id,ImGuiSelectableFlags_AllowDoubleClick)) {
+                    if (ImGui::Selectable(name.c_str(),selectedAsset_ == model->Id,ImGuiSelectableFlags_AllowDoubleClick)) {
                         selectedAsset_ = model->Id;
-                        if (ImGui::IsMouseDoubleClicked(0)) { Report(Document.PlaceModel(selectedAsset_)); }
+                        if (ImGui::IsMouseDoubleClicked(0) && !Document.IsEditing()) { place = model->Id; }
                     }
                     if (ImGui::BeginDragDropSource()) {
-                        ImGui::SetDragDropPayload("MVX_ASSET",&model->Id,sizeof(AssetId)); ImGui::TextUnformatted(Text(model->SourcePath.filename()).c_str()); ImGui::EndDragDropSource();
+                        ImGui::SetDragDropPayload("MVX_ASSET",&model->Id,sizeof(AssetId)); ImGui::TextUnformatted(name.c_str()); ImGui::EndDragDropSource();
                     }
                     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s",Text(model->SourcePath).c_str()); }
                     if (selectedAsset_ == model->Id) {
-                        if (ImGui::SmallButton("Place instance")) { if (Report(Document.PlaceModel(selectedAsset_))) { FrameScene(); } }
+                        ImGui::BeginDisabled(Document.IsEditing());
+                        if (ImGui::SmallButton("Place instance")) { place = model->Id; }
                         ImGui::SameLine();if (ImGui::SmallButton("Reimport")) {reimport = model->Id;}
+                        ImGui::EndDisabled();
                         for (const auto& warning : model->Warnings) { ImGui::TextWrapped("%s",warning.c_str()); }
                     }
                     ImGui::PopID();
                 }
+                if (!found) { ImGui::TextDisabled(Document.Assets().empty() ? "No imported assets." : "No assets match the search."); }
+                if (place && Report(Document.PlaceModel(place))) { FrameScene(); }
                 if (reimport) {ReimportAsset(reimport);}
                 ImGui::EndTabItem();
             }
@@ -637,7 +731,7 @@ void EditorUI::AssetBrowser() {
                     std::vector<std::filesystem::directory_entry> files;
                     for (const auto& entry : std::filesystem::directory_iterator(directory_,std::filesystem::directory_options::skip_permission_denied)) {
                         const auto name = Text(entry.path().filename());
-                        if ((entry.is_directory() || ModelFile(entry.path())) && (filter_.empty() || name.find(filter_) != std::string::npos)) { files.push_back(entry); }
+                        if (entry.is_directory() || (ModelFile(entry.path()) && ContainsText(name,filter_))) { files.push_back(entry); }
                     }
                     std::sort(files.begin(),files.end(),[](const auto& a,const auto& b) { return a.path() < b.path(); });
                     for (const auto& entry : files) {
@@ -660,10 +754,25 @@ void EditorUI::ViewportPanel() {
     gizmoVisible_=false;viewportRect_={};
     if (!viewport_) {FinishTerrainStroke(true);StopCameraEdit(true);if (gizmoEditing_) {if (Document.IsEditing()) {(void)Document.CancelEdit();}ImGuizmo::Enable(false);gizmoEditing_=false;}Viewport.Resize(0,0);return;}
     if (ImGui::Begin("Viewport",&viewport_)) {
-        if (ImGui::Button("Focus selected (F)")) { FrameScene(); }
+        ImGui::BeginDisabled(Document.IsEditing() || !Document.Selection());
+        if (ImGui::Button("Frame Selection")) { FrameScene(); }
+        ImGui::SetItemTooltip("F");
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(Document.IsEditing());
+        if (ImGui::Button("Frame All")) { FrameScene(false); }
+        ImGui::SetItemTooltip("Shift+F");
+        ImGui::EndDisabled();
         ImGui::SameLine();ImGui::BeginDisabled(Document.IsEditing());ImGui::SetNextItemWidth(115);ImGui::Combo("##transform-tool",&transformTool_,"Move (W)\0Rotate (E)\0Scale (R)\0");ImGui::EndDisabled();
-        ImGui::SameLine();ImGui::Checkbox("Grid / Axis",&grid_);
-        ImGui::TextUnformatted("Left: Select / Gizmo | Right: Orbit | Middle: Pan | Wheel: Zoom | Esc: Cancel");
+        ImGui::SameLine(); ImGui::BeginDisabled(transformTool_ == 2 || Document.IsEditing());
+        if (ImGui::Button(worldTransformTool_ && transformTool_ != 2 ? "World###space" : "Local###space")) { worldTransformTool_ = !worldTransformTool_; }
+        ImGui::SetItemTooltip("Transform axes. Scale uses local axes."); ImGui::EndDisabled();
+        if (ImGui::Checkbox("Surface Measure",&surfacePick_)) {
+            if (surfacePick_) { surfacePanel_ = true; terrainTool_ = 0; ImGui::SetWindowFocus("Surface Measure"); }
+        }
+        ImGui::SameLine(); ImGui::Checkbox("Grid / Axis",&grid_);
+        ImGui::SameLine(); ImGui::TextDisabled("Controls");
+        ImGui::SetItemTooltip("Left: Select / Gizmo\nRight: Orbit\nMiddle: Pan\nWheel: Zoom\nEsc: Cancel");
         const auto available = ImGui::GetContentRegionAvail(); const auto& io = ImGui::GetIO();
         if (available.x > 1 && available.y > 1) {
             Viewport.Resize(static_cast<int>(std::min(65536.0f,available.x*sapp_dpi_scale())),static_cast<int>(std::min(65536.0f,available.y*sapp_dpi_scale())));
@@ -701,20 +810,24 @@ void EditorUI::ViewportPanel() {
             }
             const bool terrainInput = TerrainInput(io.MousePos.x-imageMin.x,io.MousePos.y-imageMin.y,
                 {available.x,available.y},hovered&&!uiBlocked&&!cameraDrag_,io.AppFocusLost||modal);
-            TransformTools(imageMin.x,imageMin.y,available.x,available.y,!modal&&!uiBlocked&&!cameraDrag_&&!terrainInput,!terrainInput);
+            const bool surfaceInput = !terrainInput && SurfaceInput(io.MousePos.x-imageMin.x,io.MousePos.y-imageMin.y,
+                {available.x,available.y},hovered,modal||uiBlocked||cameraDrag_);
+            const bool toolOwnsInput = terrainInput || surfaceInput;
+            TransformTools(imageMin.x,imageMin.y,available.x,available.y,!modal&&!uiBlocked&&!cameraDrag_&&!toolOwnsInput,!toolOwnsInput);
             if (!io.AppFocusLost && !modal && !uiBlocked) {
-                if (!terrainInput && hovered && !gizmoBlockInput_ && !io.WantTextInput && ImGui::IsMouseClicked(0)) {try {Report(Document.Select(detail::PickSceneObject(Document.GetScene(),Viewport.Aspect(),(io.MousePos.x-imageMin.x)/available.x*2-1,1-(io.MousePos.y-imageMin.y)/available.y*2)));ImGui::SetWindowFocus();}catch (const std::exception& e) {ShowError({ErrorCode::InvalidArgument,e.what(),"Check the camera and visible model bounds.",{}});}}
-                if (!terrainStroke_ && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.WantTextInput && !gizmoEditing_ && !gizmoSuppressed_) {
+                if (!toolOwnsInput && hovered && !gizmoBlockInput_ && !io.WantTextInput && ImGui::IsMouseClicked(0)) {try {Report(Document.Select(detail::PickSceneObject(Document.GetScene(),Viewport.Aspect(),(io.MousePos.x-imageMin.x)/available.x*2-1,1-(io.MousePos.y-imageMin.y)/available.y*2)));ImGui::SetWindowFocus();}catch (const std::exception& e) {ShowError({ErrorCode::InvalidArgument,e.what(),"Check the camera and visible model bounds.",{}});}}
+                if (!uiNumberFocus_ && !terrainStroke_ && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.WantTextInput && !gizmoEditing_ && !gizmoSuppressed_) {
                     if (cameraEditing_) {if (ImGui::IsKeyPressed(ImGuiKey_Escape,false)) {StopCameraEdit(true);}}
                     else {
                         if (!io.KeyCtrl && !io.KeySuper) {if (ImGui::IsKeyPressed(ImGuiKey_W,false)) {transformTool_=0;}if (ImGui::IsKeyPressed(ImGuiKey_E,false)) {transformTool_=1;}if (ImGui::IsKeyPressed(ImGuiKey_R,false)) {transformTool_=2;}}
-                        if (ImGui::IsKeyPressed(ImGuiKey_F,false)) {FrameScene();}
+                        if (ImGui::IsKeyPressed(ImGuiKey_F,false)) {FrameScene(!io.KeyShift);}
                         if (ImGui::IsKeyPressed(ImGuiKey_Delete,false) && Document.Selection()) {deleteObject_=Document.Selection();}
-                        if (ImGui::IsKeyPressed(ImGuiKey_Escape,false)) {Report(Document.Select(NoObject));controls_.Reset();cameraDrag_=false;}
+                        if (!toolOwnsInput && ImGui::IsKeyPressed(ImGuiKey_Escape,false)) {Report(Document.Select(NoObject));controls_.Reset();cameraDrag_=false;}
                     }
                 }
             }
             UpdateTerrainContours();
+            DrawSurfaceMarks(imageMin.x,imageMin.y,{available.x,available.y});
             Viewport.Render(Document.GetScene());
             drawList->ChannelsSetCurrent(0);
             const auto texture=Viewport.Texture();
@@ -794,7 +907,11 @@ void EditorUI::Draw() {
     PollAssetJobs();
     PollAnimationEvents();
     if (pendingQuality_) {const auto profile=std::move(*pendingQuality_);pendingQuality_.reset();Report(ApplyQualityProfile(profile));lastAnalysis_=-1;}
-    Menu(); Dockspace(); Hierarchy(); Inspector(); BoneInspector(); AssetBrowser();AssetInspector(); AnimationControls(); QualitySettings(); UiDesigner();TerrainPanel();ViewportPanel(); PerformancePanel();RenderDebugger();AnimationDebugger();Console(); Welcome();ImportPreview(); Dialogs();
+    Menu(); Dockspace(); Hierarchy(); Inspector(); BoneInspector(); AssetBrowser(); AssetInspector(); AnimationControls(); QualitySettings(); UiDesigner(); TerrainPanel(); SurfacePanel();
+#if MINVEX_EDITOR_PHYSICS
+    BoxPhysicsPanel();
+#endif
+    ViewportPanel(); PerformancePanel(); RenderDebugger(); AnimationDebugger(); Console(); Welcome(); ImportPreview(); Dialogs();
     if (ImGui::BeginViewportSideBar("Status",ImGui::GetMainViewport(),ImGuiDir_Down,ImGui::GetFrameHeight(),ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings)) {
         const auto stats = Viewport.Stats();
         ImGui::Text("%zu objects | %zu assets | %zu draw calls | %s",Document.GetScene().Size(),Document.Assets().size(),stats.LastDrawCalls,status_.c_str());

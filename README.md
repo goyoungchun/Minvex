@@ -88,6 +88,14 @@ cmake --build --preset windows-release --target minvex_survey minvex_load_planni
 
 Editor의 **Window → Terrain**에서 평면 생성, 산악 프리셋, 브러시, CSV·PNG 가져오기, 등고선과 표고 측정을 사용할 수 있습니다. 지형은 Scene 파일에 함께 저장됩니다. [지형 API](docs/API.md#지형-격자와-측량) · [상자 물리](docs/API.md#상자-받침과-중력-미리보기)
 
+#### Editor에서 장면 편집과 측정
+
+- **Hierarchy**에서 빈 자식 객체를 만들거나, 가져온 에셋을 객체 위로 드래그해 자식으로 배치합니다. **Inspector → Model**에서 기존 객체의 모델을 교체하거나 분리할 수 있습니다.
+- **Viewport → Surface Measure**에서 두 점을 클릭하면 모델 표면의 월드 좌표와 두 점 사이의 직선 거리·수평 거리·높이 차이가 표시됩니다. `F`는 선택 객체, `Shift+F`는 전체 장면을 화면에 맞춥니다.
+- **Window → Box Physics**에서 선택 객체를 상자 콜라이더로 추가한 뒤 받침을 검사하거나 중력과 회전을 미리 봅니다. **Apply transforms**를 누르면 장면에 반영되며, Undo 한 번으로 되돌릴 수 있습니다. 이 패널은 상자 물리 옵션을 켠 빌드에서 제공됩니다.
+- **Terrain → Edit grid sample**에서 행과 열을 지정해 한 지점의 표고를 편집합니다. **Inspector → Materials**에서는 알파 마스크와 컷오프를 설정합니다.
+- **UI Designer → + Number**로 숫자 입력 필드를 추가하고 초기값·허용 범위·단위를 설정합니다. **Interact with UI in viewport**를 켜면 화면에서 직접 값을 입력해 확인할 수 있습니다.
+
 ### 기존 CMake 앱에 추가
 
 프로젝트의 `CMakeLists.txt`에서 실제 앱 타깃 이름으로 `my_app`을 바꿉니다. 창 또는 네이티브 렌더링이 필요할 때 `graphics` component를 요청하면 CPU 전용 SDK를 구성 단계에서 구분할 수 있습니다.

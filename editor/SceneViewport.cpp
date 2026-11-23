@@ -5,11 +5,13 @@
 
 namespace lv::editor {
 namespace {
-Result<void> SetLines(detail::RenderSurface& surface, const DebugDraw& lines, const DebugDraw& other, DebugDraw& stored) {
+Result<void> SetLines(detail::RenderSurface& surface, const DebugDraw& lines, const DebugDraw& first, const DebugDraw& second, DebugDraw& stored) {
     try {
         auto copy = lines;
         auto combined = lines;
-        for (const auto& line : other.Lines()) { combined.DrawLine(line.Start,line.End,line.Color); }
+        for (const auto* other : {&first,&second}) {
+            for (const auto& line : other->Lines()) { combined.DrawLine(line.Start,line.End,line.Color); }
+        }
         auto result = surface.SetDebugDraw(combined);
         if (result) { stored = std::move(copy); }
         return result;
@@ -18,8 +20,13 @@ Result<void> SetLines(detail::RenderSurface& surface, const DebugDraw& lines, co
     }
 }
 }
-Result<void> SceneViewport::SetDebugDraw(const DebugDraw& d) { return SetLines(surface_,d,terrainDraw_,debugDraw_); }
-Result<void> SceneViewport::SetTerrainDraw(const DebugDraw& d) { return SetLines(surface_,d,debugDraw_,terrainDraw_); }
+Result<void> SceneViewport::SetDebugDraw(const DebugDraw& d) { return SetLines(surface_,d,terrainDraw_,physicsDraw_,debugDraw_); }
+Result<void> SceneViewport::SetTerrainDraw(const DebugDraw& d) { return SetLines(surface_,d,debugDraw_,physicsDraw_,terrainDraw_); }
+Result<void> SceneViewport::SetPhysicsDraw(const DebugDraw& d) { return SetLines(surface_,d,debugDraw_,terrainDraw_,physicsDraw_); }
+std::optional<SurfaceHit> SceneViewport::PickSurface(const Scene& scene, ViewportSize image, float x, float y, ObjectId object) const {
+    const ViewportSize output{static_cast<float>(width_),static_cast<float>(height_)};
+    return scene.PickSurface(ScreenRay(scene.MainCamera,output,x/image.Width*output.Width,y/image.Height*output.Height),object);
+}
 void SceneViewport::Resize(int width,int height) {
     width_=std::clamp(width,0,65536);height_=std::clamp(height,0,65536);
     (void)surface_.Resize(scene_ ? *scene_:empty_,width_,height_);

@@ -2,6 +2,10 @@
 #include "TestHarness.h"
 #include "EditorPreferences.h"
 #include "CameraController.h"
+#if MINVEX_TEST_EDITOR_BOX_PREVIEW
+#include "BoxPreview.h"
+#include <minvex/Terrain.h>
+#endif
 #include <json.hpp>
 
 #include <limits>
@@ -240,6 +244,73 @@ void MaterialOverrides() {
     Check(bool(doc.ReimportModel(asset)) && doc.GetScene().GetMaterial(a,0).RoughnessFactor == .2f,"compatible reimport retains material overrides");
     Check(bool(doc.ResetMaterial(a,0)) && doc.GetScene().GetObject(a).MaterialOverrides.empty(),"ResetMaterial restores shared source material");
 }
+void ModelAssignment() {
+    TemporaryDirectory temp;
+    lv::EditorDocument doc;
+    const auto first = doc.ImportModel(Fixture("SharedBox.gltf")).Value();
+    const auto second = doc.ImportModel(Fixture("AnimatedRibbon.gltf")).Value();
+    const auto parent = doc.CreateObject("Group").Value();
+    const auto object = doc.CreateObject("Keep this name",parent).Value();
+    lv::Transform transform; transform.Position.X = 2;
+    Check(bool(doc.SetTransform(object,transform)) && bool(doc.SetModel(object,first)),"assign an imported model to an empty object");
+    const auto original = doc.GetScene().GetObject(object).Model;
+    auto material = doc.GetScene().GetMaterial(object,0);
+    material.AlphaCutoff = .6f;
+    Check(bool(doc.SetMaterial(object,0,material)),"edit alpha mask on the assigned model");
+    const auto file = temp.File("Model.mvxscene.json");
+    Check(bool(doc.Save(file)) && bool(doc.SetModel(object,first)) && !doc.IsDirty(),"choosing the current model is a clean no-op");
+    Check(!doc.SetModel(object,UINT64_MAX) && !doc.IsDirty() && doc.GetScene().GetObject(object).Model == original,"unknown asset cannot replace an existing model");
+    Check(bool(doc.SetModel(object,second)),"replace the model in place");
+    const auto& replaced = doc.GetScene().GetObject(object);
+    Check(replaced.Model->Id == second && replaced.Parent == parent && replaced.Name == "Keep this name" &&
+        replaced.LocalTransform.Position.X == 2 && replaced.MaterialOverrides.empty() && doc.Selection() == object,
+        "replacement preserves scene identity, hierarchy and transform while resetting model overrides");
+    Check(bool(doc.Undo()) && !doc.IsDirty() && doc.GetScene().GetMaterial(object,0).AlphaCutoff == .6f,
+        "undo restores original model and mask at the savepoint");
+    Check(bool(doc.Redo()) && bool(doc.SetModel(object)) && !doc.GetScene().GetObject(object).Model && doc.Assets().size() == 2,
+        "detaching keeps the library and object");
+    Check(bool(doc.Undo()) && doc.GetScene().GetObject(object).Model->Id == second,"undo detach restores replacement");
+}
+#if MINVEX_TEST_EDITOR_BOX_PREVIEW
+void PhysicsPreview() {
+    using namespace lv::editor;
+    TemporaryDirectory temp;
+    lv::EditorDocument doc;
+    const auto asset = doc.ImportModel(Fixture("SharedBox.glb")).Value();
+    const auto floor = doc.CreateTerrain(lv::TerrainGrid({2,2,10,10,{-5,-5,0}})).Value();
+    lv::Transform transform; transform.Position = {4,2,4};
+    const auto object = doc.PlaceModel(asset,transform).Value();
+    transform.Position.X = 7;
+    const auto second = doc.PlaceModel(asset,transform).Value();
+    const std::array colliders{BoxCollider{floor,true},BoxCollider{object},BoxCollider{second}};
+    const auto& scene = doc.GetScene();
+    const auto original = scene.GetWorldTransform(object);
+    const auto floorPose = scene.GetWorldTransform(floor);
+    Check(bool(doc.Save(temp.File("Boxes.mvxscene.json"))),"save initial collider scene");
+    const auto support = PreviewBoxes(scene,colliders,BoxPreviewMode::Support);
+    Check(!support.HasChanges() && support.Support[1].Gap > 0 && !doc.IsDirty(),"support query reports a gap without editing the scene");
+    const auto gravity = PreviewBoxes(scene,colliders,BoxPreviewMode::Gravity,{1});
+    Check(gravity.HasChanges() && gravity.Grounded[1] && gravity.Support[1].ContactFraction > 0.99 &&
+        !doc.IsDirty() && scene.GetWorldTransform(object).Elements == original.Elements,"gravity previews contact without moving the source objects");
+    Check(bool(ApplyBoxPreview(doc,gravity)) && doc.IsDirty() && scene.GetWorldTransform(object).Elements[13] < original.Elements[13] &&
+        scene.GetWorldTransform(floor).Elements == floorPose.Elements,"apply moves dynamic objects and preserves the static collider");
+    Check(bool(doc.Undo()) && !doc.IsDirty() && scene.GetWorldTransform(object).Elements == original.Elements &&
+        scene.GetWorldTransform(second).Elements[13] == 2,"one undo restores both moving transforms");
+    auto rigid = PreviewBoxes(scene,colliders,BoxPreviewMode::Rigid,{.1});
+    const auto firstY = rigid.Rigid.Boxes[1].Position.Y;
+    rigid.StepRigid({.1});
+    Check(rigid.Seconds == .2 && rigid.Rigid.Boxes[1].Position.Y < firstY && rigid.HasChanges() && !doc.IsDirty(),
+        "oriented steps continue physics without editing the scene");
+    Check(bool(doc.SetTransform(object,transform)) && !ApplyBoxPreview(doc,rigid),"changed collider transform invalidates the pending result");
+    Check(bool(doc.Undo()),"restore source transform before atomicity test");
+    auto bad = gravity;
+    bad.Sources[2].Destination.Elements[0] = 0;
+    Check(!ApplyBoxPreview(doc,bad) && !doc.IsEditing() && !doc.IsDirty() &&
+        scene.GetWorldTransform(object).Elements == original.Elements,"invalid transform rolls back earlier changes in the same application");
+    Check(bool(doc.SetParent(second,object)),"set up overlapping collider hierarchy");
+    Rejects([&] { (void)PreviewBoxes(scene,colliders,BoxPreviewMode::Rigid,{.1}); },"moving ancestor of another collider is rejected");
+}
+#endif
 void MorphDocument() {
     TemporaryDirectory temp;const auto path=temp.File("Morph.mvxscene.json");lv::EditorDocument doc;const auto asset=doc.ImportModel(Fixture("MorphRibbon.gltf")).Value();const auto id=doc.PlaceModel(asset).Value();const std::array<float,2> weights{.8f,.2f};
     Check(bool(doc.SetMorphWeights(id,3,weights)) && doc.IsDirty(),"Morph edit marks document dirty");Check(bool(doc.Undo()) && Near(doc.GetScene().GetObject(id).Animation.EvaluateMorphWeights(3)[0],.6f) && bool(doc.Redo()),"Morph edit participates in Undo/Redo");
@@ -253,7 +324,13 @@ void MorphDocument() {
     Check(bool(doc.ReimportModel(asset)) && doc.GetScene().GetObject(id).Animation.MorphOverrides().size() == 1,"compatible reimport preserves morph state");
 }
 int main() {
-    try { RoundTrip(); InvalidArchives(); QuickOpenAndPreferences(); CompatibilityDocument();HistoryAndOrthographic();MaterialOverrides();MorphDocument(); }
+    try {
+        RoundTrip(); InvalidArchives(); QuickOpenAndPreferences(); CompatibilityDocument();
+        HistoryAndOrthographic(); MaterialOverrides(); ModelAssignment(); MorphDocument();
+#if MINVEX_TEST_EDITOR_BOX_PREVIEW
+        PhysicsPreview();
+#endif
+    }
     catch (const std::exception& e) { Check(false,e.what()); }
     return Finish();
 }

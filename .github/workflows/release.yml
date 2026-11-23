@@ -8,7 +8,7 @@ on:
         description: Existing release tag to build and publish
         type: string
         required: true
-        default: v1.1.0
+        default: v1.1.1
       verify_existing:
         description: Verify archives from this revision for an existing release
         type: boolean
@@ -102,12 +102,14 @@ jobs:
 
           The Windows archive filename includes the required MSVC compiler major.minor (for example, MSVC-19.51). Check your compiler with cl /Bv. If the versions differ, select the matching MSVC toolset or build the SDK from this release tag with your compiler.
 
-          New in 1.1.0
+          New in 1.1.1
 
-          - Viewer pointer capture keeps application drags active over UI controls. Keyboard events cover arrows, letters and digits. Logical-pixel screen transforms and filtered triangle picking support perspective and orthographic cameras.
-          - Terrain grids share elevation data across mesh generation, contours and measurement. The Editor includes seeded mountains, raise/lower/smooth brushes, regular CSV grids and grayscale PNG heightmaps. The survey Quick Start demonstrates measurement with a local rendering origin.
-          - The optional minvex::physics component supports rotating boxes, Coulomb friction and contact between moving bodies. The loading Quick Start shows cargo tipping and falling from a pallet. Apply result commits the final positions and rotations.
-          - The Windows Quick Start build helper streams tool paths, the UTF-8 code page, CMake stages and output when running from headless automation.
+          - In the Editor, measure distances between two surface points, inspect box supports, and preview gravity and rigid-box collisions. Applying a physics preview records the result as one undoable edit.
+          - Assign, replace, or detach an imported model on an existing object with EditorDocument::SetModel or the Editor's Inspector. The object's hierarchy and local transform are preserved.
+          - The Editor adds child asset placement, frame selection and frame all commands, local and world transform axes, precise terrain elevation edits, alpha masking controls, import budgets, and mesh locality statistics.
+          - The UI Designer can create Number Input fields, configure initial values and bounds, and accept decimal input in the viewport preview.
+
+          Build minvex_editor from the source tag to use the Editor application. The Box Physics panel uses the optional minvex::physics component.
 
           The examples are in share/minvex/examples/QuickStart.
 

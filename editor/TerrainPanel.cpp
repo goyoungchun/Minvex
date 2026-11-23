@@ -74,9 +74,35 @@ void EditorUI::TerrainPanel() {
         ImGui::EndDisabled();
         ImGui::EndDisabled();
         if (model) {
-            ImGui::Text("%.3f x %.3f m",model->Terrain->Width(),model->Terrain->Depth());
+            const auto& grid = *model->Terrain;
+            ImGui::Text("%zu x %zu samples | %.3f x %.3f m",grid.Layout().Columns,grid.Layout().Rows,grid.Width(),grid.Depth());
+            if (ImGui::TreeNode("Edit grid sample")) {
+                ImGui::BeginDisabled(Document.IsEditing());
+                ImGui::InputInt("Column (X)",&terrainSampleColumn_);
+                ImGui::InputInt("Row (Z)",&terrainSampleRow_);
+                terrainSampleColumn_ = std::clamp(terrainSampleColumn_,0,static_cast<int>(grid.Layout().Columns)-1);
+                terrainSampleRow_ = std::clamp(terrainSampleRow_,0,static_cast<int>(grid.Layout().Rows)-1);
+                const auto column = static_cast<std::size_t>(terrainSampleColumn_);
+                const auto row = static_cast<std::size_t>(terrainSampleRow_);
+                const auto height = grid.Heights()[row*grid.Layout().Columns+column];
+                ImGui::Text("Current elevation %.3f m",height+grid.Layout().Origin.Elevation);
+                ImGui::InputDouble("New elevation (m)",&terrainSampleHeight_,0,0,"%.3f");
+                if (ImGui::Button("Use current")) { terrainSampleHeight_ = height+grid.Layout().Origin.Elevation; }
+                ImGui::SameLine();
+                if (ImGui::Button("Apply elevation") && terrainSampleHeight_ != height+grid.Layout().Origin.Elevation) {
+                    try {
+                        auto edited = grid;
+                        edited.SetHeight(column,row,terrainSampleHeight_-grid.Layout().Origin.Elevation);
+                        Report(Document.SetTerrain(Document.Selection(),edited),Document.Selection());
+                    } catch (const std::exception& e) {
+                        ShowError({ErrorCode::InvalidArgument,e.what(),"Enter a finite elevation within the terrain height limits.",{}},Document.Selection());
+                    }
+                }
+                ImGui::EndDisabled();
+                ImGui::TreePop();
+            }
             ImGui::BeginDisabled(terrainStroke_);
-            ImGui::Combo("Viewport tool",&terrainTool_,"Select / Transform\0Measure\0Raise\0Lower\0Smooth\0");
+            if (ImGui::Combo("Viewport tool",&terrainTool_,"Select / Transform\0Measure\0Raise\0Lower\0Smooth\0") && terrainTool_) { surfacePick_ = false; }
             if (terrainTool_ >= 2) {
                 ImGui::InputDouble("Brush radius (m)",&brushRadius_);
                 ImGui::InputDouble(terrainTool_ == 4 ? "Smooth strength [0, 1]" : "Brush height (m)",&brushStrength_);
@@ -121,9 +147,7 @@ bool EditorUI::TerrainInput(float x,float y,ViewportSize size,bool hovered,bool 
     if (!hovered || (!clicked && !terrainStroke_)) { return true; }
     try {
         const auto& scene = Document.GetScene();
-        const ViewportSize output{static_cast<float>(Viewport.OutputWidth()),static_cast<float>(Viewport.OutputHeight())};
-        const auto ray = ScreenRay(scene.MainCamera,output,x/size.Width*output.Width,y/size.Height*output.Height);
-        const auto hit = scene.PickSurface(ray,id);
+        const auto hit = Viewport.PickSurface(scene,size,x,y,id);
         if (!hit) { return true; }
         const auto local = scene.GetWorldTransform(id).InverseAffine().TransformPoint(hit->Position);
         const auto& grid = *model->Terrain;

@@ -34,7 +34,8 @@ void EditorUI::TransformTools(float x,float y,float width,float height,bool enab
         auto world=Document.GetScene().GetWorldTransform(object);
         const ImGuizmo::OPERATION operations[]{ImGuizmo::TRANSLATE,ImGuizmo::ROTATE,ImGuizmo::SCALE};
         gizmoVisible_=true;
-        const bool changed=ImGuizmo::Manipulate(view.Elements.data(),projection.Elements.data(),operations[transformTool_],ImGuizmo::LOCAL,world.Elements.data());
+        const auto mode = worldTransformTool_ && transformTool_ != 2 ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+        const bool changed=ImGuizmo::Manipulate(view.Elements.data(),projection.Elements.data(),operations[transformTool_],mode,world.Elements.data());
         if (ImGuizmo::IsUsing() && !gizmoEditing_) {if (Report(Document.BeginEdit(),object)) {gizmoEditing_=true;gizmoObject_=object;}}
         if (changed && gizmoEditing_) {if (!Report(Document.SetWorldTransform(object,world),object)) {gizmoEditing_=false;gizmoSuppressed_=true;ImGuizmo::Enable(false);}}
         if (gizmoEditing_ && !ImGuizmo::IsUsing()) {Report(Document.CommitEdit(),object);gizmoEditing_=false;}

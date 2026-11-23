@@ -1,6 +1,6 @@
 # Minvex API
 
-**C++20 Graphics SDK · Version 1.1.0 · Namespace `lv`**
+**C++20 Graphics SDK · Version 1.1.1 · Namespace `lv`**
 
 모듈별 주요 타입과 API를 정리한 사용 안내임. 전체 선언은 연결된 공개 헤더에서 확인할 수 있음.
 
@@ -41,7 +41,7 @@ target_link_libraries(my_viewer PRIVATE minvex::viewer)
 | **scene_io** · [SceneIO.h](../include/minvex/SceneIO.h), [PoseIO.h](../include/minvex/PoseIO.h) | `SceneArchive`, `SaveScene(scene, path, library={})`, `LoadScene(path, registry)`, `SavePose(pose, skeleton, path)`, `LoadPose(path, skeleton)` |
 | **viewer** · [Viewer.h](../include/minvex/Viewer.h) | `ViewerOptions`, `ModelOptions`, `ViewerRunOptions`, `Viewer`. `AddModel()`, `AddModelAsync()`, `GetAssetLoad()`, `CommitModelLoad()`, `SetHotReload()`, `SetCamera()`, `ProcessInput()`, `PickObject()`, `SetMaterial/ResetMaterial`, `SetQuality()`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `GetScene()`, `Run()` |
 | **embedded** · [EmbeddedRenderer.h](../include/minvex/EmbeddedRenderer.h) | `HostGraphicsContext`, `HostRenderTarget`, `EmbeddedFrameOptions`, `EmbeddedRenderer`. `Initialize()`, `Update()`, `Render()`, `WaitIdle()`, `DetachTarget()`, `Shutdown()` |
-| **editor_document** · [EditorDocument.h](../include/minvex/EditorDocument.h) | `EditorDocument`는 Editor의 Scene·선택·미저장 상태 관리 모델. `OpenModel()`, `Open()`, `Save()`, `ImportModel()`, `PlaceModel()`, `SetWorldTransform()`, `SetMaterial/ResetMaterial`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo`, `ClearUndoHistory()`, `SetMorphWeights/ClearMorphWeights` |
+| **editor_document** · [EditorDocument.h](../include/minvex/EditorDocument.h) | `EditorDocument`는 Editor의 Scene·선택·미저장 상태 관리 모델. `OpenModel()`, `Open()`, `Save()`, `ImportModel()`, `PlaceModel()`, `SetModel()`, `SetWorldTransform()`, `SetMaterial/ResetMaterial`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `BeginEdit/CommitEdit/CancelEdit`, `Undo/Redo`, `ClearUndoHistory()`, `SetMorphWeights/ClearMorphWeights` |
 | **quality** · [Quality.h](../include/minvex/Quality.h) | `QualityPreset`, `QualityProfile`, `QualityOverrides`, `QualityCapabilities`, `QualityState`. `MakeQualityProfile()`, `ExpandQuality()`, `ResolveQuality()`, `SaveQuality()`, `LoadQuality()` |
 | **telemetry** · [SystemInfo.h](../include/minvex/SystemInfo.h), [Telemetry.h](../include/minvex/Telemetry.h) | `HardwareInfo`, `MetricStatus`, `TelemetrySnapshot`. `SystemInfo::QueryHardware()`, `SystemMonitor::Sample()`, `FrameMonitor`, `EstimateQualityResources()`, `RecommendQuality()`, `SaveTelemetry()` |
 | **animation** · [Skeleton.h](../include/minvex/Skeleton.h) | `JointId`, `SkeletonJoint`, `SkeletonAsset`, `SkeletonSocket`, `SharedSkeletonAsset`, `SharedSkeletonHandle`, `SkeletonBinding`. `CreateSharedSkeleton()`, `FindSkeletonJoint()`, `BindSkeleton()` |
@@ -173,6 +173,8 @@ Standalone은 absolute `ViewerInputEvent::X/Y`, 키 입력, `Character` 이벤�
 
 Editor의 **UI Designer**에서 계층·container/sizing·run별 서식·style·font를 편집하고 별도의 UI Undo/Redo를 제공함. Drag/typing의 연속 속성 변경은 하나의 편집으로 묶고 Escape로 취소할 수 있음. UI Designer에 focus가 있고 text input이 자체 편집 키를 사용하지 않을 때 Ctrl+Z·Ctrl+Y/Ctrl+Shift+Z·Ctrl+S를 UI에 전달하며 Scene 이력은 별도임. New UI·Load UI·Quit은 미저장 UI의 Save/Discard/Cancel을 제공함. Scene의 New/Open은 독립 UI를 유지함. UI는 Save UI로 따로 저장함.
 
+**UI Designer → + Number**는 `UiKind::NumberInput`을 추가합니다. Placeholder는 필드가 비었을 때 표시됩니다. 초기값·최솟값·최댓값·단위는 **Apply number settings**로 함께 검사하고 반영합니다. Preview에서 클릭 후 입력한 값은 런타임 상태이며 UI 문서와 Scene을 수정하지 않습니다. `Esc`는 필드 포커스를 해제하고 입력값을 유지합니다.
+
 Font/raster 실패는 UI 미리보기 오류로 표시하고 Scene 표시를 유지함. 속성을 고치거나 Retry preview로 다시 시도함. `minvex_ui_overlay`는 Column/Hug·rich run·묶음 theme 변경과 Undo/Redo 예제임. UI v2는 v1만 지원하는 이전 reader로 읽을 수 없음. 폰트 선택과 글자 raster 결과는 운영체제의 텍스트 엔진을 따름.
 
 ## 좌표·변환 계약
@@ -252,6 +254,10 @@ UI를 통과한 `MouseDown`의 `OnInput` 안에서 같은 버튼으로 `CaptureP
 [EditorDocument.h](../include/minvex/EditorDocument.h)의 `EditorDocument`는 Scene 편집 모델이며 `minvex::editor_document`로 연결함. `OpenModel/Open/Save`, `ImportModel/PlaceModel`, 선택·Transform·재질·Pose·Animation 편집을 제공함. `BeginEdit/CommitEdit/CancelEdit`로 연속 조작을 묶고 `Undo/Redo`로 복원함. 파일 대화상자·Hierarchy·Inspector·Gizmo·Timeline·UI Designer는 `minvex_editor` 애플리케이션에서 제공함.
 
 애플리케이션에서 편집 UI를 구현할 때 `EditorDocument`로 Scene 변경을 적용하고 `GetScene()`의 결과를 Embedded renderer에 전달하여 표시함. 문서의 Animation은 `UpdateAnimations()`로 진행함. Standalone Viewer는 자신의 `GetScene()`으로 장면을 관리함. UI Canvas의 저장과 Undo/Redo는 Scene 문서와 독립적임.
+
+`EditorDocument::SetModel(object, asset)`은 같은 문서 라이브러리의 `AssetId`를 객체에 지정합니다. ID 0은 모델을 분리합니다. 객체 ID·이름·계층·로컬 TRS·선택은 유지되며 교체 시 모델 애니메이션과 재질 override를 초기화합니다. 같은 모델 지정은 변경 없이 성공합니다. 잘못된 ID나 소켓·공유 Skeleton·Leader Pose와 호환되지 않는 교체는 실패하고 문서를 복원합니다. 성공한 변경은 Scene 저장과 Undo/Redo에 포함됩니다.
+
+Editor의 **Surface Measure**는 `Scene::PickSurface`의 삼각형 적중으로 월드 위치를 기록합니다. 측정 위치는 클릭 시점에 고정되며 Scene 및 Undo 기록에 저장되지 않습니다. **Box Physics**의 상자 크기는 미리보기를 시작할 때의 모델 경계에서 구합니다. 콜라이더와 계산 결과는 편집 세션에만 유지되고, 적용한 객체 변환은 Scene에 저장됩니다. `MINVEX_BUILD_PHYSICS`를 켠 Editor 빌드에서 사용할 수 있습니다.
 | **debug** · [Debug.h](../include/minvex/Debug.h) | `DebugView`, `DebugOptions`, `DebugDraw`, `RenderDebugInfo`. `InspectJoint()`, `InspectBoneInfluences()`. Viewer/Embedded의 `SetDebugOptions()`, `SetDebugDraw()`, `GetRenderDebugInfo()` |
 | **optimization** · [Optimization.h](../include/minvex/Optimization.h) | `MeshOptimization`, `MeshOptimizationOptions`, `MeshLocalityStatistics`, `OptimizationStatistics`, `OptimizeMesh()`, `AnalyzeMeshLocality()`, `GenerateMeshLods()`, `SelectMeshLod()`, `TextureMipBytes()` |
 
@@ -647,7 +653,7 @@ auto changed = viewer.SetQuality(quality); // Result<void> 확인 필요
 
 ```sh
 python -m pip wheel . --wheel-dir out/wheels
-python -m pip install --force-reinstall out/wheels/minvex-1.1.0-cp312-cp312-win_amd64.whl
+python -m pip install --force-reinstall out/wheels/minvex-1.1.1-cp312-cp312-win_amd64.whl
 python python/examples/viewer.py examples/assets/MorphRibbon.gltf --frames 60
 ```
 
@@ -815,7 +821,7 @@ Minvex 자체 코드는 Apache-2.0을 적용함. SDK 설치 접두사 최상위�
 
 ## 지원 범위
 
-이 문서는 SDK 1.1.0의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
+이 문서는 SDK 1.1.1의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
 
 CPU-only 구성의 native 초기화·실행은 `UnsupportedFeature`를 반환함.
 

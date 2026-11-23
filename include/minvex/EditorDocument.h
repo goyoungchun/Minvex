@@ -35,6 +35,7 @@ public:
     Result<void> ReimportModel(AssetId asset); // Atomically replace the library and all compatible instances.
     Result<void> CommitReimport(AssetId asset,ModelHandle candidate); // Prepared same-source candidate; transactional Scene/library replacement.
     Result<ObjectId> PlaceModel(AssetId asset, const Transform& transform = {}, ObjectId parent = NoObject);
+    Result<void> SetModel(ObjectId object, AssetId asset = 0); // From the library. Zero detaches the model.
     Result<ObjectId> CreateTerrain(const TerrainGrid& grid);
     Result<void> SetTerrain(ObjectId object, const TerrainGrid& grid);
     Result<ObjectId> CreateObject(std::string name = "Object", ObjectId parent = NoObject);
