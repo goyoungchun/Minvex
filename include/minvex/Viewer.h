@@ -18,7 +18,12 @@ class Viewer;
 
 enum class ViewerInputType { MouseDown, MouseUp, MouseMove, Scroll, KeyDown, FocusLost, Resized, KeyUp, Character };
 enum class ViewerMouseButton { None, Left, Right, Middle };
-enum class ViewerKey { Unknown, Escape, F, Space, Tab, Enter, Backspace, Delete, A };
+enum class ViewerKey {
+    Unknown, Escape, F, Space, Tab, Enter, Backspace, Delete, A,
+    Left, Right, Up, Down, B, C, D, E, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    Home, End, PageUp, PageDown, Insert
+};
 
 // Mouse deltas and viewport dimensions are in logical window pixels (HiDPI
 // independent). FrameInfo uses actual framebuffer pixels instead.
@@ -73,7 +78,8 @@ struct ViewerRunOptions {
     std::uint64_t FrameLimit = 0;
     // Runs before upload/draw. May mutate this Viewer's Scene or request exit.
     std::function<void(Viewer&, const ViewerFrameInfo&)> OnFrame;
-    // Runs after UI handling. Return true to consume an event before the default controls.
+    // Runs after UI handling except while the application owns a pointer gesture.
+    // Return true to consume an event before the default controls.
     std::function<bool(Viewer&, const ViewerInputEvent&)> OnInput;
     bool AdvanceAnimations = true; // Advance before OnFrame; disable for manual Scene updates.
 };
@@ -131,9 +137,18 @@ public:
     Result<void> SetPose(ObjectId id, const PoseAsset& pose); // Manual override after animation.
     Result<void> ResetPose(ObjectId id);
     Result<void> ProcessInput(const ViewerInputEvent& event);
+    // Request during the OnInput MouseDown for this button. Captured pointer events
+    // bypass UI and camera controls through the matching MouseUp or FocusLost.
+    Result<void> CapturePointer(ViewerMouseButton button);
+    Result<void> ReleasePointer();
+    Result<ViewerMouseButton> GetPointerCapture() const;
+    Result<ScreenPoint> WorldToScreen(Vec3 world) const;
+    Result<Vec3> ScreenToWorld(ScreenPoint point) const;
+    Result<Ray> ScreenRay(float x, float y) const;
     // Closest visible model bounds at a top-left logical window position.
     // Returns NoObject for a miss; call in OnInput to honor UI consumption.
     Result<ObjectId> PickObject(float x, float y) const;
+    Result<std::optional<SurfaceHit>> PickSurface(float x, float y, ObjectId object = NoObject) const;
     Result<void> SetQuality(const QualityProfile& profile);
     Result<QualityState> GetQuality() const;
     Result<QualityCapabilities> GetQualityCapabilities() const;

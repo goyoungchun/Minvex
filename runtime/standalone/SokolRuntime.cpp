@@ -247,9 +247,11 @@ void Event(const sapp_event* source, void* user) noexcept {
             event.Character = static_cast<char32_t>(source->char_code);
             break;
         case SAPP_EVENTTYPE_RESIZED: event.Type = ViewerInputType::Resized; break;
+        case SAPP_EVENTTYPE_MOUSE_LEAVE:
+            if (runtime.State.PointerCapture != ViewerMouseButton::None) { return; }
+            [[fallthrough]];
         case SAPP_EVENTTYPE_UNFOCUSED:
-        case SAPP_EVENTTYPE_ICONIFIED:
-        case SAPP_EVENTTYPE_MOUSE_LEAVE: event.Type = ViewerInputType::FocusLost; break;
+        case SAPP_EVENTTYPE_ICONIFIED: event.Type = ViewerInputType::FocusLost; break;
         default: return;
         }
         const float dpi = sapp_dpi_scale() > 0 ? sapp_dpi_scale() : 1;
@@ -263,16 +265,31 @@ void Event(const sapp_event* source, void* user) noexcept {
         event.Shift = (source->modifiers & SAPP_MODIFIER_SHIFT) != 0;
         event.Shortcut = (source->modifiers & (SAPP_MODIFIER_CTRL | SAPP_MODIFIER_SUPER)) != 0;
         event.Repeat = source->key_repeat;
-        switch (source->key_code) {
+        constexpr ViewerKey letters[]{ViewerKey::A,ViewerKey::B,ViewerKey::C,ViewerKey::D,ViewerKey::E,ViewerKey::F,
+            ViewerKey::G,ViewerKey::H,ViewerKey::I,ViewerKey::J,ViewerKey::K,ViewerKey::L,ViewerKey::M,ViewerKey::N,
+            ViewerKey::O,ViewerKey::P,ViewerKey::Q,ViewerKey::R,ViewerKey::S,ViewerKey::T,ViewerKey::U,ViewerKey::V,
+            ViewerKey::W,ViewerKey::X,ViewerKey::Y,ViewerKey::Z};
+        if (source->key_code >= SAPP_KEYCODE_A && source->key_code <= SAPP_KEYCODE_Z) {
+            event.Key = letters[source->key_code-SAPP_KEYCODE_A];
+        } else if (source->key_code >= SAPP_KEYCODE_0 && source->key_code <= SAPP_KEYCODE_9) {
+            event.Key = static_cast<ViewerKey>(static_cast<int>(ViewerKey::Digit0)+source->key_code-SAPP_KEYCODE_0);
+        } else switch (source->key_code) {
         case SAPP_KEYCODE_ESCAPE: event.Key = ViewerKey::Escape; break;
-        case SAPP_KEYCODE_F: event.Key = ViewerKey::F; break;
         case SAPP_KEYCODE_SPACE: event.Key = ViewerKey::Space; break;
         case SAPP_KEYCODE_TAB: event.Key = ViewerKey::Tab; break;
         case SAPP_KEYCODE_ENTER:
         case SAPP_KEYCODE_KP_ENTER: event.Key = ViewerKey::Enter; break;
         case SAPP_KEYCODE_BACKSPACE: event.Key = ViewerKey::Backspace; break;
         case SAPP_KEYCODE_DELETE: event.Key = ViewerKey::Delete; break;
-        case SAPP_KEYCODE_A: event.Key = ViewerKey::A; break;
+        case SAPP_KEYCODE_LEFT: event.Key = ViewerKey::Left; break;
+        case SAPP_KEYCODE_RIGHT: event.Key = ViewerKey::Right; break;
+        case SAPP_KEYCODE_UP: event.Key = ViewerKey::Up; break;
+        case SAPP_KEYCODE_DOWN: event.Key = ViewerKey::Down; break;
+        case SAPP_KEYCODE_HOME: event.Key = ViewerKey::Home; break;
+        case SAPP_KEYCODE_END: event.Key = ViewerKey::End; break;
+        case SAPP_KEYCODE_PAGE_UP: event.Key = ViewerKey::PageUp; break;
+        case SAPP_KEYCODE_PAGE_DOWN: event.Key = ViewerKey::PageDown; break;
+        case SAPP_KEYCODE_INSERT: event.Key = ViewerKey::Insert; break;
         default: break;
         }
         const auto handled = runtime.Facade.ProcessInput(event);
@@ -324,7 +341,7 @@ Result<void> RunStandalone(Viewer& viewer, ViewerState& state, const ViewerRunOp
     state.HasRun = true;
     state.ActiveRun = &options;
     state.Running.store(true);
-    struct ResetRunning { ViewerState& State; ~ResetRunning() { State.ApplyQuality={};State.Invalidate={};State.ReadTelemetry={};State.ApplyDebug={};State.ApplyDebugDraw={};State.ReadDebug={};State.ActiveRun = nullptr; State.Running.store(false); } } reset{state};
+    struct ResetRunning { ViewerState& State; ~ResetRunning() { State.ApplyQuality={};State.Invalidate={};State.ReadTelemetry={};State.ApplyDebug={};State.ApplyDebugDraw={};State.ReadDebug={};State.ActiveRun = nullptr; State.PointerCapture=ViewerMouseButton::None;State.Running.store(false); } } reset{state};
     sapp_desc app{};
     app.user_data = &runtime;
     app.init_userdata_cb = Initialize; app.frame_userdata_cb = Frame;

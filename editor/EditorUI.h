@@ -5,6 +5,7 @@
 #include "EditorPreferences.h"
 #include <minvex/EditorDocument.h>
 #include <minvex/AssetLoading.h>
+#include <minvex/Terrain.h>
 
 namespace lv::editor {
 enum class ConsoleLevel { Info, Warning, Error };
@@ -122,6 +123,24 @@ private:
     bool renderDebugger_=false,animationDebugger_=false;
     int inspectedTarget_=0;
     DebugDraw editorDebugDraw_;
+    bool terrainPanel_ = false, terrainContours_ = false, terrainStroke_ = false;
+    int terrainColumns_ = 65, terrainRows_ = 65, terrainTool_ = 0;
+    TerrainLayout terrainLayout_;
+    MountainPreset mountain_;
+    double terrainInterval_ = 2, brushRadius_ = 4, brushStrength_ = 1;
+    ObjectId terrainMeasured_ = NoObject, terrainStrokeObject_ = NoObject;
+    std::vector<std::array<double,2>> terrainPoints_;
+    std::array<double,2> lastBrush_{};
+    ModelHandle contourModel_;
+    std::array<float,16> contourTransform_{};
+    double contourInterval_ = 0;
+    bool contoursApplied_ = false;
+    std::vector<std::array<double,2>> markersApplied_;
+    void TerrainPanel();
+    void ImportTerrain(bool png);
+    void FinishTerrainStroke(bool cancel);
+    bool TerrainInput(float x,float y,ViewportSize size,bool hovered,bool cancel);
+    void UpdateTerrainContours();
     struct PendingImport {std::filesystem::path Path;bool Place=false;};
     std::vector<PendingImport> importQueue_;
     ImportSettings importSettings_;
@@ -178,7 +197,7 @@ private:
     void ReimportAsset(AssetId asset);
     void CancelPreviewJob();
     void ViewportPanel();
-    void TransformTools(float x,float y,float width,float height,bool enabled);
+    void TransformTools(float x,float y,float width,float height,bool enabled,bool showGizmo);
     void StopCameraEdit(bool cancel);
     void Dialogs();
     template<typename T> bool Report(const Result<T>& result,ObjectId object=NoObject) {

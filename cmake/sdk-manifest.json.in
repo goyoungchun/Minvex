@@ -16,6 +16,7 @@
   "runtime": "@MINVEX_SDK_RUNTIME@",
   "components": [@_sdk_manifest_components@],
   "sceneVersion": 13,
+  "terrainSceneVersion": 14,
   "poseVersion": 1,
   "qualityVersion": 2,
   "uiVersion": 3,

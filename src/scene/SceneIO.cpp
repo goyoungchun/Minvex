@@ -1,5 +1,6 @@
 #include <minvex/SceneIO.h>
 #include <minvex/PoseIO.h>
+#include <minvex/Terrain.h>
 #include "core/Utf8Path.h"
 #include "core/JsonFile.h"
 
@@ -16,6 +17,7 @@ namespace lv {
 namespace {
 using Json = nlohmann::json;
 constexpr std::size_t MaxBytes = 16 * 1024 * 1024, MaxObjects = 65536, MaxAssets = 4096, MaxDepth = 256;
+constexpr std::uint64_t SceneVersion = 13, TerrainSceneVersion = 14;
 void Require(bool valid, const char* message) { if (!valid) { throw std::invalid_argument(message); } }
 std::string Utf8(const std::filesystem::path& path) {
     const auto text = path.generic_u8string(); return {text.begin(),text.end()};
@@ -39,6 +41,25 @@ float Float(const Json& value) {
     const auto number = Number(value);
     Require(std::isfinite(number) && std::abs(number) <= std::numeric_limits<float>::max(),"Scene number is nonfinite or too large.");
     return static_cast<float>(number);
+}
+Json Terrain(const TerrainGrid& grid) {
+    const auto& layout = grid.Layout();
+    return {{"columns",layout.Columns},{"rows",layout.Rows},{"spacingX",layout.SpacingX},{"spacingZ",layout.SpacingZ},
+            {"origin",Json::array({layout.Origin.Easting,layout.Origin.Northing,layout.Origin.Elevation})},
+            {"heights",std::vector<double>(grid.Heights().begin(),grid.Heights().end())}};
+}
+TerrainGrid Terrain(const Json& json) {
+    const auto& origin = json.at("origin");
+    const auto& heights = json.at("heights");
+    const auto columns = static_cast<std::size_t>(UInt(json.at("columns"),MaxTerrainSamples));
+    const auto rows = static_cast<std::size_t>(UInt(json.at("rows"),MaxTerrainSamples));
+    Require(columns >= 2 && rows >= 2 && columns <= MaxTerrainSamples/rows && heights.is_array() &&
+        heights.size() == columns*rows && origin.is_array() && origin.size() == 3,"Invalid embedded terrain layout.");
+    std::vector<double> samples;
+    samples.reserve(heights.size());
+    for (const auto& height : heights) { samples.push_back(Number(height)); }
+    return TerrainGrid({columns,rows,Number(json.at("spacingX")),Number(json.at("spacingZ")),
+                        {Number(origin[0]),Number(origin[1]),Number(origin[2])}},samples);
 }
 Vec3 Vector(const Json& value) {
     Require(value.is_array() && value.size() == 3,"Expected a three-component vector.");
@@ -281,7 +302,7 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
         // Model sources are canonical. Resolve directory aliases (e.g. macOS
         // /var -> /private/var) before computing portable relative references.
         const auto base = std::filesystem::weakly_canonical(std::filesystem::absolute(path).parent_path());
-        Json root{{"format","MinvexScene"},{"version",13},{"assets",Json::array()},{"objects",Json::array()},{"blendTrees",Json::array()},{"sharedSkeletons",Json::array()}};
+        Json root{{"format","MinvexScene"},{"version",SceneVersion},{"assets",Json::array()},{"objects",Json::array()},{"blendTrees",Json::array()},{"sharedSkeletons",Json::array()}};
         TreeIds trees;
         std::unordered_map<const SharedSkeletonAsset*, std::size_t> skeletons;
         std::unordered_map<const ModelAsset*,std::size_t> assetIds;
@@ -289,12 +310,18 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
             Require(bool(model),"Asset library contains an empty model handle.");
             if (assetIds.contains(model.get())) { return; }
             Require(assetIds.size() < MaxAssets,"Scene asset limit exceeded.");
+            const auto id = assetIds.size()+1;
+            if (model->Terrain) {
+                root["version"] = TerrainSceneVersion;
+                root["assets"].push_back({{"id",id},{"terrain",Terrain(*model->Terrain)}});
+                assetIds.emplace(model.get(),id);
+                return;
+            }
             auto sourceSettings=model->Settings;
             if (!sourceSettings.TextureDirectory.empty()) {auto relative=std::filesystem::relative(sourceSettings.TextureDirectory,base);if (!relative.empty()) {sourceSettings.TextureDirectory=std::move(relative);}}
             const auto settings = Settings(sourceSettings); (void)Settings(settings);
             auto relative = std::filesystem::relative(model->SourcePath,base);
             if (relative.empty()) { relative = model->SourcePath; }
-            const auto id = assetIds.size()+1;
             root["assets"].push_back({{"id",id},{"path",String(Utf8(relative))},{"import",settings}});
             assetIds.emplace(model.get(),id);
         };
@@ -336,7 +363,7 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
 Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry& registry) {
     try {
         const auto root = ReadJson(path); const auto version = UInt(root.at("version"));
-        Require(detail::MatchesDocumentFormat(root.at("format"), "MinvexScene") && (version >= 1 && version <= 13),"Unsupported scene format/version.");
+        Require(detail::MatchesDocumentFormat(root.at("format"), "MinvexScene") && (version >= 1 && version <= TerrainSceneVersion),"Unsupported scene format/version.");
         const auto& assets = root.at("assets"); const auto& objects = root.at("objects");
         Require(assets.is_array() && assets.size() <= MaxAssets,"Invalid scene asset list.");
         Require(objects.is_array() && objects.size() <= MaxObjects,"Invalid scene object list.");
@@ -348,6 +375,10 @@ Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry&
         for (std::size_t i = 0; i < assets.size(); ++i) {
             const auto id = UInt(assets[i].at("id"));
             Require(id && assetIndices.emplace(id,i).second,"Duplicate/zero asset ID.");
+            if (assets[i].contains("terrain")) {
+                Require(version >= TerrainSceneVersion && !assets[i].contains("path") && !assets[i].contains("import"),"Invalid embedded terrain asset.");
+                continue;
+            }
             (void)String(assets[i].at("path")); (void)Settings(assets[i].at("import"));
             if (version>=8) {Require(assets[i].at("import").contains("maxMorphTargets"),"Scene v8 is missing the morph budget.");}
             if (version>=4) {for (const auto* field:{"importAnimations","importMaterials","animationBakeRate","maxAnimationSamples","textureDirectory"}) {Require(assets[i].at("import").contains(field),"Scene v4 is missing Import settings.");}}
@@ -394,6 +425,12 @@ Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry&
         ValidateScene(scene);
         const auto base = std::filesystem::weakly_canonical(std::filesystem::absolute(path).parent_path());
         for (const auto& asset : assets) {
+            if (asset.contains("terrain")) {
+                auto model = MakeTerrainModel(Terrain(asset.at("terrain")));
+                models.emplace(UInt(asset.at("id")),model);
+                archive.Assets.push_back(std::move(model));
+                continue;
+            }
             const auto reference = detail::PathFromUtf8(String(asset.at("path")));
             Require(!reference.empty(),"Empty asset path.");
             auto settings=Settings(asset.at("import"));if (!settings.TextureDirectory.empty() && settings.TextureDirectory.is_relative()) {settings.TextureDirectory=base/settings.TextureDirectory;}

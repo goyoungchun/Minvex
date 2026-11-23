@@ -1,4 +1,5 @@
 #include <minvex/EditorDocument.h>
+#include <minvex/Terrain.h>
 #include "CameraController.h"
 
 #include <algorithm>
@@ -68,6 +69,7 @@ Result<void> EditorDocument::Open(const std::filesystem::path& path) {
     AssetRegistry registry;
     auto loaded = LoadScene(path,registry);
     if (!loaded) { return Result<void>::Failure(loaded.Error()); }
+    std::erase_if(loaded.Value().Assets,[](const ModelHandle& model) { return bool(model->Terrain); });
     world_ = std::move(loaded.Value().World); library_ = std::move(loaded.Value().Assets);
     registry_ = std::move(registry); path_ = std::move(absolute).Value(); selection_ = NoObject; dirty_ = false;
     ClearHistory();
@@ -134,6 +136,25 @@ Result<ObjectId> EditorDocument::PlaceModel(AssetId asset, const Transform& tran
         auto model = registry_.Find(asset);
         if (!model) { throw std::invalid_argument("Asset is not imported in this document."); }
         const auto id = world_.AddModel(std::move(model),transform,parent); selection_ = id; MarkChanged(); return id;
+    });
+}
+Result<ObjectId> EditorDocument::CreateTerrain(const TerrainGrid& grid) {
+    return Change([&] {
+        const auto id = world_.AddModel(MakeTerrainModel(grid));
+        world_.SetName(id,"Terrain");
+        selection_ = id;
+        MarkChanged();
+        return id;
+    });
+}
+Result<void> EditorDocument::SetTerrain(ObjectId object, const TerrainGrid& grid) {
+    return Change([&] {
+        const auto& previous = world_.GetObject(object);
+        if (!previous.Model || !previous.Model->Terrain) { throw std::invalid_argument("Select an editable terrain object."); }
+        auto overrides = previous.MaterialOverrides;
+        world_.SetModel(object,MakeTerrainModel(grid));
+        world_.objects_.at(object).MaterialOverrides.swap(overrides);
+        MarkChanged();
     });
 }
 Result<void> EditorDocument::ReimportModel(AssetId asset) {

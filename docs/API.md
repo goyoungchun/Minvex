@@ -1,6 +1,6 @@
 # Minvex API
 
-**C++20 Graphics SDK · Version 1.0.5 · Namespace `lv`**
+**C++20 Graphics SDK · Version 1.1.0 · Namespace `lv`**
 
 모듈별 주요 타입과 API를 정리한 사용 안내임. 전체 선언은 연결된 공개 헤더에서 확인할 수 있음.
 
@@ -217,6 +217,36 @@ CPU에서 직접 Scene을 사용할 때 `UpdateAnimations(deltaSeconds)`로 시�
 
 UI가 마우스 입력을 먼저 처리합니다. `OnInput`에서 UI를 통과한 왼쪽 버튼 누름을 기록하고, 허용 이동 거리를 넘은 경우 기본 Orbit 컨트롤에 움직임을 넘깁니다. 허용 거리 안에서 놓았을 때 `PickObject(event.X, event.Y)`를 호출하면 클릭으로 선택할 수 있습니다. 피킹 호출 자체는 UI를 검사하지 않으므로 임의 좌표 조회에도 사용할 수 있습니다. `minvex_fitting`은 이 처리 순서와 `Scene::SetModel()`·`SetDebugDraw()`를 한 프로그램에서 보여 줍니다. [피팅 Quick Start](../examples/QuickStart/Fitting.cpp)
 
+### 포인터 캡처와 키 입력
+
+UI를 통과한 `MouseDown`의 `OnInput` 안에서 같은 버튼으로 `CapturePointer(event.Button)`을 호출하면 앱이 포인터를 소유합니다. 캡처 중에는 이동, 휠, 버튼 이벤트가 UI와 기본 카메라를 건너뛰고 `OnInput`에 도달합니다. 다른 버튼을 놓아도 캡처를 유지합니다. 같은 버튼을 놓거나 `FocusLost`가 오면 앱이 종료 이벤트를 받고 `GetPointerCapture()`는 `None`을 반환합니다. `ReleasePointer()`로 일찍 반환할 수 있으며 키보드 입력은 기존 UI 처리 순서를 따릅니다. 주 버튼이 눌릴 때 캡처하지 못한 경우 일반 UI·앱·카메라 우선순위가 적용됩니다.
+
+`KeyDown/KeyUp`은 방향키, A–Z, 상단 숫자키 및 Home/End, Page Up/Page Down, Insert를 `ViewerKey`로 전달합니다. `Repeat`로 반복 누름을 확인하고 문자열 입력에는 Unicode `Character`를 사용합니다. 이전 `ViewerKey` 열거 상수 값은 유지됩니다. Viewer 입력 API는 소유 스레드에 한정되며 UI가 먼저 소비한 일반 입력은 `OnInput`에 전달되지 않습니다. [적재 Quick Start](../examples/QuickStart/LoadPlanning.cpp)
+
+### 화면 좌표 변환과 표면 피킹
+
+`Viewer::WorldToScreen/ScreenToWorld/ScreenRay`는 모두 좌상단 원점의 **논리 창 픽셀**을 사용합니다. `WorldToScreen`은 투영 깊이를 반환하며, `ScreenToWorld`의 깊이는 near=0, far=1입니다. Ray 원점은 원근 카메라의 눈 위치 또는 직교 카메라 평면의 화면 좌표에 대응하는 위치입니다. Ray 방향은 단위 벡터이며 `MinDistance/MaxDistance`는 카메라 clip 거리까지의 월드 단위입니다. 화면 변환은 화면 밖 좌표도 지원합니다. 빈 viewport, 비유한 값, 원근 카메라 뒤에서의 투영은 `InvalidArgument`입니다. `minvex::scene`에서도 `Camera`와 `ViewportSize`를 직접 넘기는 동일 이름의 함수로 변환할 수 있습니다.
+
+`Scene::PickSurface(ray, object)` 및 `Viewer::PickSurface(x, y, object)`는 보이는 모델의 LOD0 삼각형을 양면에서 검사합니다. 객체 필터를 지정하면 해당 인스턴스만 검사합니다. 적중 결과에는 `Object`, `Position`, Ray 원점 기준 `Distance`, `Part`, `Primitive`, `Triangle`, `Barycentric`이 포함됩니다. 포즈·스키닝·모프와 Scene 계층 변환을 반영합니다. CPU 삼각형 검사이며 재질의 알파 마스크와 현재 GPU LOD는 검사 범위에 포함되지 않습니다. 미적중·숨김·화면 밖은 빈 `std::optional`입니다. `PickObject()`는 기존 경계 상자 선택을 유지합니다. [Scene.h](../include/minvex/Scene.h) · [Viewer.h](../include/minvex/Viewer.h)
+
+### 지형 격자와 측량
+
+`minvex::assets`의 `TerrainGrid`는 열·행, X·Z 간격(미터), `SurveyPoint` 원점과 행 우선 `double` 표고를 소유합니다. 로컬 +X는 easting, +Z는 northing, +Y는 원점 위의 표고입니다. `MakeTerrainModel()`은 같은 격자를 로컬 float 메시와 불변 표고 스냅샷으로 복사합니다. `Scene::AddModel()`로 배치하고 편집 후 `Scene::SetModel()`로 새 스냅샷을 게시합니다. `Sample()`과 `Contours()`가 메시와 같은 셀 대각선을 사용합니다. `SampleTriangle()`에는 필터링된 지형 적중의 `Triangle`과 `Barycentric`을 전달해 원본 좌표계의 점을 복원합니다. `MeasureSurvey()`는 수평 거리, 부호 있는 표고 차이 및 3차원 직선 거리를 반환합니다.
+
+`LoadTerrainCsv()`는 `easting,northing,elevation` 헤더와 누락·중복 없는 직사각형 정규 격자를 읽습니다. 행 순서는 자유입니다. 최소 easting·northing·elevation을 로컬 원점으로 사용합니다. `LoadTerrainHeightmap()`은 8/16비트 회색조 PNG를 읽어 검정(샘플 값 0)을 로컬 0, 최대 표현값을 `heightRange`에 대응시키고 첫 행을 로컬 Z=0에 놓습니다. 파일당 32 MiB, 격자당 262,144개 표본, 그리드 간격 최소 0.00001m, 로컬 폭·깊이 최대 10,000,000m와 로컬 표고 ±10,000,000m를 지원합니다. 3×3 이상에서 `GenerateMountain()`은 고정 시드로 지정한 최고 높이까지 표고를 재생성하고 `ApplyBrush()`는 Raise/Lower/Smooth를 적용합니다. 등고선 간격은 로컬 표고 원점을 기준으로 하며 최대 65,536개 선분을 반환합니다.
+
+독립 격자는 각각 호출 스레드에서 편집하고 게시한 `ModelHandle`은 읽기 전용으로 사용합니다. 잘못된 수치·레이아웃은 `std::invalid_argument`, 표고 인덱스 범위 초과는 `std::out_of_range`, 등고선 예산 초과는 `std::length_error`입니다. Editor의 **Window → Terrain**은 브러시 드래그를 Undo 한 단계로 묶고, Edit 중에 등고선과 측정 표고를 갱신합니다. Scene에 지형이 있으면 격자를 v14로 저장하며 기존 v1–v13 Scene을 읽습니다. [Terrain.h](../include/minvex/Terrain.h) · [측량 Quick Start](../examples/QuickStart/Survey.cpp)
+
+### 상자 받침과 중력 미리보기
+
+`find_package(Minvex CONFIG REQUIRED COMPONENTS physics)`와 `minvex::physics`로 CPU 기능을 연결합니다. `MINVEX_BUILD_PHYSICS=OFF`로 이 컴포넌트를 생략할 수 있습니다. `RigidBox`는 중심 위치, 회전 쿼터니언, 로컬 반길이, 질량(kg), 마찰계수, 월드 선속도(m/s)와 각속도(rad/s)를 담습니다. 질량이 0이면 위치와 회전이 고정되고 입력 속도는 시뮬레이션에서 무시됩니다. 양의 질량은 균일 밀도의 상자로 해석합니다.
+
+`StepRigidBoxes()`는 호출당 최대 256개 상자를 0–1초 동안 계산합니다. 0초는 자세를 진행하지 않고 접촉을 조회합니다. 기본 중력은 Y축 아래로 9.80665m/s²이며, 최대 1/240초 간격으로 이산 충돌을 계산합니다. 정적·동적 및 동적·동적 상자의 면·모서리 접촉에서 선운동량과 각운동량을 교환합니다. 쿨롱 마찰계수는 두 상자 계수의 기하평균이며, 충돌의 반발계수는 0입니다. 접촉 데이터는 마지막 하위 단계의 상자 인덱스, 접촉점, 첫 상자에서 두 번째 상자로 향하는 법선과 겹침 깊이를 포함합니다. 고속 또는 매우 얇은 상자의 연속 충돌 검사는 지원 범위 밖입니다.
+
+시뮬레이션 결과는 입력 순서를 유지하는 독립 복사본입니다. 다음 단계에 결과의 `Boxes`를 전달하면 재생을 이어갈 수 있습니다. 렌더링 세션과 관계없이 호출 스레드에서 동기 실행합니다. 잘못된 수치·형상은 `std::invalid_argument`, 상자 수 초과는 `std::length_error`, 결과 좌표·속도가 float 범위를 벗어나면 `std::overflow_error`입니다. 적재 Quick Start는 별도 궤적을 청록색 윤곽으로 재생하며, **Apply result**에서만 최종 위치·회전을 Scene에 게시합니다.
+
+기존 `CheckBoxSupport()`는 축 정렬 상자의 수직 간격, 접촉 면적 비율 및 중심 투영의 접촉 여부를 반환합니다. `PreviewBoxGravity()`는 정지한 축 정렬 상자의 수직 미리보기를 제공합니다. 0–60초와 0–100m/s²를 지원하며, 이동 상자가 시작부터 다른 상자 내부와 겹치면 `std::invalid_argument`를 반환합니다. [Physics.h](../include/minvex/Physics.h) · [적재 Quick Start](../examples/QuickStart/LoadPlanning.cpp)
+
 ## Editor 문서 통합
 
 [EditorDocument.h](../include/minvex/EditorDocument.h)의 `EditorDocument`는 Scene 편집 모델이며 `minvex::editor_document`로 연결함. `OpenModel/Open/Save`, `ImportModel/PlaceModel`, 선택·Transform·재질·Pose·Animation 편집을 제공함. `BeginEdit/CommitEdit/CancelEdit`로 연속 조작을 묶고 `Undo/Redo`로 복원함. 파일 대화상자·Hierarchy·Inspector·Gizmo·Timeline·UI Designer는 `minvex_editor` 애플리케이션에서 제공함.
@@ -277,6 +307,8 @@ int main() {
 | `minvex_quickstart_capture` | Embedded 렌더링, `straight.ppm`·`bent.ppm` 비교 |
 | `minvex_fitting` | 숫자 입력, 객체 피킹, 모델 교체와 치수선 갱신. `--exercise --frames 3`으로 입력·교체를 재현 |
 | `minvex_maintenance` | GLB 부품별 단계 이동·가시성·강조, 모델 교체, 한글 안내 및 부품 목록 |
+| `minvex_survey` | CSV 표고 격자, HiDPI 논리 좌표, 원근·직교 피킹, 등고선과 두 점 거리 |
+| `minvex_load_planning` | 포인터 캡처, 상자 받침, 팔레트 가장자리에서 기울고 떨어지는 강체 재생과 적용. `physics` 컴포넌트 필요 |
 
 #### GLB 정비 매뉴얼 Quick Start
 
@@ -378,7 +410,7 @@ Blend1D는 X 오름차순·Y=0인 1~64개 sample을 요구하며 인접 두 Clip
 
 `SetBlendParameter(name, value)`·`SeekBlendTree(phase)`·`BlendTreeDuration()`을 제공함. 파라미터는 유한한 값, phase는 [0,1]임. 파라미터 편집은 phase를 유지하며 Pause·속도·Loop·역재생은 기존 제어를 따름. Stop은 Tree·파라미터를 유지하고 phase=0, ResetPose는 Tree도 해제함. Play는 단일 Clip으로 전환하고 Tree에서 CrossFade하면 현재 base TRS/Morph를 frozen source로 사용함.
 
-Viewer·EditorDocument도 `PlayBlendTree/SetBlendParameter/SeekBlendTree` Result Facade를 제공함. Editor Animation Controls에서 이름·파라미터·Clip·threshold/좌표 편집과 Apply/Play, 현재 weight·2D 삼각분할 보기를 제공하며 편집은 Undo/Redo 대상임. Scene v13는 최대 1024개 공유 Tree 정의와 독립 phase/파라미터/재생 상태를 저장하며 reader는 v1~v13임. Reimport는 실제 Skeleton/Morph layout과 모든 참조 Clip index/name·Scale 호환성을 검사함.
+Viewer·EditorDocument도 `PlayBlendTree/SetBlendParameter/SeekBlendTree` Result Facade를 제공함. Editor Animation Controls에서 이름·파라미터·Clip·threshold/좌표 편집과 Apply/Play, 현재 weight·2D 삼각분할 보기를 제공하며 편집은 Undo/Redo 대상임. Scene v13는 최대 1024개 공유 Tree 정의와 독립 phase/파라미터/재생 상태를 저장하며 reader는 v1~v14임. Reimport는 실제 Skeleton/Morph layout과 모든 참조 Clip index/name·Scale 호환성을 검사함.
 
 잘못된 입력/호환성은 low-level API에서 `std::invalid_argument`임. 반환한 handle은 정의의 수명을 유지하며 `Tree()` 참조는 Player/Scene 편집 후 다시 조회함. immutable 정의의 동시 조회·서로 다른 Player 사용은 가능하고 같은 Player의 동시 수정/평가는 금지임. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
 
@@ -401,7 +433,7 @@ Player는 TRS Additive 레이어 1개를 보유함. `SetAdditiveAnimation(clip, 
 
 `Additive()`의 상태는 Clip·Time·Speed·Loop·Weight·State·Reference·JointMask임. 레이어 속도는 Player 속도와 곱해지고 playhead/loop는 base와 독립임. `RestoreAdditiveAnimation(state)`로 전체 설정을 검증·교체하며 `SetAdditiveWeight/SetAdditiveMask/SeekAdditive()`로 개별 편집함. Seek는 duration까지 clamp함. Pause/Resume은 base와 레이어를 함께 제어하고 Stop은 두 시간을 0으로 되돌리며 설정은 유지함. Play/PlayBlendTree/CrossFade는 레이어를 유지하고 ResetPose는 해제함. `ClearAdditiveAnimation()`은 base를 유지하며 레이어만 제거함.
 
-Viewer·EditorDocument에도 같은 제어의 Result Facade를 제공함. Editor는 Clip·Skeleton/현재 base/Clip sample 기준 선택, weight·시간·속도·loop, Joint/Subtree mask, Base/Delta/Final 비교를 제공함. 편집은 Undo/Redo 대상이며 Scene v13는 레이어 reference·mask·재생 상태를 저장하고 reader는 v1~v13임. Reimport는 Skeleton·레이어 Clip index/name·시간과 reference/Scale 호환성을 검사함. Pose v1은 최종 TRS snapshot만 저장함.
+Viewer·EditorDocument에도 같은 제어의 Result Facade를 제공함. Editor는 Clip·Skeleton/현재 base/Clip sample 기준 선택, weight·시간·속도·loop, Joint/Subtree mask, Base/Delta/Final 비교를 제공함. 편집은 Undo/Redo 대상이며 Scene v13는 레이어 reference·mask·재생 상태를 저장하고 reader는 v1~v14임. Reimport는 Skeleton·레이어 Clip index/name·시간과 reference/Scale 호환성을 검사함. Pose v1은 최종 TRS snapshot만 저장함.
 
 공유 Model/Clip은 수정하지 않으며 레이어·기준 Pose·mask는 Player별로 소유함. 상태 참조는 Player/Scene 편집 후 다시 조회하고 같은 Player의 동시 수정/평가는 금지임. weight 0 또는 전체 mask 0인 레이어의 시간 변화는 정적인 base의 On-Demand 이미지를 무효화하지 않음. SDK 1.0.0 소비자는 함께 재빌드해야 하며 ImportVersion 6은 유지함.
 
@@ -428,7 +460,7 @@ Player 큐는 최대 1024개임. 초과 시 `AnimationEventOverflow`를 던지�
 
 track당 최대 1024개, overlay 최대 256 track, 기본 track별·인스턴스 전체 overlay별 이름/페이로드 합계는 각각 1 MiB임. 이름은 1~256 bytes, payload는 최대 4096 bytes의 NUL 없는 UTF-8이며 시간은 유한한 [0,duration] 오름차순임. 잘못된 데이터는 `std::invalid_argument`임. Player/Scene의 동시 수정·평가는 금지이고 Viewer는 생성한 owner thread에서 사용함. callback은 명시적 Dispatch를 호출한 스레드에서 실행하며 전달된 참조는 해당 호출 동안만 유효함.
 
-Editor는 Timeline marker, 추가·삭제·시간·이름·payload 편집, 수집 Seek 선택과 발생 로그를 제공함. marker 편집은 Undo/Redo 대상이며 큐 배출·로그는 문서를 dirty로 만들지 않음. Scene v13는 overlay와 Clip identity를 저장하고 reader는 v1~v13임. 발생 큐·callback·로그는 저장하지 않으며 Undo/Redo는 과거 큐를 재발송하지 않음. Reimport는 overlay Clip identity/duration을 검사함. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
+Editor는 Timeline marker, 추가·삭제·시간·이름·payload 편집, 수집 Seek 선택과 발생 로그를 제공함. marker 편집은 Undo/Redo 대상이며 큐 배출·로그는 문서를 dirty로 만들지 않음. Scene v13는 overlay와 Clip identity를 저장하고 reader는 v1~v14임. 발생 큐·callback·로그는 저장하지 않으며 Undo/Redo는 과거 큐를 재발송하지 않음. Reimport는 overlay Clip identity/duration을 검사함. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
 
 ### Shared Skeleton / Leader Pose / Socket (SDK 1.0)
 
@@ -486,7 +518,7 @@ Follower는 자체 애니메이션 Player의 TRS·Morph 재생과 이벤트 수�
 
 잘못된 입력·누락된 소켓/본·호환성·순환·singular TRS는 `std::invalid_argument`임. world-preserving detach 또는 SetWorldTransform 결과에 shear가 있으면 TRS로 저장할 수 없어 변경 전에 거부함. `EditorDocument`는 공유 Skeleton·Leader·소켓·부착 API를 같은 인수로 제공하고 Result 오류 및 Undo/Redo를 적용함. 전체 Pose 저장은 Follower의 표시되는 최종 local TRS를 저장하며 local shear는 거부함. overrides-only 저장은 dormant 독립 Player의 override임. Viewer는 owner thread에서 `GetScene()`을 통해 사용함.
 
-Scene writer는 v13이며 reader는 v1~v13임. 최대 1024개의 공유 Skeleton 정의를 중복 없이 저장하고 본/기준 자세/공유 소켓, 인스턴스 소켓 override, Leader·Transform 부모·부착 소켓을 복원함. 파일의 ObjectId는 새 런타임 ID로 매핑하며 모순된 참조·순환·256단계 초과 chain은 거부함. v1~v11에서는 새 관계가 없는 일반 객체로 읽음. 기존 16 MiB JSON·65536 객체·4096 모델 제한을 유지함. 이전 SDK reader는 v13를 읽을 수 없음. Pose v1·ImportVersion 6은 유지하고 정적 SDK 소비자는 1.0.0 헤더/라이브러리로 함께 재빌드해야 함.
+Scene writer는 v13이며 지형을 내장한 Scene은 v14로 저장함. reader는 v1~v14임. 최대 1024개의 공유 Skeleton 정의를 중복 없이 저장하고 본/기준 자세/공유 소켓, 인스턴스 소켓 override, Leader·Transform 부모·부착 소켓을 복원함. 파일의 ObjectId는 새 런타임 ID로 매핑하며 모순된 참조·순환·256단계 초과 chain은 거부함. v1~v11에서는 새 관계가 없는 일반 객체로 읽음. 기존 16 MiB JSON·65536 객체·4096 모델 제한을 유지함. 이전 SDK reader는 v13를 읽을 수 없음. Pose v1·ImportVersion 6은 유지하고 정적 SDK 소비자는 1.0.0 헤더/라이브러리로 함께 재빌드해야 함.
 
 예제는 [Equipment](../examples/Equipment/Main.cpp), 설치 SDK 소비자는 [SdkConsumer/Equipment](../examples/SdkConsumer/Equipment.cpp)임. C++/Editor 기능을 제공하며 Python/JavaScript의 장착 제어 바인딩은 제공하지 않음.
 
@@ -615,7 +647,7 @@ auto changed = viewer.SetQuality(quality); // Result<void> 확인 필요
 
 ```sh
 python -m pip wheel . --wheel-dir out/wheels
-python -m pip install --force-reinstall out/wheels/minvex-1.0.5-cp312-cp312-win_amd64.whl
+python -m pip install --force-reinstall out/wheels/minvex-1.1.0-cp312-cp312-win_amd64.whl
 python python/examples/viewer.py examples/assets/MorphRibbon.gltf --frames 60
 ```
 
@@ -768,12 +800,12 @@ Facade·IO는 Result를 사용하고, low-level Asset/Scene/Animation API는 `Im
 
 | 항목 | 현재 규칙 |
 |---|---|
-| **Scene** | writer v13 / reader v1~v13. 외부 모델 참조·계층·카메라·조명·Pose·Clip/Cross-fade·Blend Tree·Additive·Event overlay·재질/Morph override·Shared Skeleton·Leader Pose·Socket 저장. 로드 시 runtime ID 재매핑 |
+| **Scene** | writer v13(지형 포함 시 v14) / reader v1~v14. 외부 모델 참조·계층·카메라·조명·Pose·Clip/Cross-fade·Blend Tree·Additive·Event overlay·재질/Morph override·Shared Skeleton·Leader Pose·Socket 저장. 로드 시 runtime ID 재매핑 |
 | **Pose / Quality / Import** | Pose v1, Quality writer v2 / reader v1~v2, ImportVersion 6. Pose는 skeleton signature 호환 필요 |
 | **Quality** | Low·Medium·High, Overrides가 있으면 Custom. 기본 `AllowFallback=false`; 미지원 설정 대체는 명시적으로 허용 |
 | **SDK** | 정적 라이브러리. 소비자는 같은 architecture·compiler/toolset·configuration·C++ runtime을 사용함. MSVC로 빌드한 패키지는 ZIP 이름과 manifest의 `msvcToolset`에 컴파일러 `major.minor`를 표시하며 C++ 소비자의 컴파일러 ID와 `major.minor`를 `find_package`에서 검사함. 전체 컴파일러 버전은 `compiler`와 CMake의 `Minvex_COMPILER`에 기록함 |
 
-Scene v13는 v12 이하만 지원하는 이전 SDK reader로 읽을 수 없음. Scene/Pose/Quality 저장은 임시 파일 작성 후 교체하며 모델 파일 자체를 Scene에 내장하지 않음. Undo 이력·UI 상태·Telemetry는 Scene에 저장하지 않음.
+Scene v13은 v12 이하의 reader에서, 지형을 포함한 Scene v14는 v13 이하의 reader에서 열 수 없습니다. Scene/Pose/Quality 저장은 임시 파일 작성 후 교체합니다. 지형 격자는 Scene에 포함하며 일반 모델은 외부 파일을 참조합니다. Undo 이력·UI 상태·Telemetry는 Scene에 저장하지 않음.
 
 Scene의 모델·텍스처 디렉터리 상대 참조는 실제 부모 디렉터리를 기준으로 계산함. macOS의 `/var` → `/private/var` 같은 디렉터리 링크나 Windows junction을 통해 저장·로드해도 같은 리소스를 가리키며, 프로젝트를 함께 옮길 수 있음.
 
@@ -783,7 +815,7 @@ Minvex 자체 코드는 Apache-2.0을 적용함. SDK 설치 접두사 최상위�
 
 ## 지원 범위
 
-이 문서는 SDK 1.0.5의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
+이 문서는 SDK 1.1.0의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
 
 CPU-only 구성의 native 초기화·실행은 `UnsupportedFeature`를 반환함.
 

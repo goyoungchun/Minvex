@@ -228,6 +228,7 @@ void EditorUI::Menu() {
             ImGui::MenuItem("Bone Inspector",nullptr,&bones_); ImGui::MenuItem("Animation Controls",nullptr,&animation_);
             ImGui::MenuItem("Quality Settings",nullptr,&quality_);
             ImGui::MenuItem("Performance",nullptr,&performance_);
+            ImGui::MenuItem("Terrain",nullptr,&terrainPanel_);
             ImGui::MenuItem("Console",nullptr,&console_);
             ImGui::MenuItem("Asset Inspector",nullptr,&assetInspector_);
             ImGui::MenuItem("Welcome",nullptr,&welcome_);
@@ -276,7 +277,7 @@ void EditorUI::Dockspace() {
         ImGui::DockBuilderFinish(dock);
     }
     // Add Phase 5 panels to a saved Phase 4 layout without resetting user splits.
-    for (const auto& panel : {std::pair{"Bone Inspector","Inspector"},std::pair{"Animation Controls","Asset Browser"},std::pair{"Quality Settings","Inspector"},std::pair{"Performance","Inspector"},std::pair{"Console","Asset Browser"},std::pair{"Asset Inspector","Inspector"},std::pair{"Render Debugger","Inspector"},std::pair{"Animation Debugger","Inspector"}}) {
+    for (const auto& panel : {std::pair{"Bone Inspector","Inspector"},std::pair{"Animation Controls","Asset Browser"},std::pair{"Quality Settings","Inspector"},std::pair{"Performance","Inspector"},std::pair{"Console","Asset Browser"},std::pair{"Asset Inspector","Inspector"},std::pair{"Render Debugger","Inspector"},std::pair{"Animation Debugger","Inspector"},std::pair{"Terrain","Inspector"}}) {
         if (!ImGui::FindWindowSettingsByID(ImHashStr(panel.first))) {
             const auto* anchor = ImGui::FindWindowSettingsByID(ImHashStr(panel.second));
             ImGui::DockBuilderDockWindow(panel.first,anchor && anchor->DockId ? anchor->DockId : dock);
@@ -657,7 +658,7 @@ void EditorUI::AssetBrowser() {
 }
 void EditorUI::ViewportPanel() {
     gizmoVisible_=false;viewportRect_={};
-    if (!viewport_) {StopCameraEdit(true);if (gizmoEditing_) {if (Document.IsEditing()) {(void)Document.CancelEdit();}ImGuizmo::Enable(false);gizmoEditing_=false;}Viewport.Resize(0,0);return;}
+    if (!viewport_) {FinishTerrainStroke(true);StopCameraEdit(true);if (gizmoEditing_) {if (Document.IsEditing()) {(void)Document.CancelEdit();}ImGuizmo::Enable(false);gizmoEditing_=false;}Viewport.Resize(0,0);return;}
     if (ImGui::Begin("Viewport",&viewport_)) {
         if (ImGui::Button("Focus selected (F)")) { FrameScene(); }
         ImGui::SameLine();ImGui::BeginDisabled(Document.IsEditing());ImGui::SetNextItemWidth(115);ImGui::Combo("##transform-tool",&transformTool_,"Move (W)\0Rotate (E)\0Scale (R)\0");ImGui::EndDisabled();
@@ -683,7 +684,7 @@ void EditorUI::ViewportPanel() {
             const bool uiBlocked=UiViewportInput(imageMin.x,imageMin.y,available.x,available.y,hovered,modal);
             if (uiBlocked) {StopCameraEdit(false);controls_.Reset();cameraDrag_=false;}
             if (io.AppFocusLost || modal) {StopCameraEdit(true);}
-            else if (!uiBlocked) {
+            else if (!uiBlocked && !terrainStroke_) {
                 auto camera = Document.GetScene().MainCamera;
                 ViewerInputEvent event; event.Shift = io.KeyShift;
                 bool changed = false;
@@ -698,10 +699,12 @@ void EditorUI::ViewportPanel() {
                 if (changed) { Report(Document.SetCamera(camera)); }
                 if (!cameraDrag_ && cameraEditing_) {StopCameraEdit(false);}
             }
-            TransformTools(imageMin.x,imageMin.y,available.x,available.y,!modal&&!uiBlocked&&!cameraDrag_);
+            const bool terrainInput = TerrainInput(io.MousePos.x-imageMin.x,io.MousePos.y-imageMin.y,
+                {available.x,available.y},hovered&&!uiBlocked&&!cameraDrag_,io.AppFocusLost||modal);
+            TransformTools(imageMin.x,imageMin.y,available.x,available.y,!modal&&!uiBlocked&&!cameraDrag_&&!terrainInput,!terrainInput);
             if (!io.AppFocusLost && !modal && !uiBlocked) {
-                if (hovered && !gizmoBlockInput_ && !io.WantTextInput && ImGui::IsMouseClicked(0)) {try {Report(Document.Select(detail::PickSceneObject(Document.GetScene(),Viewport.Aspect(),(io.MousePos.x-imageMin.x)/available.x*2-1,1-(io.MousePos.y-imageMin.y)/available.y*2)));ImGui::SetWindowFocus();}catch (const std::exception& e) {ShowError({ErrorCode::InvalidArgument,e.what(),"Check the camera and visible model bounds.",{}});}}
-                if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.WantTextInput && !gizmoEditing_ && !gizmoSuppressed_) {
+                if (!terrainInput && hovered && !gizmoBlockInput_ && !io.WantTextInput && ImGui::IsMouseClicked(0)) {try {Report(Document.Select(detail::PickSceneObject(Document.GetScene(),Viewport.Aspect(),(io.MousePos.x-imageMin.x)/available.x*2-1,1-(io.MousePos.y-imageMin.y)/available.y*2)));ImGui::SetWindowFocus();}catch (const std::exception& e) {ShowError({ErrorCode::InvalidArgument,e.what(),"Check the camera and visible model bounds.",{}});}}
+                if (!terrainStroke_ && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.WantTextInput && !gizmoEditing_ && !gizmoSuppressed_) {
                     if (cameraEditing_) {if (ImGui::IsKeyPressed(ImGuiKey_Escape,false)) {StopCameraEdit(true);}}
                     else {
                         if (!io.KeyCtrl && !io.KeySuper) {if (ImGui::IsKeyPressed(ImGuiKey_W,false)) {transformTool_=0;}if (ImGui::IsKeyPressed(ImGuiKey_E,false)) {transformTool_=1;}if (ImGui::IsKeyPressed(ImGuiKey_R,false)) {transformTool_=2;}}
@@ -711,13 +714,14 @@ void EditorUI::ViewportPanel() {
                     }
                 }
             }
+            UpdateTerrainContours();
             Viewport.Render(Document.GetScene());
             drawList->ChannelsSetCurrent(0);
             const auto texture=Viewport.Texture();
             if (texture.id) {drawList->AddImage(simgui_imtextureid(texture),imageMin,{imageMin.x+available.x,imageMin.y+available.y});}
             drawList->ChannelsMerge();
-        } else {StopCameraEdit(true);if (gizmoEditing_) {if (Document.IsEditing()) {(void)Document.CancelEdit();}ImGuizmo::Enable(false);gizmoEditing_=false;}Viewport.Resize(0,0);}
-    } else {StopCameraEdit(true);if (gizmoEditing_) {if (Document.IsEditing()) {(void)Document.CancelEdit();}ImGuizmo::Enable(false);gizmoEditing_=false;}Viewport.Resize(0,0);}
+        } else {FinishTerrainStroke(true);StopCameraEdit(true);if (gizmoEditing_) {if (Document.IsEditing()) {(void)Document.CancelEdit();}ImGuizmo::Enable(false);gizmoEditing_=false;}Viewport.Resize(0,0);}
+    } else {FinishTerrainStroke(true);StopCameraEdit(true);if (gizmoEditing_) {if (Document.IsEditing()) {(void)Document.CancelEdit();}ImGuizmo::Enable(false);gizmoEditing_=false;}Viewport.Resize(0,0);}
     ImGui::End();
 }
 void EditorUI::DropFiles(const std::vector<std::filesystem::path>& paths,float x,float y) {
@@ -790,7 +794,7 @@ void EditorUI::Draw() {
     PollAssetJobs();
     PollAnimationEvents();
     if (pendingQuality_) {const auto profile=std::move(*pendingQuality_);pendingQuality_.reset();Report(ApplyQualityProfile(profile));lastAnalysis_=-1;}
-    Menu(); Dockspace(); Hierarchy(); Inspector(); BoneInspector(); AssetBrowser();AssetInspector(); AnimationControls(); QualitySettings(); UiDesigner();ViewportPanel(); PerformancePanel();RenderDebugger();AnimationDebugger();Console(); Welcome();ImportPreview(); Dialogs();
+    Menu(); Dockspace(); Hierarchy(); Inspector(); BoneInspector(); AssetBrowser();AssetInspector(); AnimationControls(); QualitySettings(); UiDesigner();TerrainPanel();ViewportPanel(); PerformancePanel();RenderDebugger();AnimationDebugger();Console(); Welcome();ImportPreview(); Dialogs();
     if (ImGui::BeginViewportSideBar("Status",ImGui::GetMainViewport(),ImGuiDir_Down,ImGui::GetFrameHeight(),ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings)) {
         const auto stats = Viewport.Stats();
         ImGui::Text("%zu objects | %zu assets | %zu draw calls | %s",Document.GetScene().Size(),Document.Assets().size(),stats.LastDrawCalls,status_.c_str());

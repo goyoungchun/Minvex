@@ -3,6 +3,7 @@
 #include <minvex/Asset.h>
 #include <minvex/Skeleton.h>
 
+#include <limits>
 #include <unordered_map>
 
 namespace lv {
@@ -24,6 +25,27 @@ struct Camera {
     float OrthographicHeight = 10.0f; // Full vertical span in world units.
     Mat4 ProjectionMatrix(float aspect) const;
     Mat4 ViewProjection(float aspect) const;
+};
+
+// Screen coordinates use a top-left origin. ScreenPoint::Depth is the [0,1]
+// depth after projection (0 at the near plane). X and Y may lie outside the viewport.
+struct ScreenPoint { float X = 0, Y = 0; double Depth = 0; };
+struct ViewportSize { float Width = 0, Height = 0; };
+struct Ray {
+    Vec3 Origin{};
+    Vec3 Direction{0, 0, -1};
+    double MinDistance = 0, MaxDistance = std::numeric_limits<double>::infinity();
+};
+ScreenPoint WorldToScreen(const Camera& camera, ViewportSize viewport, Vec3 world);
+Vec3 ScreenToWorld(const Camera& camera, ViewportSize viewport, ScreenPoint point);
+Ray ScreenRay(const Camera& camera, ViewportSize viewport, float x, float y);
+
+struct SurfaceHit {
+    ObjectId Object = NoObject;
+    Vec3 Position{};
+    double Distance = 0;
+    std::size_t Part = 0, Primitive = 0, Triangle = 0;
+    std::array<double, 3> Barycentric{}; // Index order within the source triangle.
 };
 
 struct DirectionalLight {
@@ -135,6 +157,9 @@ public:
     void ClearAnimationEventQueues() noexcept;
     Mat4 GetWorldTransform(ObjectId id) const;
     std::vector<RenderItem> CollectRenderItems() const;
+    // Closest two-sided LOD0 triangle, including the current pose and morph weights.
+    // A nonzero object filter matches exactly one visible instance.
+    std::optional<SurfaceHit> PickSurface(const Ray& ray, ObjectId object = NoObject) const;
 
     Camera MainCamera;
     DirectionalLight Sun;

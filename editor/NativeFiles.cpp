@@ -35,6 +35,7 @@ FilePickerResult NativeFiles::Choose(const FilePickerRequest& request) const {
         case FilePickerFilter::Quality:filters[0]={"Minvex Quality (*.mvxquality.json)","json"};break;
         case FilePickerFilter::Json:filters[0]={"JSON","json"};break;
         case FilePickerFilter::Csv:filters[0]={"CSV","csv"};break;
+        case FilePickerFilter::Png:filters[0]={"Grayscale PNG","png"};break;
         }
         std::error_code ec;const auto directory=std::filesystem::is_directory(request.Directory,ec) ? Utf8(request.Directory):std::string{};
         const char* defaults=directory.empty() ? nullptr:directory.c_str();

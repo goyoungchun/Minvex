@@ -7,16 +7,16 @@
 
 namespace lv {
 
-// Writes version 13 with Ambient/Rect/local shadows; reads versions 1..13.
-// External model references, library, hierarchy, TRS, camera, lights, animation/pose.
+// Writes version 13, or version 14 when embedding terrain; reads versions 1..14.
+// External model references, embedded terrain, library, hierarchy, TRS, camera, lights, animation/pose.
 // Runtime ObjectId/AssetId values are remapped when opening an archive.
 struct SceneArchive {
     Scene World;
-    std::vector<ModelHandle> Assets; // Includes imported assets without instances.
+    std::vector<ModelHandle> Assets; // Includes external and embedded assets without instances.
 };
 
 // CPU-only, synchronous, caller-thread operations. 16 MiB JSON, 65536 objects,
-// 4096 assets, 256 hierarchy levels. Assets remain external files.
+// 4096 assets and 256 hierarchy levels. File-backed assets remain external.
 // Save replaces the destination only after a complete temporary file is closed.
 Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path,
                        std::span<const ModelHandle> library = {});

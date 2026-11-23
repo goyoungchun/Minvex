@@ -15,6 +15,7 @@
 namespace lv {
 
 using AssetId = std::uint64_t;
+class TerrainGrid;
 
 struct ImportSettings {
     bool GenerateMissingNormals = true;
@@ -135,6 +136,7 @@ struct ModelAsset {
     AssetFormat Format = AssetFormat::Gltf;
     AssetImportStatus Status = AssetImportStatus::Ready;
     std::vector<std::filesystem::path> MissingDependencies;
+    std::shared_ptr<const TerrainGrid> Terrain; // Set by MakeTerrainModel for editable, embedded heightfields.
 };
 
 struct AssetInspection {

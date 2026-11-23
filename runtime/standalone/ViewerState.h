@@ -20,7 +20,8 @@ struct ViewerState {
     std::atomic_bool Running{false}, CloseRequested{false};
     bool HasRun = false;
     bool AutoFrame;
-    bool DispatchingInput = false;
+    const ViewerInputEvent* DispatchingInput = nullptr;
+    ViewerMouseButton PointerCapture = ViewerMouseButton::None;
     const ViewerRunOptions* ActiveRun = nullptr;
     int Width = 0, Height = 0;
     bool HasViewportSize = false;
@@ -42,7 +43,7 @@ struct ViewerState {
     struct Reload {AssetLoadId Job;ModelHandle Before;bool Again=false;};std::vector<Reload> Reloads;
     std::optional<Error> LastAssetError;
     std::array<float,2> LogicalSize() const {
-        if (Running && UiLogicalWidth>0 && UiLogicalHeight>0) {return {UiLogicalWidth,UiLogicalHeight};}
+        if (Running) {return {UiLogicalWidth,UiLogicalHeight};}
         return {static_cast<float>(HasViewportSize ? Width : Options.Width),
                 static_cast<float>(HasViewportSize ? Height : Options.Height)};
     }

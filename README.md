@@ -43,7 +43,7 @@ Quick Start를 다른 위치에 복사했다면 구성 전에 `$env:MINVEX_SDK_R
 
 Windows 프리셋은 Developer PowerShell에 연결된 Visual Studio의 Ninja를 먼저 찾습니다. 설치 경로에 시스템 코드 페이지로 표현할 수 없는 문자가 있으면 `ninja -t wincodepage`에서 `UTF-8`을 보고하는 Ninja를 사용합니다. 구성할 때 `-DCMAKE_MAKE_PROGRAM=<ninja.exe 경로>`로 직접 지정할 수 있습니다.
 
-콘솔이 없는 Windows 자동화에서 한글 경로를 사용하려면 Quick Start의 `Invoke-MinvexCMake.ps1`로 구성과 빌드를 실행합니다. 스크립트는 MSVC가 경로를 UTF-8로 출력할 수 있도록 보이지 않는 콘솔을 준비합니다.
+콘솔이 없는 Windows 자동화에서 한글 경로를 사용하려면 Quick Start의 `Invoke-MinvexCMake.ps1`로 구성과 빌드를 실행합니다. 스크립트는 숨김 UTF-8 콘솔에서 CMake를 실행하며, CMake 경로, PATH의 MSVC·Ninja, 코드 페이지, 현재 단계와 출력을 실행 중에 표시합니다. `-TimeoutSeconds`로 대기 한도를 지정할 수 있습니다.
 
 ```powershell
 $minvexCMake = (Get-Command cmake.exe).Source
@@ -74,6 +74,19 @@ cmake --build --preset windows-release-examples --target minvex_maintenance
 ```
 
 macOS에서는 위 Ninja 구성에서 `MINVEX_QUICKSTART_BUILD_EXTRAS=ON`을 지정하고 `minvex_maintenance` 타깃을 빌드합니다. 실행 파일에 SDK의 `share/minvex/examples/assets`에 있는 GLB 경로를 전달합니다. 자체 GLB를 연결하는 기준은 API 문서에서 확인할 수 있습니다. [정비 매뉴얼 Quick Start](docs/API.md#glb-정비-매뉴얼-quick-start)
+
+#### 지형 측량·적재 미리보기
+
+현재 소스의 Quick Start 전체 예제에 `minvex_survey`와 `minvex_load_planning`이 포함됩니다. 측량 예제에서 **Shift+클릭**으로 두 점을 측정하고, **O**로 원근·직교를 바꾸고, **C**로 등고선을 표시합니다. 인자를 생략하면 산악 지형을 생성합니다. 적재 예제의 **Preview gravity**를 누르면 팔레트 가장자리에 걸친 상자가 기울고 떨어지는 과정이 청록색 윤곽으로 재생됩니다. 재생 후 **Apply result**를 눌러야 상자의 위치와 회전이 배치에 반영됩니다. **Discard**로 미리보기를 닫거나 상자를 드래그·방향키로 옮겨 새로 검사할 수 있습니다. 이 예제는 선택형 `minvex::physics` 컴포넌트를 사용합니다.
+
+```powershell
+cmake --preset windows-release
+cmake --build --preset windows-release --target minvex_survey minvex_load_planning
+& .\out\build\windows-release\bin\minvex_survey.exe .\examples\assets\SurveySlope.csv
+& .\out\build\windows-release\bin\minvex_load_planning.exe
+```
+
+Editor의 **Window → Terrain**에서 평면 생성, 산악 프리셋, 브러시, CSV·PNG 가져오기, 등고선과 표고 측정을 사용할 수 있습니다. 지형은 Scene 파일에 함께 저장됩니다. [지형 API](docs/API.md#지형-격자와-측량) · [상자 물리](docs/API.md#상자-받침과-중력-미리보기)
 
 ### 기존 CMake 앱에 추가
 
@@ -131,7 +144,7 @@ macOS에서는 `out/build/macos-release`를 사용합니다. 설치한 SDK의 `o
 | 분야                       | 현재 지원 기능                                                                                                                                                |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Asset**                | glTF/GLB, OBJ/MTL, FBX(Static·Skin·Animation·Blend Shape Bake), 검사·재임포트·Hot Reload·비동기 로딩                                                               |
-| **Scene**                | 객체 계층·Transform, 모델 인스턴스 공유, 소켓·부착 노드, Scene v13 저장·불러오기                                                                                                |
+| **Scene**                | 객체 계층·Transform, 모델 인스턴스 공유, 소켓·부착 노드, Scene v13 및 지형 포함 v14 저장·불러오기                                                                                |
 | **Mesh**                 | Static/Skeletal Mesh, GPU Skinning, 정점당 최대 4개 Bone 영향                                                                                                   |
 | **Morph**                | Morph Target, GPU Morph, 노드별 독립 Weight, Weight Animation                                                                                                |
 | **Material·Lighting**    | Base Color·Texture·Normal Map, 독립 Ambient·Directional·Point·Spot·LTC Rect Light, Sun Basic/PCF/PCSS·Point/Spot Hard/PCF 그림자, HDR·FXAA                                                            |

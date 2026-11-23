@@ -6,7 +6,7 @@
 
 namespace lv::editor {
 enum class FilePickerMode { Open, Multiple, Save, Folder };
-enum class FilePickerFilter { Model, Scene, Pose, Quality, Json, Csv };
+enum class FilePickerFilter { Model, Scene, Pose, Quality, Json, Csv, Png };
 struct FilePickerRequest {
     FilePickerMode Mode = FilePickerMode::Open;
     FilePickerFilter Filter = FilePickerFilter::Model;

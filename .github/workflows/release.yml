@@ -8,7 +8,7 @@ on:
         description: Existing release tag to build and publish
         type: string
         required: true
-        default: v1.0.5
+        default: v1.1.0
       verify_existing:
         description: Verify archives from this revision for an existing release
         type: boolean
@@ -102,15 +102,16 @@ jobs:
 
           The Windows archive filename includes the required MSVC compiler major.minor (for example, MSVC-19.51). Check your compiler with cl /Bv. If the versions differ, select the matching MSVC toolset or build the SDK from this release tag with your compiler.
 
-          New in 1.0.5
+          New in 1.1.0
 
-          - The maintenance Quick Start maps persistent GLB node names to scene objects. It shows reversible disassembly, smooth retargeting during a move, and model replacement that preserves the stage and camera.
-          - The Korean directions reflow at word boundaries and the parts list scrolls independently of the navigation buttons. Runtime text changes now update the measured height of wrapping labels.
-          - The installed Windows Quick Start includes Ninja presets for Release and the matching MSVC runtime. The basic Viewer opens a procedural cube when no model path is supplied. The SDK manifest lists the available CMake components.
+          - Viewer pointer capture keeps application drags active over UI controls. Keyboard events cover arrows, letters and digits. Logical-pixel screen transforms and filtered triangle picking support perspective and orthographic cameras.
+          - Terrain grids share elevation data across mesh generation, contours and measurement. The Editor includes seeded mountains, raise/lower/smooth brushes, regular CSV grids and grayscale PNG heightmaps. The survey Quick Start demonstrates measurement with a local rendering origin.
+          - The optional minvex::physics component supports rotating boxes, Coulomb friction and contact between moving bodies. The loading Quick Start shows cargo tipping and falling from a pallet. Apply result commits the final positions and rotations.
+          - The Windows Quick Start build helper streams tool paths, the UTF-8 code page, CMake stages and output when running from headless automation.
 
           The examples are in share/minvex/examples/QuickStart.
 
-          UI documents with number fields use Minvex.UI v3. Existing v1 and v2 documents remain readable. Rebuild C++ consumers using the headers and libraries from the same SDK package.
+          Scenes with embedded terrain use Scene v14 and require a v14-capable reader. Other scenes continue to use v13. The SDK reads Scene v1 through v14. Rebuild C++ consumers using the headers and libraries from the same SDK package.
 
           Building from source requires a C++20 standard library with std::jthread and std::stop_token. Each binary SDK records its compiler and runtime in share/minvex/sdk-manifest.json.
 

@@ -9,7 +9,7 @@ void EditorUI::StopCameraEdit(bool cancel) {
     if (cameraEditing_ && Document.IsEditing()) {Report(cancel ? Document.CancelEdit():Document.CommitEdit());}
     cameraEditing_=false;
 }
-void EditorUI::TransformTools(float x,float y,float width,float height,bool enabled) {
+void EditorUI::TransformTools(float x,float y,float width,float height,bool enabled,bool showGizmo) {
     viewportRect_={x,y,width,height};gizmoVisible_=gizmoBlockInput_=false;
     const auto& io=ImGui::GetIO();const auto object=Document.Selection();
     if (gizmoEditing_ && !Document.IsEditing()) {gizmoEditing_=false;gizmoSuppressed_=io.MouseDown[0];}
@@ -30,7 +30,7 @@ void EditorUI::TransformTools(float x,float y,float width,float height,bool enab
     }
     const bool allow=enabled && !io.AppFocusLost && !gizmoSuppressed_ && !io.WantTextInput && (!Document.IsEditing() || gizmoEditing_) && (!ImGui::IsAnyItemActive() || ImGuizmo::IsUsing());
     ImGuizmo::Enable(allow);
-    if (object && Document.GetScene().Contains(object)) {
+    if (showGizmo && object && Document.GetScene().Contains(object)) {
         auto world=Document.GetScene().GetWorldTransform(object);
         const ImGuizmo::OPERATION operations[]{ImGuizmo::TRANSLATE,ImGuizmo::ROTATE,ImGuizmo::SCALE};
         gizmoVisible_=true;

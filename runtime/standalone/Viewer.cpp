@@ -43,6 +43,16 @@ Result<void> ObjectReady(const detail::ViewerState& state, ObjectId id) {
     if (!state.World.Contains(id)) { return Result<void>::Failure({ErrorCode::InvalidHandle, "Model/object ID is not in this Viewer.", "Use a live ID returned by this Viewer or its Scene.", {}}); }
     return Result<void>::Success();
 }
+template<class Function>
+auto QueryScreen(const detail::ViewerState& state, Function query) {
+    using Value = decltype(query(ViewportSize{}));
+    const auto ready = Ready(state);
+    if (!ready) { return Result<Value>::Failure(ready.Error()); }
+    const auto [width,height] = state.LogicalSize();
+    try { return Result<Value>::Success(query({width,height})); }
+    catch (...) { return Result<Value>::Failure(detail::CurrentException(ErrorCode::InvalidArgument,
+        "Check the camera, logical viewport and input coordinates.")); }
+}
 }
 
 Viewer::Viewer(ViewerOptions options) : state_(std::make_unique<detail::ViewerState>(std::move(options))) {}
@@ -292,6 +302,56 @@ Result<ObjectId> Viewer::PickObject(float x,float y) const {
     }
 }
 
+Result<ScreenPoint> Viewer::WorldToScreen(Vec3 world) const {
+    return QueryScreen(*state_,[&](ViewportSize size) { return lv::WorldToScreen(state_->World.MainCamera,size,world); });
+}
+
+Result<Vec3> Viewer::ScreenToWorld(ScreenPoint point) const {
+    return QueryScreen(*state_,[&](ViewportSize size) { return lv::ScreenToWorld(state_->World.MainCamera,size,point); });
+}
+
+Result<Ray> Viewer::ScreenRay(float x, float y) const {
+    return QueryScreen(*state_,[&](ViewportSize size) { return lv::ScreenRay(state_->World.MainCamera,size,x,y); });
+}
+
+Result<std::optional<SurfaceHit>> Viewer::PickSurface(float x, float y, ObjectId object) const {
+    return QueryScreen(*state_,[&](ViewportSize size) -> std::optional<SurfaceHit> {
+        if (!std::isfinite(x) || !std::isfinite(y)) { throw std::invalid_argument("Picking coordinates must be finite."); }
+        if (x < 0 || y < 0 || x >= size.Width || y >= size.Height) { return std::nullopt; }
+        return state_->World.PickSurface(lv::ScreenRay(state_->World.MainCamera,size,x,y),object);
+    });
+}
+
+Result<void> Viewer::CapturePointer(ViewerMouseButton button) {
+    const auto ready = Ready(*state_);
+    if (!ready) { return ready; }
+    if (button != ViewerMouseButton::Left && button != ViewerMouseButton::Right && button != ViewerMouseButton::Middle) {
+        return Result<void>::Failure({ErrorCode::InvalidArgument,"A mouse button is required for pointer capture.","Use Left, Right or Middle.",{}});
+    }
+    const auto* input = state_->DispatchingInput;
+    if (!input || input->Type != ViewerInputType::MouseDown || input->Button != button ||
+        (state_->PointerCapture != ViewerMouseButton::None && state_->PointerCapture != button)) {
+        return Result<void>::Failure({ErrorCode::InvalidState,"Pointer capture requires the matching OnInput mouse press.",
+            "Call CapturePointer from the initial MouseDown callback.",{}});
+    }
+    state_->Controls.Reset();
+    state_->PointerCapture = button;
+    return Result<void>::Success();
+}
+
+Result<void> Viewer::ReleasePointer() {
+    const auto ready = Ready(*state_);
+    if (!ready) { return ready; }
+    state_->PointerCapture = ViewerMouseButton::None;
+    return Result<void>::Success();
+}
+
+Result<ViewerMouseButton> Viewer::GetPointerCapture() const {
+    const auto ready = Ready(*state_);
+    if (!ready) { return Result<ViewerMouseButton>::Failure(ready.Error()); }
+    return Result<ViewerMouseButton>::Success(state_->PointerCapture);
+}
+
 Result<void> Viewer::ProcessInput(const ViewerInputEvent& event) {
     auto ready = Ready(*state_); if (!ready) { return ready; }
     if (state_->DispatchingInput) { return Result<void>::Failure({ErrorCode::InvalidState,"Recursive input dispatch is not supported.","Change the camera or Scene directly inside OnInput instead of redispatching input.",{}}); }
@@ -300,6 +360,11 @@ Result<void> Viewer::ProcessInput(const ViewerInputEvent& event) {
     }
     if (event.Type == ViewerInputType::Resized) {
         if (event.Width < 0 || event.Height < 0) { return Result<void>::Failure({ErrorCode::InvalidArgument, "Viewport dimensions cannot be negative.", "Use logical window dimensions; zero is allowed for a minimized window.", {}}); }
+        if (state_->Running && (std::lround(state_->UiLogicalWidth) != event.Width ||
+                               std::lround(state_->UiLogicalHeight) != event.Height)) {
+            state_->UiLogicalWidth = static_cast<float>(event.Width);
+            state_->UiLogicalHeight = static_cast<float>(event.Height);
+        }
         state_->Width = event.Width; state_->Height = event.Height;
         state_->HasViewportSize = true;
     }
@@ -308,6 +373,12 @@ Result<void> Viewer::ProcessInput(const ViewerInputEvent& event) {
     // OnInput consumes the event. Otherwise the next unconsumed move can drag.
     if (event.Type == ViewerInputType::MouseUp) {
         state_->Controls.Process(state_->World.MainCamera,event,state_->Options.CameraControls,state_->Height);
+    }
+    const bool captured = state_->PointerCapture != ViewerMouseButton::None;
+    const bool capturedPointerEvent = captured && (event.Type == ViewerInputType::MouseDown ||
+        event.Type == ViewerInputType::MouseUp || event.Type == ViewerInputType::MouseMove || event.Type == ViewerInputType::Scroll);
+    if (event.Type == ViewerInputType::FocusLost || (event.Type == ViewerInputType::MouseUp && event.Button == state_->PointerCapture)) {
+        state_->PointerCapture = ViewerMouseButton::None;
     }
     std::optional<UiInputType> uiType;
     if ((event.Type==ViewerInputType::MouseDown&&event.Button!=ViewerMouseButton::Left)||(event.Type==ViewerInputType::MouseUp&&event.Button!=ViewerMouseButton::Left)) {uiType=UiInputType::Move;}
@@ -332,18 +403,27 @@ Result<void> Viewer::ProcessInput(const ViewerInputEvent& event) {
         default:break;
         }
     }
-    if (uiType&&!state_->Ui.Empty()) {
+    if (!capturedPointerEvent&&uiType&&!state_->Ui.Empty()) {
         const auto [width,height]=state_->LogicalSize();
         const auto handled=state_->Ui.ProcessInput({*uiType,event.X,event.Y,event.Shift,event.Repeat,0,-event.ScrollY*32,character},width,height);
         if (!handled) {return Result<void>::Failure(handled.Error());}
         if (handled.Value()) {return Result<void>::Success();}
     }
     if (state_->ActiveRun && state_->ActiveRun->OnInput) {
-        struct ResetDispatch { bool& Flag; ~ResetDispatch() { Flag = false; } } reset{state_->DispatchingInput};
-        state_->DispatchingInput = true;
+        struct ResetDispatch { const ViewerInputEvent*& Input; ~ResetDispatch() { Input = nullptr; } } reset{state_->DispatchingInput};
+        state_->DispatchingInput = &event;
         try { if (state_->ActiveRun->OnInput(*this,event)) { return Result<void>::Success(); } }
-        catch (const std::exception& error) { return Result<void>::Failure({ErrorCode::CallbackFailure,error.what(),"Handle exceptions inside OnInput.",{}}); }
-        catch (...) { return Result<void>::Failure({ErrorCode::CallbackFailure,"OnInput threw a non-standard exception.","Handle exceptions inside OnInput.",{}}); }
+        catch (const std::exception& error) {
+            state_->PointerCapture = ViewerMouseButton::None;
+            return Result<void>::Failure({ErrorCode::CallbackFailure,error.what(),"Handle exceptions inside OnInput.",{}});
+        }
+        catch (...) {
+            state_->PointerCapture = ViewerMouseButton::None;
+            return Result<void>::Failure({ErrorCode::CallbackFailure,"OnInput threw a non-standard exception.","Handle exceptions inside OnInput.",{}});
+        }
+    }
+    if (capturedPointerEvent || (state_->PointerCapture != ViewerMouseButton::None && event.Type == ViewerInputType::MouseDown)) {
+        return Result<void>::Success();
     }
     if (event.Type == ViewerInputType::Resized) {
         if (event.Width > 0 && event.Height > 0 && state_->AutoFrame && !state_->World.CollectRenderItems().empty()) { return FrameScene(); }

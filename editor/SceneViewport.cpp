@@ -4,6 +4,22 @@
 #include "renderer/UiRenderer.h"
 
 namespace lv::editor {
+namespace {
+Result<void> SetLines(detail::RenderSurface& surface, const DebugDraw& lines, const DebugDraw& other, DebugDraw& stored) {
+    try {
+        auto copy = lines;
+        auto combined = lines;
+        for (const auto& line : other.Lines()) { combined.DrawLine(line.Start,line.End,line.Color); }
+        auto result = surface.SetDebugDraw(combined);
+        if (result) { stored = std::move(copy); }
+        return result;
+    } catch (const std::exception& error) {
+        return Result<void>::Failure({ErrorCode::InsufficientResource,error.what(),"Reduce viewport debug lines.",{}});
+    }
+}
+}
+Result<void> SceneViewport::SetDebugDraw(const DebugDraw& d) { return SetLines(surface_,d,terrainDraw_,debugDraw_); }
+Result<void> SceneViewport::SetTerrainDraw(const DebugDraw& d) { return SetLines(surface_,d,debugDraw_,terrainDraw_); }
 void SceneViewport::Resize(int width,int height) {
     width_=std::clamp(width,0,65536);height_=std::clamp(height,0,65536);
     (void)surface_.Resize(scene_ ? *scene_:empty_,width_,height_);

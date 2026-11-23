@@ -6,6 +6,9 @@ foreach(_dir CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR CMAKE_INSTALL_DATADIR
 endforeach()
 
 set(_sdk_public core animation assets scene scene_io quality telemetry debug optimization editor_document viewer embedded ui)
+if(MINVEX_BUILD_PHYSICS)
+    list(APPEND _sdk_public physics)
+endif()
 set(_sdk_internal json_io asset_codecs camera meshoptimizer)
 if(MINVEX_BUILD_RENDERER)
     list(APPEND _sdk_internal renderer sokol_gfx sokol_app sokol_headers)

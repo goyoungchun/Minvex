@@ -24,13 +24,15 @@ public:
     int OutputWidth() const noexcept {return width_;}
     int OutputHeight() const noexcept {return height_;}
     Result<void> SetDebugOptions(const DebugOptions& o) {return surface_.SetDebugOptions(o);}
-    Result<void> SetDebugDraw(const DebugDraw& d) {return surface_.SetDebugDraw(d);}
+    Result<void> SetDebugDraw(const DebugDraw& d);
+    Result<void> SetTerrainDraw(const DebugDraw& d);
     const DebugOptions& Debug() const noexcept {return surface_.Debug();}
     RenderDebugInfo Inspect() const {return surface_.Inspect();}
     sg_view InspectionTexture(int target) const noexcept {return surface_.InspectionTexture(target);}
     sg_sampler InspectionSampler(int target) const noexcept {return surface_.InspectionSampler(target);}
 private:
     detail::RenderSurface surface_;
+    DebugDraw debugDraw_, terrainDraw_;
     Scene empty_;
     const Scene* scene_=nullptr;
     int width_=0,height_=0;
