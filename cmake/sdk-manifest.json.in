@@ -17,6 +17,8 @@
   "components": [@_sdk_manifest_components@],
   "sceneVersion": 13,
   "terrainSceneVersion": 14,
+  "particleSceneVersion": 15,
+  "advancedParticleSceneVersion": 16,
   "poseVersion": 1,
   "qualityVersion": 2,
   "uiVersion": 3,
