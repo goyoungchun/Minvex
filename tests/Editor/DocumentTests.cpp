@@ -1,10 +1,10 @@
 #include <minvex/EditorDocument.h>
+#include <minvex/Terrain.h>
 #include "TestHarness.h"
 #include "EditorPreferences.h"
 #include "CameraController.h"
 #if MINVEX_TEST_EDITOR_BOX_PREVIEW
 #include "BoxPreview.h"
-#include <minvex/Terrain.h>
 #endif
 #include <json.hpp>
 
@@ -82,7 +82,7 @@ void InvalidArchives() {
     auto legacyBrand = valid; legacyBrand["format"] = "MinuvexScene"; Write(file, legacyBrand.dump());
     Check(bool(lv::LoadScene(file, registry)), "pre-rename Scene format remains readable");
     const auto rejects = [&](Json j,const char* label) { Write(file,j.dump()); auto result = lv::LoadScene(file,registry); Check(!result && result.Error().Code == lv::ErrorCode::InvalidData,label); };
-    auto j = valid; j["version"] = 15; rejects(j,"future scene versions rejected");
+    auto j = valid; j["version"] = 17; rejects(j,"future scene versions rejected");
     j = valid; j["version"] = 1.0; rejects(j,"noninteger schema version rejected");
     j = valid; j["objects"][1]["id"] = j["objects"][0]["id"]; rejects(j,"duplicate object IDs rejected");
     j = valid; j["objects"][0]["id"] = 0; rejects(j,"zero object IDs rejected");
@@ -323,10 +323,130 @@ void MorphDocument() {
     auto legacy=original;legacy["version"]=7;for (auto& object:legacy["objects"]) {object["animation"]["blend"]=nullptr;object["animation"].erase("morphSignature");object["animation"].erase("morphOverrides");}Write(path,legacy.dump());Check(bool(loaded.Open(path)) && loaded.GetScene().GetObject(loaded.GetScene().ObjectIds()[0]).Animation.MorphOverrides().empty(),"Scene v7 defaults missing morph state");
     Check(bool(doc.ReimportModel(asset)) && doc.GetScene().GetObject(id).Animation.MorphOverrides().size() == 1,"compatible reimport preserves morph state");
 }
+void ParticleDocument() {
+    TemporaryDirectory temp;
+    const auto path = temp.File("Particles.mvxscene.json");
+    const auto png = temp.File("Frames.png");
+    std::filesystem::copy_file(Fixture("ParticleFlipbook.png"), png);
+    lv::ParticleEmitter emitter;
+    emitter.Name = "Fountain";
+    emitter.Spawn = {0, 2, {{0, 4}}, 0, 0};
+    emitter.Shape = lv::ParticleShape::Disc;
+    emitter.Radius = 0.625f;
+    emitter.Drag = 0.25f;
+    emitter.Trail = {0.25f, 6, 0.5f};
+    emitter.Collision = {lv::ParticleCollision::Bounce, -0.2f, 0.7f};
+    emitter.MaxDrawDistance = 30;
+    emitter.Flipbook = {lv::LoadParticleTexture(png), 2, 2, 3};
+    emitter.SizeOverLife = {{0, 1}, {1, 2}};
+    auto muted = emitter;
+    muted.Name = "Muted";
+    muted.Enabled = false;
+    const auto effect = lv::MakeParticleEffect({emitter, muted});
+    lv::EditorDocument doc;
+    const auto a = doc.CreateParticleObject(effect, 51).Value();
+    const auto b = doc.CreateParticleObject(effect, 52).Value();
+    doc.CreateTerrain(lv::TerrainGrid({2,2,1,1,{}}, std::array<double, 4>{})).Value();
+    doc.Save(path).Value();
+    const auto valid = Json::parse(Read(path));
+    Check(valid["version"] == 15 && valid["particleEffects"].size() == 1 &&
+          valid["particleEffects"][0]["emitters"][0]["flipbook"]["path"] == "Frames.png",
+          "v15 shares one effect definition, keeps terrain, and stores a relative texture path");
+    Check(!doc.Save(png) && lv::LoadParticleTexture(png)->Width() == 2, "saving cannot overwrite a source texture");
+    doc.SeekParticles(a, 0.5).Value();
+    Check(!doc.IsDirty() && doc.GetScene().ParticleCount(a) == 4 &&
+          doc.GetScene().ParticleTime(a) == 0.5, "preview seek does not modify authored data or savepoint");
+
+    auto changed = emitter;
+    changed.Drag = 0.8f;
+    auto alternative = lv::MakeParticleEffect({muted, changed});
+    doc.BeginEdit().Value();
+    doc.SetParticleEffect(a, alternative, 99).Value();
+    doc.CommitEdit().Value();
+    Check(doc.IsDirty() && doc.GetScene().ParticleTime(a) == 0.5 && doc.GetScene().GetParticleEffect(a).Seed == 99,
+          "editing modules previews the current time and marks the scene dirty");
+    doc.Undo().Value();
+    Check(!doc.IsDirty() && doc.GetScene().GetParticleEffect(a).Effect == effect &&
+          doc.GetScene().ParticleCount(b) == 4, "undo restores shared definitions and keeps unaffected previews");
+    doc.Redo().Value();
+    Check(doc.GetScene().GetParticleEffect(a).Effect == alternative, "redo restores emitter order and edits");
+    doc.RemoveObject(a).Value();
+    doc.Undo().Value();
+    Check(doc.GetScene().GetParticleEffect(a).Effect == alternative, "undo of removal restores its particle binding");
+    lv::EditorDocument opened;
+    opened.Open(path).Value();
+    const auto restored = opened.GetScene().ObjectIds();
+    const auto first = opened.GetScene().GetParticleEffect(restored[0]);
+    const auto second = opened.GetScene().GetParticleEffect(restored[1]);
+    Check(first && first.Effect == second.Effect && first.Seed == 51 && second.Seed == 52 &&
+          opened.GetScene().ParticleCount() == 0 && opened.GetScene().GetObject(restored[2]).Model->Terrain,
+          "reopening remaps objects, preserves definitions and seeds, and starts a fresh simulation");
+    const auto& saved = first.Effect->Emitters();
+    Check(saved[0].Name == "Fountain" && saved[0].Shape == lv::ParticleShape::Disc && Near(saved[0].Drag, 0.25f) &&
+          saved[0].Flipbook.Rows == 2 && saved[0].Flipbook.Cycles == 3 && saved[0].SizeOverLife.size() == 2 &&
+          saved[0].Trail.Segments == 6 && saved[0].Collision.Mode == lv::ParticleCollision::Bounce &&
+          Near(saved[0].Collision.Height, -0.2f) && saved[0].MaxDrawDistance == 30 &&
+          !saved[1].Enabled && saved[0].Flipbook.Texture == saved[1].Flipbook.Texture, "all authored modules and shared atlas round-trip");
+    auto invalid = valid;
+    invalid["objects"][0]["particles"]["effect"] = 999;
+    Write(path, invalid.dump());
+    Check(!opened.Open(path) && opened.GetScene().Contains(restored[0]), "bad bindings cannot replace the open document");
+    invalid = valid;
+    invalid["particleEffects"][0]["emitters"][0]["flipbook"]["path"] = "missing.png";
+    Write(path, invalid.dump());
+    Check(!opened.Open(path) && opened.GetScene().GetParticleEffect(restored[0]).Effect == first.Effect,
+          "a missing sprite sheet cannot replace the open document");
+}
+
+void AdvancedParticleDocument() {
+    TemporaryDirectory temp;
+    auto path = temp.File("Advanced.mvxscene.json");
+    lv::EditorDocument document;
+    document.ImportModel(Fixture("SharedBox.glb")).Value();
+    lv::ParticleEmitter source, child, ribbon, beam;
+    source.EmitEvents = true;
+    source.Spawn = {0, 0, {{0, 1}}};
+    source.EventRoutes = {{lv::ParticleEventKind::Birth, 1, 3}};
+    source.Simulation = lv::ParticleSimulation::Gpu;
+    source.Graph.Nodes = {{lv::ParticleNodeOp::Constant, 255, 255, 0.5f}};
+    source.Graph.Opacity = 0;
+    child.Spawn.Rate = 0;
+    child.Collision = {lv::ParticleCollision::Bounce, 0, 0.75f, lv::ParticleColliderSource::Scene};
+    child.Geometry = {lv::ParticleRendererType::Mesh, document.Assets().front(), {}};
+    ribbon.Geometry.Type = lv::ParticleRendererType::Ribbon;
+    beam.Geometry = {lv::ParticleRendererType::Beam, {}, {3, 2, 1}};
+    const auto effect = lv::MakeParticleEffect({source, child, ribbon, beam});
+    document.CreateParticleObject(effect, 511).Value();
+    document.Save(path).Value();
+    const auto saved = Json::parse(Read(path));
+    Check(saved.at("version") == 16 && saved.at("assets").size() == 1, "advanced particle features write v16 and reuse the model library");
+    lv::EditorDocument loaded;
+    loaded.Open(path).Value();
+    const auto id = loaded.GetScene().ObjectIds().front();
+    const auto binding = loaded.GetScene().GetParticleEffect(id);
+    const auto& emitters = binding.Effect->Emitters();
+    Check(binding.Seed == 511 && emitters[0].EventRoutes[0].Target == 1 && emitters[0].EventRoutes[0].Count == 3 &&
+          emitters[0].EmitEvents && emitters[0].Simulation == lv::ParticleSimulation::Gpu && emitters[0].Graph.Opacity == 0 &&
+          emitters[1].Collision.Source == lv::ParticleColliderSource::Scene && emitters[1].Geometry.Mesh == loaded.Assets().front() &&
+          emitters[2].Geometry.Type == lv::ParticleRendererType::Ribbon && emitters[3].Geometry.BeamTarget.Z == 1,
+          "all advanced settings and mesh ownership roundtrip");
+    loaded.UpdateParticles(0).Value();
+    Check(loaded.GetScene().ParticleCount() == 4 && loaded.PollParticleEvents().Value().Events.size() == 1,
+          "reopened scene runs its sub-emitters and event route");
+    auto invalid = saved;
+    invalid["particleEffects"][0]["emitters"][0]["advanced"]["nodes"][0] = {8, 0, 255, 0};
+    Write(path, invalid.dump());
+    Check(!loaded.Open(path) && loaded.GetScene().GetParticleEffect(id).Effect == binding.Effect,
+          "a cyclic serialized graph leaves the document and active effect intact");
+    invalid = saved;
+    invalid["version"] = 15;
+    Write(path, invalid.dump());
+    Check(!loaded.Open(path), "advanced modules cannot be loaded under the legacy version tag");
+}
 int main() {
     try {
         RoundTrip(); InvalidArchives(); QuickOpenAndPreferences(); CompatibilityDocument();
-        HistoryAndOrthographic(); MaterialOverrides(); ModelAssignment(); MorphDocument();
+        HistoryAndOrthographic(); MaterialOverrides(); ModelAssignment(); MorphDocument(); ParticleDocument(); AdvancedParticleDocument();
 #if MINVEX_TEST_EDITOR_BOX_PREVIEW
         PhysicsPreview();
 #endif

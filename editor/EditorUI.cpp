@@ -238,6 +238,7 @@ void EditorUI::Menu() {
             ImGui::MenuItem("UI Designer",nullptr,&uiDesigner_);
             ImGui::MenuItem("Inspector",nullptr,&inspector_); ImGui::MenuItem("Asset Browser",nullptr,&assets_);
             ImGui::MenuItem("Bone Inspector",nullptr,&bones_); ImGui::MenuItem("Animation Controls",nullptr,&animation_);
+            if (ImGui::MenuItem("Particles",nullptr,&particlePanel_) && particlePanel_) { ShowParticleEditor(); }
             ImGui::MenuItem("Quality Settings",nullptr,&quality_);
             ImGui::MenuItem("Performance",nullptr,&performance_);
             ImGui::MenuItem("Terrain",nullptr,&terrainPanel_);
@@ -289,6 +290,7 @@ void EditorUI::Dockspace() {
         ImGui::DockBuilderDockWindow("Asset Inspector",right);
         ImGui::DockBuilderDockWindow("Quality Settings",right);
         ImGui::DockBuilderDockWindow("Performance",right);
+        ImGui::DockBuilderDockWindow("Particles",right);
         ImGui::DockBuilderDockWindow("Surface Measure",right);
 #if MINVEX_EDITOR_PHYSICS
         ImGui::DockBuilderDockWindow("Box Physics",right);
@@ -297,7 +299,7 @@ void EditorUI::Dockspace() {
         ImGui::DockBuilderFinish(dock);
     }
     // Attach new panels to existing docks when loading a saved layout.
-    for (const auto& panel : {std::pair{"Bone Inspector","Inspector"},std::pair{"Animation Controls","Asset Browser"},std::pair{"Quality Settings","Inspector"},std::pair{"Performance","Inspector"},std::pair{"Console","Asset Browser"},std::pair{"Asset Inspector","Inspector"},std::pair{"Render Debugger","Inspector"},std::pair{"Animation Debugger","Inspector"},std::pair{"Terrain","Inspector"},std::pair{"Surface Measure","Inspector"}}) {
+    for (const auto& panel : {std::pair{"Bone Inspector","Inspector"},std::pair{"Animation Controls","Asset Browser"},std::pair{"Quality Settings","Inspector"},std::pair{"Performance","Inspector"},std::pair{"Console","Asset Browser"},std::pair{"Asset Inspector","Inspector"},std::pair{"Render Debugger","Inspector"},std::pair{"Animation Debugger","Inspector"},std::pair{"Terrain","Inspector"},std::pair{"Surface Measure","Inspector"},std::pair{"Particles","Inspector"}}) {
         if (!ImGui::FindWindowSettingsByID(ImHashStr(panel.first))) {
             const auto* anchor = ImGui::FindWindowSettingsByID(ImHashStr(panel.second));
             ImGui::DockBuilderDockWindow(panel.first,anchor && anchor->DockId ? anchor->DockId : dock);
@@ -392,6 +394,9 @@ void EditorUI::Inspector() {
         const auto id = Document.Selection();
         if (id && Document.GetScene().Contains(id)) {
             const auto object = Document.GetScene().GetObject(id);
+            if (ImGui::Button(Document.GetScene().GetParticleEffect(id) ? "Edit Particles" : "Particle Settings")) {
+                ShowParticleEditor();
+            }
             auto name = object.Name; if (ImGui::InputText("Name",&name)) { Report(Document.RenameObject(id,std::move(name))); }
             bool visible = object.Visible; if (ImGui::Checkbox("Visible",&visible)) { Report(Document.SetVisible(id,visible)); }
             if (ImGui::BeginCombo("Parent",object.Parent ? Document.GetScene().GetObject(object.Parent).Name.c_str() : "<root>")) {
@@ -907,7 +912,7 @@ void EditorUI::Draw() {
     PollAssetJobs();
     PollAnimationEvents();
     if (pendingQuality_) {const auto profile=std::move(*pendingQuality_);pendingQuality_.reset();Report(ApplyQualityProfile(profile));lastAnalysis_=-1;}
-    Menu(); Dockspace(); Hierarchy(); Inspector(); BoneInspector(); AssetBrowser(); AssetInspector(); AnimationControls(); QualitySettings(); UiDesigner(); TerrainPanel(); SurfacePanel();
+    Menu(); Dockspace(); Hierarchy(); Inspector(); BoneInspector(); AssetBrowser(); AssetInspector(); AnimationControls(); ParticlePanel(); QualitySettings(); UiDesigner(); TerrainPanel(); SurfacePanel();
 #if MINVEX_EDITOR_PHYSICS
     BoxPhysicsPanel();
 #endif

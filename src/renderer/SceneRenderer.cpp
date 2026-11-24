@@ -8,6 +8,7 @@
 #include "telemetry/ResourceSignature.h"
 #include "DebugResources.h"
 #include "LightMath.h"
+#include "ParticleRenderer.h"
 #include "../../third_party/ltc/Tables.h"
 
 #include <algorithm>
@@ -204,9 +205,27 @@ void SceneRenderer::Prepare(const Scene& scene) {
 #endif
     if (area_) {stats_.LogicalTextureBytes+=65536;}
     PrepareBatches(scene);
+    if (!scene.HasParticleEffects()) { particles_.reset(); }
+    else if (debug_.View == DebugView::Lit || debug_.View == DebugView::Unlit) {
+        if (!particles_ && scene.ParticleCount()) { particles_ = std::make_unique<ParticleRenderer>(); }
+        if (particles_) {
+            particles_->Prepare(scene, settings_, viewportKnown_ ? std::optional{aspect_} : std::nullopt);
+        }
+    }
+    if (particles_) {
+        stats_.LogicalBufferBytes += particles_->BufferBytes();
+        stats_.LogicalTextureBytes += particles_->TextureBytes();
+    }
 }
 
-void SceneRenderer::Draw(const Scene& scene,float aspect,const ShadowSampling& shadow) {stats_.LastWireLines=0;DrawImpl(scene,scene.MainCamera.ViewProjection(aspect),false,shadow);}
+void SceneRenderer::Draw(const Scene& scene,float aspect,const ShadowSampling& shadow) {
+    stats_.LastWireLines = 0;
+    DrawImpl(scene, scene.MainCamera.ViewProjection(aspect), false, shadow);
+    if (particles_ && particles_->Count() && (debug_.View == DebugView::Lit || debug_.View == DebugView::Unlit)) {
+        stats_.LastDrawCalls += particles_->Draw(scene.MainCamera.ProjectionMatrix(aspect));
+        stats_.LastTriangles += particles_->Triangles();
+    }
+}
 void SceneRenderer::DrawShadow(const Scene& scene,const Mat4& matrix,ShaderVec4 radial,bool append) {if (!append) {stats_.LastShadowDrawCalls=stats_.LastShadowTriangles=0;}for (auto& [key,batch]:batches_) {if(key.Shadow){batch->Drawn=false;}}DrawImpl(scene,matrix,true,{},radial);}
 void SceneRenderer::DrawImpl(const Scene& scene,const Mat4& viewProjection,bool shadowPass,const ShadowSampling& shadow,ShaderVec4 radial) {
     scene.ValidateLighting();
@@ -304,7 +323,32 @@ Mat4 SceneRenderer::ShadowViewProjection(const Scene& scene,Vec3* extent) const 
     Mat4 projection=Mat4::Identity();projection.Elements[0]=2/(right-left);projection.Elements[5]=2/(top-bottom);projection.Elements[10]=1/(near-far);projection.Elements[12]=-(right+left)/(right-left);projection.Elements[13]=-(top+bottom)/(top-bottom);projection.Elements[14]=near/(near-far);
     return projection*view;
 }
-void SceneRenderer::Clear() noexcept {area_.reset();items_.clear();batches_.clear();models_.clear(); stats_ = {}; }
-void SceneRenderer::Inspect(std::vector<DebugResource>& r) const {if(area_){InspectImage(r,area_->Matrix,"Rect LTC matrix");InspectImage(r,area_->Amplitude,"Rect LTC amplitude");}for (const auto& [key,model]:models_) {(void)key;for (const auto& mesh:model->Meshes) {for (const auto& p:mesh) {p->Inspect(r);}}for (const auto& image:model->Images) {InspectImage(r,image.Image,"Asset texture (base/normal)");}}for (const auto& [key,batch]:batches_) {(void)key;InspectBuffer(r,batch->Buffer,"Static instance transforms");}}
+void SceneRenderer::Clear() noexcept {
+    particles_.reset();
+    area_.reset();
+    items_.clear();
+    batches_.clear();
+    models_.clear();
+    stats_ = {};
+}
+
+void SceneRenderer::Inspect(std::vector<DebugResource>& resources) const {
+    if (particles_) { particles_->Inspect(resources); }
+    if (area_) {
+        InspectImage(resources, area_->Matrix, "Rect LTC matrix");
+        InspectImage(resources, area_->Amplitude, "Rect LTC amplitude");
+    }
+    for (const auto& [key, model] : models_) {
+        (void)key;
+        for (const auto& mesh : model->Meshes) {
+            for (const auto& primitive : mesh) { primitive->Inspect(resources); }
+        }
+        for (const auto& image : model->Images) { InspectImage(resources, image.Image, "Asset texture (base/normal)"); }
+    }
+    for (const auto& [key, batch] : batches_) {
+        (void)key;
+        InspectBuffer(resources, batch->Buffer, "Static instance transforms");
+    }
+}
 
 } // namespace lv::detail

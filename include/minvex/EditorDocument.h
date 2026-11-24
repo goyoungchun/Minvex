@@ -39,6 +39,11 @@ public:
     Result<ObjectId> CreateTerrain(const TerrainGrid& grid);
     Result<void> SetTerrain(ObjectId object, const TerrainGrid& grid);
     Result<ObjectId> CreateObject(std::string name = "Object", ObjectId parent = NoObject);
+    Result<ObjectId> CreateParticleObject(ParticleEffectHandle effect, std::uint32_t seed = 0, ObjectId parent = NoObject);
+    Result<void> SetParticleEffect(ObjectId object, ParticleEffectHandle effect, std::uint32_t seed = 0);
+    Result<void> SeekParticles(ObjectId object, double seconds); // Preview only.
+    Result<void> UpdateParticles(double deltaSeconds); // Preview only.
+    Result<ParticleEventBatch> PollParticleEvents(); // Preview only.
     Result<void> Select(ObjectId object); // NoObject clears selection, does not mark dirty.
     Result<void> RemoveObject(ObjectId object); // Entire subtree; clears removed selection.
     Result<void> RenameObject(ObjectId object, std::string name);

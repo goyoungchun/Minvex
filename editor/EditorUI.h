@@ -20,6 +20,8 @@ public:
     EditorDocument Document;
     SceneViewport Viewport;
     void Draw(); // Inside an ImGui frame, outside graphics passes.
+    void TickParticlePreview(double delta);
+    void ShowParticleEditor() noexcept { particlePanel_ = particleFocusRequested_ = true; }
     void Shutdown() noexcept;
     void InitializeSession(std::filesystem::path preferences,std::filesystem::path sample,std::filesystem::path documentation,bool persist=true);
     void SetFilePicker(FilePicker picker) {picker_=std::move(picker);}
@@ -63,6 +65,14 @@ public:
     // Queue from UI actions after Image commands exist; commit at the next Draw entry.
     void RequestQualityProfile(QualityProfile profile) {pendingQuality_=std::move(profile);}
 private:
+    bool particlePanel_ = false, particlePlaying_ = true, particleEdit_ = false, particleFocusRequested_ = false;
+    float particleSpeed_ = 1;
+    ObjectId particleObject_ = NoObject;
+    std::size_t selectedEmitter_ = 0;
+    std::vector<SceneParticleEvent> particleEvents_;
+    std::size_t particleDroppedEvents_ = 0;
+    void ParticlePanel();
+    void FinishParticleEdit(bool cancel = false);
     void UiDesigner();
     bool UiHasFocus() const;
     void FinishUiEdit();

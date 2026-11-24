@@ -8,7 +8,7 @@ on:
         description: Existing release tag to build and publish
         type: string
         required: true
-        default: v1.1.1
+        default: v1.2.0
       verify_existing:
         description: Verify archives from this revision for an existing release
         type: boolean
@@ -96,24 +96,24 @@ jobs:
           cat > release-notes.txt <<'NOTES'
           Minvex is a lightweight C++20 graphics SDK for Windows x64 / D3D11 and macOS 14+ / Apple Silicon arm64 / Metal.
 
-          Includes model import, scenes, skeletal and morph animation, PBR materials, lighting and shadows, screen UI, Standalone Viewer, Embedded rendering and Editor document APIs.
+          Includes model import, scenes, skeletal and morph animation, particles, PBR materials, lighting and shadows, screen UI, Standalone Viewer, Embedded rendering and Editor document APIs.
 
           Native SDK archives contain static libraries, public headers, CMake package configuration, consumer examples, API documentation and dependency notices. Use a matching architecture, compiler, build configuration and C++ runtime. SHA-256 files accompany each archive. Python and Web bindings can be built from source and are not included in these native archives.
 
           The Windows archive filename includes the required MSVC compiler major.minor (for example, MSVC-19.51). Check your compiler with cl /Bv. If the versions differ, select the matching MSVC toolset or build the SDK from this release tag with your compiler.
 
-          New in 1.1.1
+          New in 1.2.0
 
-          - In the Editor, measure distances between two surface points, inspect box supports, and preview gravity and rigid-box collisions. Applying a physics preview records the result as one undoable edit.
-          - Assign, replace, or detach an imported model on an existing object with EditorDocument::SetModel or the Editor's Inspector. The object's hierarchy and local transform are preserved.
-          - The Editor adds child asset placement, frame selection and frame all commands, local and world transform axes, precise terrain elevation edits, alpha masking controls, import budgets, and mesh locality statistics.
-          - The UI Designer can create Number Input fields, configure initial values and bounds, and accept decimal input in the viewport preview.
+          - Author multi-emitter effects under Window → Particles in the Editor. The viewport supports live preview, pause, step, restart and timeline scrubbing.
+          - Configure bursts and loops, life curves, PNG flipbooks, event-driven sub-emitters, and a scalar module graph.
+          - Render Sprite, Mesh, Ribbon and Beam particles. Collision responses include Kill and Bounce against planes, terrain and rigid scene triangles.
+          - Compute-capable native rendering can evaluate motion for untextured additive sprites without collision or trails on the GPU. Other emitter configurations and WebGL2 use the CPU path.
 
-          Build minvex_editor from the source tag to use the Editor application. The Box Physics panel uses the optional minvex::physics component.
+          Build minvex_editor from the source tag to use the Editor application. The particle example is in share/minvex/examples/Particles.
 
           The examples are in share/minvex/examples/QuickStart.
 
-          Scenes with embedded terrain use Scene v14 and require a v14-capable reader. Other scenes continue to use v13. The SDK reads Scene v1 through v14. Rebuild C++ consumers using the headers and libraries from the same SDK package.
+          The SDK reads Scene v1 through v16. Scenes use v13 by default, v14 for embedded terrain, v15 for basic particle effects, and v16 for advanced particle modules. Keep referenced meshes and PNGs with the scene and rebuild C++ consumers using the headers and libraries from the same SDK package.
 
           Building from source requires a C++20 standard library with std::jthread and std::stop_token. Each binary SDK records its compiler and runtime in share/minvex/sdk-manifest.json.
 

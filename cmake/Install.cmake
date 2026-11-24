@@ -59,6 +59,7 @@ install(FILES examples/EmbeddedViewer/MainD3D11.cpp examples/EmbeddedViewer/Main
     DESTINATION "${_sdk_share}/examples/EmbeddedViewer")
 install(FILES examples/RenderingEnhancement/Main.cpp DESTINATION "${_sdk_share}/examples/RenderingEnhancement")
 install(FILES examples/UiOverlay/Main.cpp DESTINATION "${_sdk_share}/examples/UiOverlay")
+install(FILES examples/Particles/Main.cpp DESTINATION "${_sdk_share}/examples/Particles")
 install(FILES examples/Equipment/Main.cpp examples/Equipment/EquipmentScene.h examples/Equipment/Diagnostics.h
     DESTINATION "${_sdk_share}/examples/Equipment")
 install(DIRECTORY examples/assets/ DESTINATION "${_sdk_share}/examples/assets")

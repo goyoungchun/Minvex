@@ -50,7 +50,7 @@ public:
     EmbeddedRenderer(EmbeddedRenderer&&) = delete;
     EmbeddedRenderer& operator=(EmbeddedRenderer&&) = delete;
     Result<void> Initialize(const HostGraphicsContext& context, const EmbeddedOptions& options = {});
-    Result<void> Update(Scene& scene, double deltaSeconds); // Advance exactly when the Host calls it.
+    Result<void> Update(Scene& scene, double deltaSeconds); // Advance animations and particles when the Host calls it.
     Result<EmbeddedFrameResult> Render(const Scene& scene, const HostRenderTarget& target,
                                        const EmbeddedFrameOptions& options = {});
     Result<void> SetQuality(const QualityProfile& profile, const Scene& scene);

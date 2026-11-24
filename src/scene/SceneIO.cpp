@@ -17,7 +17,8 @@ namespace lv {
 namespace {
 using Json = nlohmann::json;
 constexpr std::size_t MaxBytes = 16 * 1024 * 1024, MaxObjects = 65536, MaxAssets = 4096, MaxDepth = 256;
-constexpr std::uint64_t SceneVersion = 13, TerrainSceneVersion = 14;
+constexpr std::uint64_t SceneVersion = 13, TerrainSceneVersion = 14, ParticleSceneVersion = 15;
+constexpr std::uint64_t AdvancedParticleSceneVersion = 16;
 void Require(bool valid, const char* message) { if (!valid) { throw std::invalid_argument(message); } }
 std::string Utf8(const std::filesystem::path& path) {
     const auto text = path.generic_u8string(); return {text.begin(),text.end()};
@@ -296,6 +297,219 @@ Error Failure(const std::filesystem::path& path) {
 }
 } // namespace
 
+namespace {
+template<class T, class Write>
+Json ParticleRangeJson(const ParticleRange<T>& range, Write write) {
+    return Json::array({write(range.Min), write(range.Max)});
+}
+
+template<class T, class Read>
+ParticleRange<T> ReadParticleRange(const Json& json, Read read) {
+    Require(json.is_array() && json.size() == 2, "Invalid particle range.");
+    return {read(json[0]), read(json[1])};
+}
+
+template<class T, class Write>
+Json ParticleCurve(const std::vector<ParticleKey<T>>& keys, Write write) {
+    auto result = Json::array();
+    for (const auto& key : keys) { result.push_back(Json::array({key.Time, write(key.Value)})); }
+    return result;
+}
+
+template<class T, class Read>
+std::vector<ParticleKey<T>> ReadParticleCurve(const Json& json, Read read) {
+    Require(json.is_array() && json.size() <= MaxParticleCurveKeys, "Invalid particle curve length.");
+    std::vector<ParticleKey<T>> result;
+    result.reserve(json.size());
+    for (const auto& key : json) {
+        Require(key.is_array() && key.size() == 2, "Invalid particle curve key.");
+        result.push_back({Float(key[0]), read(key[1])});
+    }
+    return result;
+}
+
+bool HasAdvancedParticles(const ParticleEmitter& emitter) {
+    const auto beam = emitter.Geometry.BeamTarget;
+    return emitter.Collision.Source != ParticleColliderSource::Plane || emitter.Simulation != ParticleSimulation::Cpu ||
+        emitter.Geometry.Type != ParticleRendererType::Sprite || emitter.Geometry.Mesh || beam.X != 0 || beam.Y != 1 || beam.Z != 0 ||
+        emitter.EmitEvents || !emitter.EventRoutes.empty() || !emitter.Graph.Nodes.empty();
+}
+
+Json ParticleDefinition(const ParticleEffect& effect, const std::filesystem::path& base,
+                        const std::filesystem::path& destination,
+                        const std::unordered_map<const ModelAsset*,std::size_t>& assets) {
+    auto emitters = Json::array();
+    const auto vector = [](Vec3 value) { return Vector(value); };
+    const auto scalar = [](float value) { return Json(value); };
+    for (const auto& emitter : effect.Emitters()) {
+        const auto& initial = emitter.Initial;
+        const auto& spawn = emitter.Spawn;
+        auto bursts = Json::array();
+        for (const auto& burst : spawn.Bursts) { bursts.push_back(Json::array({burst.TimeSeconds, burst.Count})); }
+        emitters.push_back({{"name", String(Json(emitter.Name))}, {"enabled", emitter.Enabled}, {"capacity", emitter.Capacity},
+            {"space", static_cast<unsigned>(emitter.Space)}, {"blend", static_cast<unsigned>(emitter.Blend)},
+            {"shape", static_cast<unsigned>(emitter.Shape)}, {"radius", emitter.Radius}, {"coneAngle", emitter.ConeAngle},
+            {"radialSpeed", emitter.RadialSpeed}, {"drag", emitter.Drag}, {"aspectRatio", emitter.AspectRatio},
+            {"maxDrawDistance", emitter.MaxDrawDistance},
+            {"collision", {{"mode", static_cast<unsigned>(emitter.Collision.Mode)}, {"height", emitter.Collision.Height},
+                           {"restitution", emitter.Collision.Restitution}}},
+            {"trail", {{"seconds", emitter.Trail.Seconds}, {"segments", emitter.Trail.Segments}, {"width", emitter.Trail.Width}}},
+            {"spawn", {{"rate", spawn.Rate}, {"duration", spawn.Duration}, {"delay", spawn.Delay},
+                       {"cycles", spawn.Cycles}, {"bursts", std::move(bursts)}}},
+            {"initial", {{"position", ParticleRangeJson(initial.Position, vector)}, {"velocity", ParticleRangeJson(initial.Velocity, vector)},
+                         {"lifetime", ParticleRangeJson(initial.Lifetime, scalar)}, {"size", ParticleRangeJson(initial.Size, scalar)},
+                         {"rotation", ParticleRangeJson(initial.Rotation, scalar)}, {"angularVelocity", ParticleRangeJson(initial.AngularVelocity, scalar)}}},
+            {"acceleration", Vector(emitter.Acceleration)},
+            {"color", ParticleCurve(emitter.ColorOverLife, [](const ParticleColor& color) { return Json(color); })},
+            {"size", ParticleCurve(emitter.SizeOverLife, scalar)}});
+        const auto& flipbook = emitter.Flipbook;
+        if (flipbook.Texture) {
+            const auto& source = flipbook.Texture->Path();
+            std::error_code error;
+            Require(destination != source && !std::filesystem::equivalent(destination, source, error),
+                    "A Scene cannot overwrite a source particle texture.");
+            auto relative = std::filesystem::relative(source, base, error);
+            if (error || relative.empty()) { relative = source; }
+            emitters.back()["flipbook"] = {{"path", String(Utf8(relative))}, {"columns", flipbook.Columns},
+                                           {"rows", flipbook.Rows}, {"cycles", flipbook.Cycles}};
+        }
+        if (HasAdvancedParticles(emitter)) {
+            auto routes = Json::array(), nodes = Json::array();
+            for (const auto& route : emitter.EventRoutes) {
+                routes.push_back(Json::array({static_cast<unsigned>(route.Event), route.Target, route.Count}));
+            }
+            for (const auto& node : emitter.Graph.Nodes) {
+                nodes.push_back(Json::array({static_cast<unsigned>(node.Op), node.A, node.B, node.Value}));
+            }
+            const auto& graph = emitter.Graph;
+            emitters.back()["advanced"] = {
+                {"collider", static_cast<unsigned>(emitter.Collision.Source)},
+                {"simulation", static_cast<unsigned>(emitter.Simulation)},
+                {"renderer", static_cast<unsigned>(emitter.Geometry.Type)},
+                {"mesh", emitter.Geometry.Mesh ? assets.at(emitter.Geometry.Mesh.get()) : 0},
+                {"beamTarget", Vector(emitter.Geometry.BeamTarget)}, {"emitEvents", emitter.EmitEvents},
+                {"routes", std::move(routes)}, {"nodes", std::move(nodes)},
+                {"outputs", Json::array({graph.Size, graph.Opacity, graph.Rotation, graph.Speed})}
+            };
+        }
+    }
+    return emitters;
+}
+
+struct ParticleTextures {
+    std::unordered_map<std::filesystem::path, ParticleTextureHandle> Textures;
+    std::size_t Bytes = 0;
+
+    ParticleTextureHandle Read(const std::filesystem::path& path) {
+        auto canonical = std::filesystem::canonical(path);
+        const auto found = Textures.find(canonical);
+        if (found != Textures.end()) { return found->second; }
+        Require(Textures.size() < 32, "Too many particle textures.");
+        auto texture = LoadParticleTexture(canonical);
+        Bytes += texture->Pixels().size();
+        Require(Bytes <= 64 * 1024 * 1024, "Scene particle texture budget exceeded.");
+        return Textures.emplace(std::move(canonical), std::move(texture)).first->second;
+    }
+};
+
+ParticleEffectHandle ReadParticleDefinition(const Json& json, const std::filesystem::path& base,
+                                            ParticleTextures& textures, std::uint64_t version,
+                                            const std::unordered_map<std::uint64_t, ModelHandle>& assets) {
+    Require(json.is_array() && !json.empty() && json.size() <= MaxParticleEmittersPerEffect, "Invalid particle emitter list.");
+    std::vector<ParticleEmitter> emitters;
+    emitters.reserve(json.size());
+    const auto vector = [](const Json& value) { return Vector(value); };
+    for (const auto& value : json) {
+        ParticleEmitter emitter;
+        emitter.Name = String(value.at("name"));
+        emitter.Enabled = value.at("enabled").get<bool>();
+        emitter.Capacity = static_cast<std::size_t>(UInt(value.at("capacity"), MaxParticlesPerEmitter));
+        emitter.Space = static_cast<ParticleSpace>(UInt(value.at("space"), 1));
+        emitter.Blend = static_cast<ParticleBlend>(UInt(value.at("blend"), 1));
+        emitter.Shape = static_cast<ParticleShape>(UInt(value.at("shape"), 3));
+        emitter.Radius = Float(value.at("radius"));
+        emitter.ConeAngle = Float(value.at("coneAngle"));
+        emitter.RadialSpeed = Float(value.at("radialSpeed"));
+        emitter.Drag = Float(value.at("drag"));
+        emitter.AspectRatio = Float(value.at("aspectRatio"));
+        if (const auto distance = value.find("maxDrawDistance"); distance != value.end()) { emitter.MaxDrawDistance = Float(*distance); }
+        if (const auto collision = value.find("collision"); collision != value.end()) {
+            emitter.Collision = {static_cast<ParticleCollision>(UInt(collision->at("mode"), 2)),
+                Float(collision->at("height")), Float(collision->at("restitution"))};
+        }
+        if (const auto trail = value.find("trail"); trail != value.end()) {
+            emitter.Trail = {Float(trail->at("seconds")), static_cast<std::uint16_t>(UInt(trail->at("segments"), 8)),
+                Float(trail->at("width"))};
+        }
+        emitter.Acceleration = Vector(value.at("acceleration"));
+        const auto& spawn = value.at("spawn");
+        emitter.Spawn.Rate = Float(spawn.at("rate"));
+        emitter.Spawn.Duration = Number(spawn.at("duration"));
+        emitter.Spawn.Delay = Number(spawn.at("delay"));
+        emitter.Spawn.Cycles = static_cast<std::uint32_t>(UInt(spawn.at("cycles"), UINT32_MAX));
+        const auto& bursts = spawn.at("bursts");
+        Require(bursts.is_array() && bursts.size() <= MaxParticleBursts, "Invalid particle burst list.");
+        for (const auto& entry : bursts) {
+            Require(entry.is_array() && entry.size() == 2, "Invalid particle burst.");
+            emitter.Spawn.Bursts.push_back({Number(entry[0]), static_cast<std::uint32_t>(UInt(entry[1], UINT32_MAX))});
+        }
+        const auto& initial = value.at("initial");
+        emitter.Initial.Position = ReadParticleRange<Vec3>(initial.at("position"), vector);
+        emitter.Initial.Velocity = ReadParticleRange<Vec3>(initial.at("velocity"), vector);
+        emitter.Initial.Lifetime = ReadParticleRange<float>(initial.at("lifetime"), Float);
+        emitter.Initial.Size = ReadParticleRange<float>(initial.at("size"), Float);
+        emitter.Initial.Rotation = ReadParticleRange<float>(initial.at("rotation"), Float);
+        emitter.Initial.AngularVelocity = ReadParticleRange<float>(initial.at("angularVelocity"), Float);
+        emitter.SizeOverLife = ReadParticleCurve<float>(value.at("size"), Float);
+        emitter.ColorOverLife = ReadParticleCurve<ParticleColor>(value.at("color"), [](const Json& color) {
+            Require(color.is_array() && color.size() == 4, "Invalid particle RGBA color.");
+            return ParticleColor{Float(color[0]), Float(color[1]), Float(color[2]), Float(color[3])};
+        });
+        if (const auto flipbook = value.find("flipbook"); flipbook != value.end()) {
+            const auto path = detail::PathFromUtf8(String(flipbook->at("path")));
+            Require(!path.empty(), "Particle flipbook path is empty.");
+            emitter.Flipbook.Texture = textures.Read(base / path);
+            emitter.Flipbook.Columns = static_cast<std::uint16_t>(UInt(flipbook->at("columns"), 64));
+            emitter.Flipbook.Rows = static_cast<std::uint16_t>(UInt(flipbook->at("rows"), 64));
+            emitter.Flipbook.Cycles = static_cast<std::uint16_t>(UInt(flipbook->at("cycles"), 64));
+        }
+        if (const auto advanced = value.find("advanced"); advanced != value.end()) {
+            Require(version >= AdvancedParticleSceneVersion, "Advanced particle modules require Scene v16.");
+            emitter.Collision.Source = static_cast<ParticleColliderSource>(UInt(advanced->at("collider"), 3));
+            emitter.Simulation = static_cast<ParticleSimulation>(UInt(advanced->at("simulation"), 1));
+            emitter.Geometry.Type = static_cast<ParticleRendererType>(UInt(advanced->at("renderer"), 3));
+            emitter.Geometry.BeamTarget = Vector(advanced->at("beamTarget"));
+            const auto mesh = UInt(advanced->at("mesh"));
+            Require(!mesh || assets.contains(mesh), "Unknown particle mesh asset ID.");
+            if (mesh) { emitter.Geometry.Mesh = assets.at(mesh); }
+            emitter.EmitEvents = advanced->at("emitEvents").get<bool>();
+            const auto& routes = advanced->at("routes");
+            Require(routes.is_array() && routes.size() <= MaxParticleEventRoutes, "Invalid particle event route list.");
+            for (const auto& route : routes) {
+                Require(route.is_array() && route.size() == 3, "Invalid particle event route.");
+                emitter.EventRoutes.push_back({static_cast<ParticleEventKind>(UInt(route[0], 2)),
+                    static_cast<std::uint8_t>(UInt(route[1], MaxParticleEmittersPerEffect - 1)),
+                    static_cast<std::uint16_t>(UInt(route[2], MaxParticlesPerEmitter))});
+            }
+            const auto& nodes = advanced->at("nodes");
+            Require(nodes.is_array() && nodes.size() <= MaxParticleGraphNodes, "Invalid particle graph node list.");
+            const auto nodeIndex = [](const Json& index) { return static_cast<std::uint8_t>(UInt(index, NoParticleNode)); };
+            for (const auto& node : nodes) {
+                Require(node.is_array() && node.size() == 4, "Invalid particle graph node.");
+                emitter.Graph.Nodes.push_back({static_cast<ParticleNodeOp>(UInt(node[0], 9)),
+                    nodeIndex(node[1]), nodeIndex(node[2]), Float(node[3])});
+            }
+            const auto& outputs = advanced->at("outputs");
+            Require(outputs.is_array() && outputs.size() == 4, "Invalid particle graph outputs.");
+            emitter.Graph.Size = nodeIndex(outputs[0]); emitter.Graph.Opacity = nodeIndex(outputs[1]);
+            emitter.Graph.Rotation = nodeIndex(outputs[2]); emitter.Graph.Speed = nodeIndex(outputs[3]);
+        }
+        emitters.push_back(std::move(emitter));
+    }
+    return MakeParticleEffect(std::move(emitters));
+}
+} // namespace
+
 Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, std::span<const ModelHandle> library) {
     try {
         Require(!path.empty(),"Scene path is empty."); ValidateScene(scene);
@@ -303,7 +517,13 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
         // /var -> /private/var) before computing portable relative references.
         const auto base = std::filesystem::weakly_canonical(std::filesystem::absolute(path).parent_path());
         Json root{{"format","MinvexScene"},{"version",SceneVersion},{"assets",Json::array()},{"objects",Json::array()},{"blendTrees",Json::array()},{"sharedSkeletons",Json::array()}};
+        const bool hasParticles = scene.HasParticleEffects();
+        if (hasParticles) {
+            root["version"] = ParticleSceneVersion;
+            root["particleEffects"] = Json::array();
+        }
         TreeIds trees;
+        std::unordered_map<const ParticleEffect*,std::size_t> particleEffects;
         std::unordered_map<const SharedSkeletonAsset*, std::size_t> skeletons;
         std::unordered_map<const ModelAsset*,std::size_t> assetIds;
         const auto addAsset = [&](const ModelHandle& model) {
@@ -312,7 +532,7 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
             Require(assetIds.size() < MaxAssets,"Scene asset limit exceeded.");
             const auto id = assetIds.size()+1;
             if (model->Terrain) {
-                root["version"] = TerrainSceneVersion;
+                if (!hasParticles) { root["version"] = TerrainSceneVersion; }
                 root["assets"].push_back({{"id",id},{"terrain",Terrain(*model->Terrain)}});
                 assetIds.emplace(model.get(),id);
                 return;
@@ -344,6 +564,34 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
                 {"position",Vector(t.Position)},{"rotation",rotation},{"scale",Vector(t.Scale)},{"animation",Animation(object,trees)},{"materials",Materials(object)},
                 {"sharedSkeleton", object.SharedSkeleton ? skeletons.at(object.SharedSkeleton.get()) : 0},
                 {"leaderPose", object.LeaderPose ? ids.at(object.LeaderPose) : 0}, {"sockets", Sockets(object.Sockets)}, {"attachmentSocket", String(object.AttachmentSocket)}});
+            if (hasParticles) {
+                const auto binding = scene.GetParticleEffect(id);
+                if (binding) {
+                    const auto [entry, added] = particleEffects.try_emplace(binding.Effect.get(), particleEffects.size() + 1);
+                    if (added) {
+                        for (const auto& emitter : binding.Effect->Emitters()) {
+                            if (HasAdvancedParticles(emitter)) { root["version"] = AdvancedParticleSceneVersion; }
+                            if (emitter.Geometry.Mesh) {
+                                Require(!emitter.Geometry.Mesh->SourcePath.empty() || bool(emitter.Geometry.Mesh->Terrain),
+                                        "A custom particle mesh requires a Scene asset source.");
+                                const auto protect = [&](const std::filesystem::path& source) {
+                                    if (source.empty()) { return; }
+                                    const auto destination = base / path.filename();
+                                    std::error_code error;
+                                    Require(destination != source && !std::filesystem::equivalent(destination, source, error),
+                                            "A Scene cannot overwrite a source particle mesh or dependency.");
+                                };
+                                protect(emitter.Geometry.Mesh->SourcePath);
+                                for (const auto& dependency : emitter.Geometry.Mesh->Dependencies) { protect(dependency); }
+                                addAsset(emitter.Geometry.Mesh);
+                            }
+                        }
+                        root["particleEffects"].push_back({{"id", entry->second},
+                            {"emitters", ParticleDefinition(*binding.Effect, base, base / path.filename(), assetIds)}});
+                    }
+                    root["objects"].back()["particles"] = {{"effect", entry->second}, {"seed", binding.Seed}};
+                }
+            }
         }
         const auto& c = scene.MainCamera; const auto& l = scene.Sun;
         root["camera"] = {{"position",Vector(c.Position)},{"target",Vector(c.Target)},{"up",Vector(c.Up)},
@@ -363,7 +611,7 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
 Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry& registry) {
     try {
         const auto root = ReadJson(path); const auto version = UInt(root.at("version"));
-        Require(detail::MatchesDocumentFormat(root.at("format"), "MinvexScene") && (version >= 1 && version <= TerrainSceneVersion),"Unsupported scene format/version.");
+        Require(detail::MatchesDocumentFormat(root.at("format"), "MinvexScene") && (version >= 1 && version <= AdvancedParticleSceneVersion),"Unsupported scene format/version.");
         const auto& assets = root.at("assets"); const auto& objects = root.at("objects");
         Require(assets.is_array() && assets.size() <= MaxAssets,"Invalid scene asset list.");
         Require(objects.is_array() && objects.size() <= MaxObjects,"Invalid scene object list.");
@@ -384,6 +632,7 @@ Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry&
             if (version>=4) {for (const auto* field:{"importAnimations","importMaterials","animationBakeRate","maxAnimationSamples","textureDirectory"}) {Require(assets[i].at("import").contains(field),"Scene v4 is missing Import settings.");}}
         }
         for (const auto& object : objects) {
+            Require(version >= ParticleSceneVersion || !object.contains("particles"), "Particle bindings require Scene v15.");
             const auto id = UInt(object.at("id"));
             Require(id && !ids.contains(id),"Duplicate/zero object ID.");
             const auto runtimeId = scene.CreateObject(String(object.at("name")));
@@ -471,6 +720,25 @@ Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry&
                 const auto id = ids.at(UInt(object.at("id"))); const auto& instance = scene.GetObject(id);
                 Require(instance.Parent != NoObject, "Socket attachment requires a parent.");
                 scene.AttachToSocket(id, instance.Parent, name, instance.LocalTransform);
+            }
+        }
+        if (version >= ParticleSceneVersion) {
+            const auto& definitions = root.at("particleEffects");
+            Require(definitions.is_array() && definitions.size() <= MaxParticleEmittersPerScene, "Invalid particle effect library.");
+            std::unordered_map<std::uint64_t, ParticleEffectHandle> effects;
+            ParticleTextures textures;
+            for (const auto& definition : definitions) {
+                const auto id = UInt(definition.at("id"));
+                Require(id && !effects.contains(id), "Duplicate or zero particle effect ID.");
+                effects.emplace(id, ReadParticleDefinition(definition.at("emitters"), base, textures, version, models));
+            }
+            for (const auto& object : objects) {
+                const auto binding = object.find("particles");
+                if (binding == object.end()) { continue; }
+                const auto effect = UInt(binding->at("effect"));
+                Require(effect && effects.contains(effect), "Unknown particle effect ID.");
+                scene.SetParticleEffect(ids.at(UInt(object.at("id"))), effects.at(effect),
+                    static_cast<std::uint32_t>(UInt(binding->at("seed"), UINT32_MAX)));
             }
         }
         ValidateScene(scene);

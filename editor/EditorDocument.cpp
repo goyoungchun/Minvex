@@ -18,6 +18,8 @@ auto Edit(Function function) -> Result<decltype(function())> {
         return Result<T>::Failure({ErrorCode::CallbackFailure,e.what(),"The callback snapshot was attempted once.",{}});
     } catch (const std::bad_alloc& e) {
         return Result<T>::Failure({ErrorCode::InsufficientResource,e.what(),"Reduce the document size and import budgets.",{}});
+    } catch (const std::length_error& e) {
+        return Result<T>::Failure({ErrorCode::InsufficientResource,e.what(),"Reduce the affected Scene resource budget.",{}});
     } catch (const ImportError& e) {
         const auto code = e.Code == ImportErrorCode::UnsupportedFeature ? ErrorCode::UnsupportedFeature :
             e.Code == ImportErrorCode::ResourceLimit ? ErrorCode::InsufficientResource :
@@ -32,9 +34,12 @@ auto Edit(Function function) -> Result<decltype(function())> {
 }
 std::unique_ptr<EditorDocument::Snapshot> EditorDocument::Capture() const {
     auto s=std::make_unique<Snapshot>();s->Registry=registry_;s->Library=library_;s->Selection=selection_;s->Revision=revision_;
-    s->World.objects_=world_.objects_;s->World.order_=world_.order_;s->World.MainCamera=world_.MainCamera;s->World.Sun=world_.Sun;s->World.Ambient=world_.Ambient;s->World.LocalShadowResolution=world_.LocalShadowResolution;s->World.PointLights=world_.PointLights;s->World.SpotLights=world_.SpotLights;s->World.RectLights=world_.RectLights;return s;
+    s->World.objects_=world_.objects_;s->World.order_=world_.order_;s->World.MainCamera=world_.MainCamera;s->World.Sun=world_.Sun;s->World.Ambient=world_.Ambient;s->World.LocalShadowResolution=world_.LocalShadowResolution;s->World.PointLights=world_.PointLights;s->World.SpotLights=world_.SpotLights;s->World.RectLights=world_.RectLights;
+    world_.CopyParticleEffectsTo(s->World);
+    return s;
 }
 void EditorDocument::Restore(std::unique_ptr<Snapshot> s) noexcept {
+    s->World.ReuseParticlePreviewsFrom(world_);
     registry_=std::move(s->Registry);world_=std::move(s->World);library_=std::move(s->Library);selection_=s->Selection;revision_=s->Revision;dirty_=revision_ != savedRevision_;
 }
 void EditorDocument::KeepUndo(std::unique_ptr<Snapshot> s) noexcept {
@@ -182,6 +187,36 @@ Result<void> EditorDocument::ReimportModel(AssetId asset) {
 }
 Result<ObjectId> EditorDocument::CreateObject(std::string name, ObjectId parent) {
     return Change([&] { const auto id = world_.CreateObject(std::move(name),parent); selection_ = id; MarkChanged(); return id; });
+}
+Result<ObjectId> EditorDocument::CreateParticleObject(ParticleEffectHandle effect, std::uint32_t seed, ObjectId parent) {
+    return Change([&] {
+        if (!effect) { throw std::invalid_argument("Choose an effect for the new particle object."); }
+        const auto id = world_.CreateObject("Particle Effect", parent);
+        world_.SetParticleEffect(id, std::move(effect), seed);
+        world_.SeekParticles(id, 0);
+        selection_ = id;
+        MarkChanged();
+        return id;
+    });
+}
+Result<void> EditorDocument::SetParticleEffect(ObjectId object, ParticleEffectHandle effect, std::uint32_t seed) {
+    return Change([&] {
+        const auto previous = world_.GetParticleEffect(object);
+        if (previous.Effect == effect && (!effect || previous.Seed == seed)) { return; }
+        const auto time = previous ? world_.ParticleTime(object) : 0;
+        world_.SetParticleEffect(object, effect, seed);
+        if (effect) { world_.SeekParticles(object, time); }
+        MarkChanged();
+    });
+}
+Result<void> EditorDocument::SeekParticles(ObjectId object, double seconds) {
+    return Edit([&] { world_.SeekParticles(object, seconds); });
+}
+Result<void> EditorDocument::UpdateParticles(double deltaSeconds) {
+    return Edit([&] { world_.UpdateParticles(deltaSeconds); });
+}
+Result<ParticleEventBatch> EditorDocument::PollParticleEvents() {
+    return Edit([&] { return world_.PollParticleEvents(); });
 }
 Result<void> EditorDocument::CommitReimport(AssetId asset,ModelHandle candidate) {
     const auto previous=registry_.Find(asset);if (!previous) {return Result<void>::Failure({ErrorCode::InvalidHandle,"Unknown imported asset.","Select an imported asset.",{}});}

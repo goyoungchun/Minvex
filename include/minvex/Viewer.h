@@ -82,6 +82,7 @@ struct ViewerRunOptions {
     // Return true to consume an event before the default controls.
     std::function<bool(Viewer&, const ViewerInputEvent&)> OnInput;
     bool AdvanceAnimations = true; // Advance before OnFrame; disable for manual Scene updates.
+    bool AdvanceParticles = true; // Advance after OnFrame; disable for manual Scene updates.
 };
 
 // Synchronous standalone facade. Construct/use on the owning thread, run on the

@@ -32,6 +32,7 @@ struct Application {
     bool Smoke = false, AnimationSmoke = false, QualitySmoke = false, TelemetrySmoke = false, Gui = false, Failed = false;
     bool UiSmoke=false;
     bool UiAdvanced=false;
+    bool ParticleSmoke=false;
     lv::UiId UiButton=lv::NoUi;
     lv::UiId UiParent=lv::NoUi;
     lv::UiId UiNumber=lv::NoUi;
@@ -158,7 +159,7 @@ void Init(void* user) noexcept {
         simgui_setup(gui); app.Gui = true;
         auto& io = ImGui::GetIO(); io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        io.IniFilename = app.Smoke||app.UiSmoke||app.UiAdvanced ? nullptr : ".minvex-editor.ini";
+        io.IniFilename = app.Smoke||app.UiSmoke||app.UiAdvanced||app.ParticleSmoke ? nullptr : ".minvex-editor.ini";
 #if defined(_WIN32)
         const char* font = "C:/Windows/Fonts/malgun.ttf";
 #else
@@ -167,7 +168,16 @@ void Init(void* user) noexcept {
         if (std::filesystem::exists(font)) { io.FontDefault = io.Fonts->AddFontFromFileTTF(font,17); }
         ImGui::StyleColorsDark(); ImGui::GetStyle().WindowRounding = 3; ImGui::GetStyle().FrameRounding = 3;
         app.UI = std::make_unique<lv::editor::EditorUI>();
-        app.UI->InitializeSession(app.Preferences,MINVEX_EDITOR_SAMPLE,MINVEX_EDITOR_DOCUMENTATION,!app.Smoke&&!app.UiSmoke&&!app.UiAdvanced);
+        app.UI->InitializeSession(app.Preferences,MINVEX_EDITOR_SAMPLE,MINVEX_EDITOR_DOCUMENTATION,!app.Smoke&&!app.UiSmoke&&!app.UiAdvanced&&!app.ParticleSmoke);
+        if (app.ParticleSmoke) {
+            app.UI->RequestNew();
+            lv::ParticleEmitter emitter;
+            emitter.Name = "Preview";
+            emitter.Spawn.Bursts = {{0, 5}};
+            emitter.Initial.Lifetime = {5, 5};
+            Require(app.UI->Document.CreateParticleObject(lv::MakeParticleEffect({emitter}), 43));
+            app.UI->ShowParticleEditor();
+        }
         if (app.UiAdvanced) {app.UI->RequestNew();}
         if (app.Smoke) {CheckEditorFileWorkflows();}
         if (app.DirectoryExplicit) {app.UI->SetDirectory(app.Directory);}
@@ -192,7 +202,7 @@ void Init(void* user) noexcept {
         }
         if (app.InitialQuality) {Require(app.UI->ApplyQualityProfile(*app.InitialQuality));}
         if (app.QualitySmoke) {auto low=lv::MakeQualityProfile(lv::QualityPreset::Low);low.Overrides.TargetFps=0;Require(app.UI->ApplyQualityProfile(low));}
-        else if (app.Smoke || app.UiSmoke || app.UiAdvanced) {
+        else if (app.Smoke || app.UiSmoke || app.UiAdvanced || app.ParticleSmoke) {
             // These scripts assert precise frame numbers independent of the display refresh rate.
             auto profile=app.UI->Viewport.Quality().Requested;
             profile.Overrides.TargetFps=0;
@@ -372,6 +382,45 @@ void Frame(void* user) noexcept {
         app.LastAnimationTick=now;
         const auto advanced = app.UI->Document.UpdateAnimations(animationDelta);
         if (!advanced) {if (advanced.Error().Code==lv::ErrorCode::InsufficientResource) {app.UI->Record(lv::editor::ConsoleLevel::Error,advanced.Error().Message);}else {throw std::runtime_error(advanced.Error().Message);}}
+        app.UI->TickParticlePreview(animationDelta);
+        if (app.ParticleSmoke && app.Frames == 2) {
+            auto& document = app.UI->Document;
+            const auto id = document.Selection();
+            Require(document.GetScene().ParticleTime(id) > 0 && document.GetScene().ParticleCount(id) >= 5,
+                "Editor preview did not advance in the normal frame loop.");
+            auto emitters = document.GetScene().GetParticleEffect(id).Effect->Emitters();
+            auto sparks = emitters.front();
+            sparks.Name = "Sparks";
+            sparks.Blend = lv::ParticleBlend::Additive;
+            sparks.Geometry.Type = lv::ParticleRendererType::Beam;
+            sparks.Geometry.BeamTarget = {0.7f, 0.5f, 0};
+            emitters.front().EmitEvents = true;
+            emitters.front().EventRoutes = {{lv::ParticleEventKind::Death, 1, 1}};
+            emitters.front().Graph.Nodes = {{lv::ParticleNodeOp::Constant, 255, 255, 0.75f}};
+            emitters.front().Graph.Opacity = 0;
+            emitters.push_back(sparks);
+            Require(document.SetParticleEffect(id, lv::MakeParticleEffect(std::move(emitters)), 91));
+            const auto output = std::filesystem::path(MINVEX_EDITOR_TEST_OUTPUT) / "particles.mvxscene.json";
+            std::filesystem::create_directories(output.parent_path());
+            Require(document.Save(output));
+            Require(document.Open(output));
+            Require(document.Select(document.GetScene().ObjectIds().front()));
+            const auto binding = document.GetScene().GetParticleEffect(document.Selection());
+            Require(binding && binding.Seed == 91 && binding.Effect->Emitters().size() == 2 &&
+                binding.Effect->Emitters()[1].Geometry.Type == lv::ParticleRendererType::Beam &&
+                binding.Effect->Emitters()[0].EventRoutes.size() == 1 &&
+                binding.Effect->Emitters()[0].Graph.Opacity == 0, "Reopened Editor scene lost authored particle modules.");
+        }
+        if (app.ParticleSmoke && app.Frames == 3) {
+            if (auto* panel = ImGui::FindWindowByName("Particles")) {
+                constexpr int firstEmitter = 0;
+                const auto seed = ImHashData(&firstEmitter, sizeof(firstEmitter), panel->ID);
+                for (const auto* section : {"Events and sub-emitters", "Module graph", "Renderer and simulation"}) {
+                    panel->StateStorage.SetInt(ImHashStr(section, 0, seed), 1);
+                }
+                panel->StateStorage.SetInt(ImHashStr("Event log", 0, panel->ID), 1);
+            }
+        }
         if (app.QualitySmoke && app.Frames == 2) {
             auto high=lv::MakeQualityProfile(lv::QualityPreset::High);high.AllowFallback=true;high.Overrides.TargetFps=0;Require(app.UI->ApplyQualityProfile(high));
             const auto file=std::filesystem::path(MINVEX_EDITOR_TEST_OUTPUT)/"profile.mvxquality.json";Require(lv::SaveQuality(high,file));app.UI->LoadQualityProfile(file);
@@ -414,6 +463,11 @@ void Frame(void* user) noexcept {
         if (app.UiAdvanced) {UiAdvancedBefore(app);}
         const auto viewportFrames=app.UI->Viewport.RenderedFrames();
         app.UI->Draw();
+        if (app.ParticleSmoke && app.Frames == 4) {
+            const auto* panel = ImGui::FindWindowByName("Particles");
+            Require(panel && panel->Active && panel->DockId && app.UI->Viewport.Stats().LastDrawCalls == 2,
+                "Docked particle editor or its viewport batches did not render.");
+        }
         if (app.Smoke) {Require(app.UI->Viewport.RenderedFrames()-viewportFrames <= 1,"Editor viewport rendered twice in one display frame.");}
         if (app.UiAdvanced) {UiAdvancedAfter(app);}
         if (app.UiSmoke) {if (app.Frames>0) {Require(app.UI->Viewport.Texture().id!=0,"UI smoke lost its viewport texture.");}Require(app.Frames==2 ? app.UI->Viewport.UiError.has_value():!app.UI->Viewport.UiError,"UI preview font failure did not recover.");if (app.Frames==7) {std::puts("Editor UI: save/load, Unicode overlay, missing font recovery, clear and resize passed.");}}
@@ -436,7 +490,7 @@ void Event(const sapp_event* event, void* user) noexcept {
         // arriving between injected move/release/press frames otherwise change
         // the tested sequence according to window activation and OS timing.
         // Interactive runs still receive every native event through Sokol.
-        if (app.Gui && !app.Smoke && !app.UiSmoke && !app.UiAdvanced) { simgui_handle_event(event); }
+        if (app.Gui && !app.Smoke && !app.UiSmoke && !app.UiAdvanced && !app.ParticleSmoke) { simgui_handle_event(event); }
         if (event->type == SAPP_EVENTTYPE_FILES_DROPPED) {
             std::vector<std::filesystem::path> paths;
             for (int i = 0; i < sapp_get_num_dropped_files(); ++i) {
@@ -460,6 +514,7 @@ int Run(const std::vector<std::string>& args) {
             if (args[i] == "--smoke-test") { app.Smoke = true; app.Limit = 10; }
             else if (args[i] == "--ui-smoke-test") {app.UiSmoke=true;app.Limit=8;}
             else if (args[i] == "--ui-advanced-smoke-test") {app.UiAdvanced=true;app.Limit=17;}
+            else if (args[i] == "--particle-smoke-test") {app.ParticleSmoke=true;app.Limit=6;}
             else if (args[i] == "--animation-smoke-test") { app.Smoke = app.AnimationSmoke = true; app.Limit = 10; }
             else if (args[i] == "--quality-smoke-test") {app.Smoke=app.AnimationSmoke=app.QualitySmoke=true;app.Limit=10;}
             else if (args[i] == "--telemetry-smoke-test") {app.Smoke=app.AnimationSmoke=app.TelemetrySmoke=true;app.Limit=10;}
@@ -484,6 +539,7 @@ int Run(const std::vector<std::string>& args) {
         lv::detail::RunStandaloneApplication(desc);
         if (app.Failed) { std::fprintf(stderr,"Editor failed: %s\n",app.Message); return 1; }
         if (app.Smoke && app.Frames < 19) { std::fprintf(stderr,"Editor smoke ended too early.\n"); return 1; }
+        if (app.ParticleSmoke && app.Frames < 6) { std::fprintf(stderr,"Editor particle smoke ended too early.\n"); return 1; }
         return 0;
     } catch (const std::exception& e) { std::fprintf(stderr,"%s\n",e.what()); return 1; }
 }

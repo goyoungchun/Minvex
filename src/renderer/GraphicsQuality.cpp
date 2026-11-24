@@ -81,6 +81,7 @@ std::uint64_t SceneGeometrySignature(const Scene& scene) {
     const auto scalar=[&](float value){integer(std::bit_cast<std::uint32_t>(value));};
     const auto vector=[&](Vec3 v){scalar(v.X);scalar(v.Y);scalar(v.Z);};
     const auto shadow=[&](const LocalShadowSettings& v){integer(v.Enabled);integer(static_cast<unsigned>(v.Filter));scalar(v.NearPlane);scalar(v.DepthBias);scalar(v.SlopeBias);};
+    integer(scene.ParticleRenderSignature());
     const auto& c=scene.MainCamera;vector(c.Position);vector(c.Target);vector(c.Up);scalar(c.VerticalFovRadians);scalar(c.NearPlane);scalar(c.FarPlane);
     integer(static_cast<unsigned>(c.Projection));scalar(c.OrthographicHeight);
     const auto& l=scene.Sun;vector(l.Direction);vector(l.Color);scalar(l.Intensity);scalar(l.Ambient);

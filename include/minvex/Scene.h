@@ -1,6 +1,7 @@
 #pragma once
 
 #include <minvex/Asset.h>
+#include <minvex/Particles.h>
 #include <minvex/Skeleton.h>
 
 #include <limits>
@@ -8,9 +9,27 @@
 
 namespace lv {
 
+class Scene;
+namespace detail {
+struct SceneParticles;
+std::uint64_t SceneRenderSignature(const Scene&);
+}
+
 using ObjectId = std::uint64_t;
 inline constexpr ObjectId NoObject = 0;
 struct SceneAnimationEvent { ObjectId Object = NoObject; AnimationEventOccurrence Occurrence; };
+struct SceneParticleEvent {
+    ObjectId Object = NoObject;
+    std::size_t Emitter = 0;
+    ParticleEventKind Kind = ParticleEventKind::Birth;
+    std::uint32_t Sequence = 0;
+    double Time = 0; // Seconds on the effect clock.
+    Vec3 Position{}; // World space.
+};
+struct ParticleEventBatch {
+    std::vector<SceneParticleEvent> Events;
+    std::size_t Dropped = 0;
+};
 
 
 enum class CameraProjection { Perspective, Orthographic };
@@ -116,11 +135,12 @@ struct RenderItem {
 
 class Scene {
 public:
-    Scene() = default;
+    Scene();
+    ~Scene();
     Scene(const Scene&) = delete;
     Scene& operator=(const Scene&) = delete;
-    Scene(Scene&&) = default;
-    Scene& operator=(Scene&&) = default;
+    Scene(Scene&&) noexcept;
+    Scene& operator=(Scene&&) noexcept;
 
     ObjectId CreateObject(std::string name = {}, ObjectId parent = NoObject);
     ObjectId AddModel(ModelHandle model, const Transform& transform = {}, ObjectId parent = NoObject);
@@ -155,6 +175,19 @@ public:
     std::vector<SceneAnimationEvent> PollAnimationEvents(); // Scene order, then each player's traversal order.
     std::size_t DispatchAnimationEvents(std::function<void(const SceneAnimationEvent&)> callback);
     void ClearAnimationEventQueues() noexcept;
+    // An empty handle detaches the effect. Attaching starts a fresh seeded instance.
+    void SetParticleEffect(ObjectId id, ParticleEffectHandle effect, std::uint32_t seed = 0);
+    ParticleEffectBinding GetParticleEffect(ObjectId id) const;
+    void RestartParticles(ObjectId id);
+    void SeekParticles(ObjectId id, double seconds); // Replays with the object's current transform.
+    double ParticleTime(ObjectId id) const;
+    void SetParticleEmission(ObjectId id, bool enabled); // Pauses emission, lets existing particles age.
+    void UpdateParticles(double deltaSeconds);
+    ParticleEventBatch PollParticleEvents();
+    bool HasParticleEffects() const noexcept { return bool(particles_); }
+    std::size_t ParticleCount(ObjectId id = NoObject) const; // Includes hidden particles.
+    void CollectParticleSprites(std::vector<ParticleSprite>& sprites,
+                                std::vector<ParticleGpuSprite>* gpu = nullptr) const;
     Mat4 GetWorldTransform(ObjectId id) const;
     std::vector<RenderItem> CollectRenderItems() const;
     // Closest two-sided LOD0 triangle, including the current pose and morph weights.
@@ -172,8 +205,15 @@ public:
 
 private:
     friend class EditorDocument; // Private CPU history snapshots preserve object identities.
+    friend std::uint64_t detail::SceneRenderSignature(const Scene&);
     std::unordered_map<ObjectId, SceneObject> objects_;
     std::vector<ObjectId> order_;
+    std::unique_ptr<detail::SceneParticles> particles_;
+    std::uint64_t ParticleRenderSignature() const;
+    bool ParticleObjectVisible(ObjectId id) const;
+    void EraseParticleEffect(ObjectId id) noexcept;
+    void CopyParticleEffectsTo(Scene& snapshot) const;
+    void ReuseParticlePreviewsFrom(Scene& previous) noexcept;
     using PoseCache = std::unordered_map<ObjectId, std::shared_ptr<const EvaluatedPose>>;
     std::shared_ptr<const EvaluatedPose> ResolvePose(ObjectId id, PoseCache& cache) const;
     Mat4 AttachmentTransform(const SceneObject& object, PoseCache* cache = nullptr) const;

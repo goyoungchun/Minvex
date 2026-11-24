@@ -203,6 +203,9 @@ void Frame(void* user) noexcept {
             catch (...) { runtime.Capture(ErrorCode::CallbackFailure,"Handle exceptions inside OnFrame or return control without throwing."); }
         }
         if (runtime.Stop()) { sapp_quit(); return; }
+        if (runtime.Options.AdvanceParticles && runtime.State.World.HasParticleEffects()) {
+            runtime.State.World.UpdateParticles(info.DeltaTimeSeconds);
+        }
         const bool submitted=runtime.Surface.Render(runtime.State.World,now,runtime.Options.FrameLimit != 0 || bool(runtime.Options.OnFrame),runtime.State.Options.ClearColor);
         if (!submitted) {SkipSceneFrame(runtime,std::chrono::milliseconds(8));return;}
         Present(runtime);

@@ -37,6 +37,7 @@ bool compatibilityTests = false;
 bool pbrTests = false;
 bool morphTests = false;
 bool pcssTests = false;
+bool particleTests = false;
 
 void Log(const char* tag, std::uint32_t level, std::uint32_t item, const char* message,
          std::uint32_t line, const char* file, void* user) {
@@ -79,7 +80,7 @@ struct Target {
         sg_destroy_view(ColorView); sg_destroy_view(DepthView);
         sg_destroy_image(Color); sg_destroy_image(Depth);
     }
-    std::vector<Pixel> Render(lv::detail::SceneRenderer& renderer, const lv::Scene& scene) {
+    void Submit(lv::detail::SceneRenderer& renderer, const lv::Scene& scene) {
         renderer.Prepare(scene);
         sg_pass pass{};
         pass.attachments.colors[0] = ColorView; pass.attachments.depth_stencil = DepthView;
@@ -88,7 +89,12 @@ struct Target {
         pass.action.depth.load_action = SG_LOADACTION_CLEAR; pass.action.depth.clear_value = 1;
         sg_begin_pass(pass);
         renderer.Draw(scene, 1);
-        sg_end_pass(); sg_commit();
+        sg_end_pass();
+    }
+
+    std::vector<Pixel> Render(lv::detail::SceneRenderer& renderer, const lv::Scene& scene) {
+        Submit(renderer, scene);
+        sg_commit();
 
         auto* device = static_cast<ID3D11Device*>(const_cast<void*>(sg_d3d11_device()));
         auto* context = static_cast<ID3D11DeviceContext*>(const_cast<void*>(sg_d3d11_device_context()));
@@ -623,6 +629,102 @@ void Initialize() {
     desc.environment.defaults.sample_count = 1;
     sg_setup(desc);
 }
+void RunParticles() {
+    lv::ParticleEmitter foreground, background, additive;
+    foreground.Spawn = {0, 0, {{0, 1}}};
+    foreground.Space = lv::ParticleSpace::Local;
+    foreground.Initial.Size = {1, 1};
+    foreground.ColorOverLife = {{0, {1, 0, 0, 0.5f}}};
+    background = foreground;
+    background.Initial.Position = {{0, 0, -0.5f}, {0, 0, -0.5f}};
+    background.ColorOverLife = {{0, {0, 0, 1, 0.5f}}};
+    additive = foreground;
+    additive.Blend = lv::ParticleBlend::Additive;
+    additive.ColorOverLife = {{0, {0, 1, 0, 1}}};
+    lv::Scene scene;
+    scene.MainCamera.Position = {0, 0, 2};
+    const auto object = scene.CreateObject();
+    scene.SetParticleEffect(object, lv::MakeParticleEffect({foreground, background, additive}));
+    scene.UpdateParticles(0);
+    Target first, second;
+    lv::detail::SceneRenderer renderer;
+    first.Submit(renderer, scene);
+    Check(renderer.GetStats().LastDrawCalls == 2 && renderer.GetStats().LastTriangles == 6,
+          "all particles are submitted in two instanced blend batches");
+    Check(renderer.GetStats().LogicalBufferBytes == 48 + 4 * 32,
+          "three sprites use one packed stream rounded to four instances plus a shared quad");
+    lv::Transform offset;
+    offset.Position.X = 1;
+    scene.SetTransform(object, offset);
+    second.Submit(renderer, scene);
+    sg_commit();
+    const auto original = ReadImage(first.Color, Size, Size)[64 * Size + 64];
+    const auto moved = ReadImage(second.Color, Size, Size)[64 * Size + 64];
+    Check(original[0] > 110 && original[1] > 50 && original[2] > 50 && original[0] > original[2] + 50,
+          "real pixels blend the farther blue sprite before the nearer red sprite over green additive");
+    Check(moved[0] == 0 && moved[1] == 0 && moved[2] == 0,
+          "two submissions before commit keep their own instance data");
+
+    lv::detail::RenderSurface surface;
+    auto profile = lv::MakeQualityProfile(lv::QualityPreset::Low);
+    profile.Overrides.TargetFps = 0;
+    profile.Overrides.OnDemand = lv::OnDemandMode::On;
+    Require(bool(surface.ApplyQuality(profile, scene, Size, Size)), "Cannot prepare particle surface.");
+    Require(surface.Render(scene, 1, false, {0, 0, 0, 1}), "Cannot submit initial particle surface.");
+    sg_commit();
+    Check(!surface.Render(scene, 2, false, {0, 0, 0, 1}), "unchanged particles reuse the on-demand frame");
+    scene.SetTransform(object, {});
+    Check(surface.Render(scene, 3, false, {0, 0, 0, 1}), "particle-only object transform invalidates the on-demand frame");
+    sg_commit();
+    scene.SetVisible(object, false);
+    Check(surface.Render(scene, 3.25, false, {0, 0, 0, 1}), "hiding active particles invalidates the frame once");
+    sg_commit();
+    scene.UpdateParticles(0.25);
+    Check(!surface.Render(scene, 3.5, false, {0, 0, 0, 1}), "hidden particles age without invalidating the cached frame");
+    scene.SetVisible(object, true);
+    Check(surface.Render(scene, 3.75, false, {0, 0, 0, 1}), "restoring visibility redraws the aged particles");
+    sg_commit();
+    scene.UpdateParticles(1);
+    Check(surface.Render(scene, 4, false, {0, 0, 0, 1}), "last particle expiry invalidates the on-demand frame");
+    sg_commit();
+    Check(!Lit(ReadImage(surface.ColorImage(), Size, Size), 64, 64), "expired particles leave the clear color");
+
+    scene.RestartParticles(object);
+    scene.UpdateParticles(0);
+    auto cube = std::make_shared<lv::ModelAsset>();
+    cube->Meshes.push_back({"Occluder", {{lv::MakeCube(), 0, false}}});
+    cube->Materials.push_back({});
+    cube->Materials[0].Unlit = true;
+    cube->Parts.push_back({0});
+    cube->ModelBounds = {{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}};
+    lv::Transform occluder;
+    occluder.Position.Z = 1;
+    scene.AddModel(cube, occluder);
+    const auto occluded = first.Render(renderer, scene);
+    scene.SetVisible(object, false);
+    const auto opaqueOnly = first.Render(renderer, scene);
+    Check(Lit(opaqueOnly, 64, 64) && occluded[64 * Size + 64] == opaqueOnly[64 * Size + 64],
+          "billboards depth-test against opaque scene geometry");
+
+    lv::Scene computeScene;
+    computeScene.MainCamera.Position = {0,0,2};
+    computeScene.MainCamera.Projection = lv::CameraProjection::Orthographic;
+    computeScene.MainCamera.OrthographicHeight = 2;
+    const auto computeObject = computeScene.CreateObject();
+    additive.Simulation = lv::ParticleSimulation::Gpu;
+    additive.Initial.Size = {0.3f, 0.3f};
+    additive.Initial.Velocity = {{1,0,0},{1,0,0}};
+    computeScene.SetParticleEffect(computeObject, lv::MakeParticleEffect({additive}));
+    computeScene.SeekParticles(computeObject, 0);
+    first.Submit(renderer, computeScene);
+    computeScene.SeekParticles(computeObject, 0.5);
+    second.Submit(renderer, computeScene);
+    sg_commit();
+    const auto computeFirst = ReadImage(first.Color, Size, Size);
+    const auto computeSecond = ReadImage(second.Color, Size, Size);
+    Check(computeFirst[64 * Size + 64][1] > 200 && computeSecond[64 * Size + 64][1] == 0 &&
+          computeSecond[64 * Size + 96][1] > 200, "two compute submissions before a commit preserve their own positions");
+}
 void RunCompatibility() {
     lv::AssetRegistry registry;Target target;lv::detail::SceneRenderer renderer;
     for (const auto* file:{"Compatibility.obj","Compatibility.fbx","CompatibilityBinary.fbx"}) {
@@ -639,6 +741,12 @@ void RunCompatibility() {
 void Frame() {
     if (ran) { sapp_request_quit(); return; }
     ran = true;
+    if (particleTests) {
+        try { Require(sg_isvalid(), "Sokol initialization failed."); RunParticles(); }
+        catch (const std::exception& error) { Check(false, error.what()); }
+        sapp_request_quit();
+        return;
+    }
     if (socketTests || leaderTests) {
         try { Require(sg_isvalid(), "Sokol initialization failed."); if (socketTests) { RunSockets(); } else { RunLeaderPose(); } }
         catch (const std::exception& error) { Check(false, error.what()); }
@@ -652,6 +760,7 @@ void Cleanup() { if (sg_isvalid()) { sg_shutdown(); } }
 } // namespace
 
 int main(int argc, char** argv) {
+    particleTests = argc > 1 && std::strcmp(argv[1], "--particles") == 0;
     leaderTests = argc > 1 && std::strcmp(argv[1],"--equipment-leader") == 0;
     socketTests = argc > 1 && std::strcmp(argv[1],"--equipment-sockets") == 0;
     animationTests = argc > 1 && std::strcmp(argv[1],"--animation") == 0;

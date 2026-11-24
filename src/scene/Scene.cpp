@@ -235,7 +235,7 @@ void Scene::RemoveObject(ObjectId id) {
         for (auto ancestor : chain) { membership[ancestor] = inSubtree; }
         if (inSubtree) { removed.insert(candidate); }
     }
-    for (const auto removedId : removed) { objects_.erase(removedId); }
+    for (const auto removedId : removed) { EraseParticleEffect(removedId); objects_.erase(removedId); }
     for (auto& [remainingId, object] : objects_) {
         (void)remainingId;
         if (removed.contains(object.LeaderPose)) { object.LeaderPose = NoObject; object.Animation.ClearAnimationEventQueue(); }

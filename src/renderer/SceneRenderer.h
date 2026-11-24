@@ -9,6 +9,8 @@
 
 namespace lv::detail {
 
+class ParticleRenderer;
+
 struct SceneRenderStats {
     std::size_t ResidentModels = 0;
     std::size_t ResidentPrimitives = 0;
@@ -51,6 +53,7 @@ private:
     struct GpuModel;
     struct AreaLookup;
     std::unique_ptr<AreaLookup> area_;
+    std::unique_ptr<ParticleRenderer> particles_;
     std::vector<RenderItem> items_; // One pose/world snapshot shared by every pass of this frame.
     bool extendedLighting_=false;
     std::unordered_map<const ModelAsset*, std::unique_ptr<GpuModel>> models_;

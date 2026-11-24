@@ -137,7 +137,14 @@ Result<void> EmbeddedRenderer::Initialize(const HostGraphicsContext& context,con
 }
 Result<void> EmbeddedRenderer::Update(Scene& scene,double delta) {
     auto ready=impl_->Ready();if (!ready) {return ready;}
-    try {scene.UpdateAnimations(delta);return Result<void>::Success();}catch (...) {return Result<void>::Failure(Exception(ErrorCode::InvalidArgument));}
+    try {
+        if (scene.HasParticleEffects() && delta > MaxParticleStepSeconds) {
+            throw std::invalid_argument("Particle delta must be finite and in [0,86400] seconds.");
+        }
+        scene.UpdateAnimations(delta);
+        if (scene.HasParticleEffects()) { scene.UpdateParticles(delta); }
+        return Result<void>::Success();
+    } catch (...) {return Result<void>::Failure(Exception(ErrorCode::InvalidArgument));}
 }
 Result<EmbeddedFrameResult> EmbeddedRenderer::Render(const Scene& scene,const HostRenderTarget& target,const EmbeddedFrameOptions& options) {
     auto& p=*impl_;auto ready=p.Ready();if (!ready) {return Result<EmbeddedFrameResult>::Failure(ready.Error());}

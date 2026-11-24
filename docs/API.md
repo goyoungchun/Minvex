@@ -1,6 +1,6 @@
 # Minvex API
 
-**C++20 Graphics SDK · Version 1.1.1 · Namespace `lv`**
+**C++20 Graphics SDK · Version 1.2.0 · Namespace `lv`**
 
 모듈별 주요 타입과 API를 정리한 사용 안내임. 전체 선언은 연결된 공개 헤더에서 확인할 수 있음.
 
@@ -37,6 +37,7 @@ target_link_libraries(my_viewer PRIVATE minvex::viewer)
 | **core** · [Math.h](../include/minvex/Math.h), [Mesh.h](../include/minvex/Mesh.h) | `Vec3`, `Quaternion`, `Mat4`, `Transform`, `Bounds`, `MeshData`, `MakeCube()`, `DecomposeTRS()`. 생성 헤더 `Version.h`의 `Version`, `BuildInfo`, `GetBuildInfo()` |
 | **assets** · [Asset.h](../include/minvex/Asset.h), [AssetLoading.h](../include/minvex/AssetLoading.h) | `ModelHandle`, `MorphTarget`, `MaterialAsset`, `ShadingModel`, `ImportSettings`, `ImporterRegistry`, `AssetRegistry::LoadModel/PrepareModel/ReimportModel`, `InspectModel()`, `ValidateModel()`, `CopyModelToProject()`, `AssetLoader`, `AssetHotReload` |
 | **scene** · [Scene.h](../include/minvex/Scene.h) | `Scene`, `ObjectId`, `Camera`, `AmbientLight`, `DirectionalLight`, `PointLight`, `SpotLight`, `RectLight`, `LocalShadowSettings`. `AddModel()`, `CreateObject()`, `SetParent()`, `SetTransform()`, `SetModel()`, `GetMaterial/SetMaterial/ResetMaterial`, `GetAnimation()`, `UpdateAnimations()`, `SceneAnimationEvent`, `PollAnimationEvents/DispatchAnimationEvents()` |
+| **scene** · [Particles.h](../include/minvex/Particles.h) | `ParticleEffectHandle`, `ParticleEmitter`, `ParticleEventRoute`, `ParticleGeometry`, `ParticleSimulation`, `ParticleModuleGraph`, `ParticleSprite`. `MakeParticleEffect()`, `LoadParticleTexture()`, `Scene::SetParticleEffect/GetParticleEffect/SeekParticles/UpdateParticles`, `PollParticleEvents/ParticleCount/CollectParticleSprites` |
 | **animation** · [Animation.h](../include/minvex/Animation.h) | `SkeletonAsset`, `SkinAsset`, `PoseAsset`, `PoseBuffer`, `PoseChannels`, `AdditivePose/AdditiveAnimationState`, `AnimationClip`, `AnimationEvent/AnimationEventTrack/AnimationEventOccurrence`, `AnimationBlendState`, `BlendTreeDesc/BlendTreeAsset/BlendTreeState`, `MorphTrack`, `MorphPose`, `AnimationPlayer`. `EvaluateAnimation()`, `BlendPoses()`, `ComposePose()`, `CreateBlendTree()`, `EvaluateBlendWeights/EvaluateBlendTree()`, `Play/PlayBlendTree()`, `CrossFade()`, `SetBlendParameter()`, `Seek/SeekBlendTree()`, `EvaluatePose/Evaluate()`, `SetAdditiveAnimation()`, `MakeAdditivePose/ApplyAdditivePose()`, `CapturePose()` |
 | **scene_io** · [SceneIO.h](../include/minvex/SceneIO.h), [PoseIO.h](../include/minvex/PoseIO.h) | `SceneArchive`, `SaveScene(scene, path, library={})`, `LoadScene(path, registry)`, `SavePose(pose, skeleton, path)`, `LoadPose(path, skeleton)` |
 | **viewer** · [Viewer.h](../include/minvex/Viewer.h) | `ViewerOptions`, `ModelOptions`, `ViewerRunOptions`, `Viewer`. `AddModel()`, `AddModelAsync()`, `GetAssetLoad()`, `CommitModelLoad()`, `SetHotReload()`, `SetCamera()`, `ProcessInput()`, `PickObject()`, `SetMaterial/ResetMaterial`, `SetQuality()`, `CrossFadeAnimation()`, `PlayBlendTree/SetBlendParameter/SeekBlendTree`, `SetAdditiveAnimation/SetAdditiveWeight/SetAdditiveMask/SeekAdditive/ClearAdditiveAnimation`, `GetScene()`, `Run()` |
@@ -198,6 +199,65 @@ Font/raster 실패는 UI 미리보기 오류로 표시하고 Scene 표시를 유
 
 CPU에서 직접 Scene을 사용할 때 `UpdateAnimations(deltaSeconds)`로 시간을 진행함. Viewer에서는 기본 실행 루프가 진행함. Scene 참조를 반환하는 조회는 객체 삭제·모델 교체·문서 편집 뒤 다시 수행함.
 
+## 파티클 효과
+
+`minvex::scene`은 CPU 시뮬레이션을 제공함. Cascade의 Effect → Emitter → Module 구조를 따라 효과 하나에 여러 이미터를 묶고, 이미터에서 생성·초기값·가속도·수명별 색과 크기를 정의함. [Epic Games Particle System Reference](https://dev.epicgames.com/documentation/unreal-engine/particle-system-reference?application_version=4.27)
+
+```cpp
+#include <minvex/Scene.h>
+
+lv::ParticleEmitter sparks;
+sparks.Blend = lv::ParticleBlend::Additive;
+sparks.Spawn = {60, 0.5, {{0, 24}}};
+sparks.Initial.Lifetime = {0.3f, 0.8f};
+sparks.Initial.Velocity = {{-1, 1, -1}, {1, 3, 1}};
+sparks.Acceleration = {0, -3, 0};
+sparks.ColorOverLife = {{0, {1, 0.7f, 0.2f, 1}}, {1, {1, 0.1f, 0, 0}}};
+const auto effect = lv::MakeParticleEffect({sparks});
+
+lv::Scene scene;
+const auto object = scene.CreateObject("Sparks");
+scene.SetParticleEffect(object, effect, 42);
+scene.UpdateParticles(1.0 / 60.0); // 수동 시뮬레이션 예
+```
+
+- `MakeParticleEffect()`는 설정을 검증하고 소유하는 불변 핸들을 반환함. 여러 객체나 Scene에서 정의를 공유할 수 있음. `SetParticleEffect()`는 시드가 지정된 독립 재생 상태를 초기화함. 빈 핸들이나 객체 제거는 상태를 해제함. 갱신·조회는 Scene 소유 스레드에서 수행함.
+- `Spawn.Delay` 후 생성이 시작됨. `Duration == 0`은 연속 방출이고, 양수는 한 사이클의 초 단위 길이임. `Cycles`는 반복 횟수이며 0은 무한 반복임. 반복 사이클은 최소 1/240초임. 버스트는 사이클마다 지정 시각에 발사되며 종료 시각과 다음 사이클의 시작 시각이 겹치면 둘 다 발생함. `SetParticleEmission(false)`는 생성 시계만 멈추고 살아 있는 입자는 계속 진행함. `RestartParticles()`는 입자·생성 시계·시드를 초기 상태로 되돌리고 생성을 켬.
+- 축별 초기값을 시드로 독립 샘플링함. 위치는 초기 위치·속도·일정한 가속도와 실제 경과 시간으로 계산함. 수명 곡선은 정규화된 시각을 선형 보간하고 범위 밖은 가장 가까운 키를 사용함. 색상은 선형 RGBA [0,1], 크기는 월드 단위 전체 너비, `AspectRatio`는 높이/너비임. `ParticleCount()`는 숨은 입자도 포함함. `CollectParticleSprites()`는 전달한 벡터를 월드 공간 스프라이트로 채우며, 트레일은 `TrailEnd`가 있는 세그먼트로 제공함. 결과의 텍스처 포인터는 Scene의 효과 정의를 빌려 쓰므로 효과 교체·제거 전에 소비해야 함.
+- World 공간은 한 번의 갱신에서 객체·부모·소켓의 월드 변환을 샘플링해 그 갱신의 새 위치와 속도에 적용함. 가속도는 월드 축을 따름. Local 공간은 위치·속도·가속도를 객체 공간에서 계산하고 스프라이트를 수집할 때 현재 월드 변환을 중심점에 적용함. 부모가 숨겨지면 두 공간의 스프라이트를 숨기며 시뮬레이션은 계속됨.
+- 기본 Viewer는 `OnFrame` 이후 파티클을 갱신함. 직접 호출할 때는 `ViewerRunOptions::AdvanceParticles = false`를 사용함. Embedded 앱은 `EmbeddedRenderer::Update()`에서 애니메이션과 파티클을 진행함. `Render()`와 `Scene::UpdateAnimations()`는 파티클 시간을 진행하지 않음.
+- 효과당 이미터 16개, Scene당 256개, 이미터당 파티클 용량 16,384, Scene에 장착한 용량 합계 32,768. 이미터당 버스트 32개, 곡선당 키 16개. 용량을 넘는 요청은 가장 최근의 생성 요청부터 유지함. 수명이 끝난 입자는 복구되지 않음. 초당 생성률 0~100,000, 수명 (0,3600]초, 단일 갱신·생성 지속 시간·버스트 시각 0~86,400초, 종횡비 0.01~100을 허용함. 초기 위치·속도·가속도·회전·각속도 성분의 절댓값과 크기·크기 배율은 최대 1,000,000임. 잘못된 값·객체·곡선에는 `std::invalid_argument`, 용량 한도 초과에는 `std::length_error`가 발생함.
+- 방출 형상은 초기 위치 범위 위에 Box, Sphere, Disc, Cone을 적용함. Sphere는 구 내부를, Disc와 Cone은 XZ 원판을 샘플링함. Cone의 방출 방향은 +Y를 중심으로 지정한 반각 안에서 샘플링함. 일정 가속도와 선형 항력은 초기값과 경과 시간으로 평가함. 평면 충돌은 시뮬레이션 공간의 Y 좌표에서 Kill 또는 Bounce를 적용함. Bounce는 최대 여덟 번의 접촉을 계산한 뒤 바닥에 정착함.
+- Lit·Unlit 뷰의 스프라이트는 불투명 장면 뒤에 깊이 테스트를 사용해 그려짐. PNG sRGB 플립북은 생애 진행률로 왼쪽 위에서 행 우선으로 읽으며 RGB/알파에 수명별 색을 곱함. PNG 8 MiB, 축당 2,048픽셀, 균등 분할 행·열과 생애 반복은 각각 1~64. Scene에는 서로 다른 디코딩 텍스처를 최대 32개 및 합계 64 MiB까지 장착함. 트레일은 최대 10초 길이와 입자당 8개 빌보드 세그먼트, Scene당 추가 세그먼트 32,768개를 지원함. `MaxDrawDistance`의 양수 값은 카메라 거리로 렌더링만 제한함.
+- CPU 렌더 경로의 인스턴스 스트림은 RGBA8 색과 플립북 프레임 또는 선분 깊이를 포함해 스프라이트당 32바이트임. Additive 배치를 먼저 제출하고 Alpha는 뷰 공간 깊이의 먼 쪽부터 합성함. 같은 텍스처·격자·렌더러·블렌드로 이어지는 입자를 한 번에 그려 합성 순서를 보존함. [연기와 불꽃 예제](../examples/Particles/Main.cpp)
+
+### 이벤트와 서브 이미터
+
+`EmitEvents`가 설정된 이미터는 Birth, 첫 Collision, 자연 수명 종료 또는 Kill에 따른 Death를 발행합니다. `Scene::PollParticleEvents()`에서 씬 객체 ID, 이미터 인덱스, 생성 순번, 효과 시간과 월드 좌표를 받습니다. 큐는 4,096개이며 넘친 이벤트 수는 반환값의 `Dropped`에 기록합니다. 갱신 단위로 객체와 시간순으로 정렬합니다. `SeekParticles()`는 서브 이미터를 재생하며 공개 큐에 이벤트를 발행하지 않습니다.
+
+`EventRoutes`는 같은 효과의 대상 이미터와 방출 개수를 지정합니다. 새 입자는 이벤트의 월드 좌표에서 생성되고 해당 갱신에서 남은 시간만큼 진행합니다. 이미터당 루트 8개, 대상 대기 버스트 최대 4,096개, 입자 용량은 일반 생성과 공유합니다. 루트가 순환하거나 대상 인덱스가 잘못되면 `MakeParticleEffect()`가 거부합니다.
+
+### 충돌과 렌더러
+
+`Collision.Source`는 Plane, Terrain, Mesh, Scene 중 하나입니다. Terrain은 현재 표시되는 지형 삼각형을, Mesh는 표시되는 강체 모델의 LOD0 기본 삼각형을 사용합니다. Scene은 둘 다 사용합니다. 장면 콜라이더는 최대 1,048,576개 삼각형으로 제한되며, 갱신 시점의 형상과 변환으로 점 입자의 이동 구간을 검사합니다. Skin 변형과 Morph 형상은 충돌 계산의 범위 밖입니다.
+
+- **Mesh**는 단위 큐브 또는 라이브러리의 강체 모델을 입자 위치·크기·Y축 회전으로 인스턴싱합니다. 커스텀 모델당 최대 4,096개 삼각형이며 입자의 색과 합성 모드를 사용합니다.
+- **Ribbon**은 살아 있는 입자를 생성 순서대로 연결하는 카메라 정면 스트립입니다. **Beam**은 각 입자에서 이미터 공간의 `BeamTarget` 오프셋까지 그립니다. 두 렌더러는 PNG를 사용하면 첫 타일을 선분에 배치합니다.
+
+### GPU 모션과 사용자 모듈 그래프
+
+`ParticleSimulation::Gpu`는 가속도와 항력을 포함한 위치 계산을 네이티브 컴퓨트 패스에서 수행합니다. 결과를 그래픽스 패스에서 GPU 버퍼로 직접 읽습니다. CPU가 생성, 수명, 이벤트, 그래프와 외형을 평가합니다. 충돌·트레일·PNG가 없는 Additive 스프라이트가 GPU 경로를 사용하며, 다른 조합과 WebGL2는 같은 효과의 CPU 경로를 사용합니다. [Epic Games GPU Sprites](https://dev.epicgames.com/documentation/en-us/unreal-engine/gpusprites-type-data?application_version=4.27)
+
+`ParticleModuleGraph`는 최대 32개의 스칼라 노드를 연결합니다. Constant, Age, Random, Add, Subtract, Multiply, Min, Max, Sine, Saturate를 지원하며, 출력은 크기·불투명도·회전과 초기 속도입니다. 무작위 입력은 입자 시드에서 계산합니다. 연결은 선언 순서와 무관하고, 잘못된 연결과 순환은 효과 생성 시 거부합니다.
+
+### Editor에서 편집과 재생
+
+**Window → Particles**에서 새 파티클 객체를 만들거나 현재 선택에 효과를 붙입니다. 이미터를 추가·복제·이동·삭제하거나 개별적으로 활성화할 수 있고, 모듈 섹션에서 설정과 수명 곡선의 키를 편집합니다. **Events and sub-emitters**에서 루트를 구성하고 **Event log**에서 미리보기 이벤트를 확인합니다. **Module graph**에서 노드·입력·출력을 연결하고 **Renderer and simulation**에서 형상과 GPU 설정을 선택합니다. 숫자 드래그는 한 단계로 Undo/Redo에 기록됩니다.
+
+**Play scene particles**, **Restart**, **Step**, **Speed**, **Preview time**은 Viewport 미리보기를 제어합니다. `SeekParticles()`는 시드와 현재 객체 변환을 기준으로 선택 효과의 생성을 다시 평가합니다. 재생·일시정지·시간 이동은 씬의 저장 상태에 영향을 주지 않습니다. **Frame emitter**는 씬 카메라를 편집합니다.
+
+Scene v16은 이벤트·루트, 지형·메시 충돌, 렌더러, GPU 설정, 그래프와 v15의 기본 파티클 정보를 저장합니다. 공유 효과와 메시 모델은 한 번만 기록하며 파일 기반 메시와 PNG는 Scene에 대한 상대 경로를 사용합니다. 프로젝트 이동 시 외부 에셋도 함께 이동합니다. 다시 열면 효과 설정을 복원하고 시뮬레이션은 처음부터 시작합니다. reader는 v1~v16이며, 고급 기능 없이 저장한 파티클 씬은 v15를 사용합니다.
+
 ## 카메라·품질·진단
 
 | 기능 | 접근법과 역할 |
@@ -237,7 +297,7 @@ UI를 통과한 `MouseDown`의 `OnInput` 안에서 같은 버튼으로 `CaptureP
 
 `LoadTerrainCsv()`는 `easting,northing,elevation` 헤더와 누락·중복 없는 직사각형 정규 격자를 읽습니다. 행 순서는 자유입니다. 최소 easting·northing·elevation을 로컬 원점으로 사용합니다. `LoadTerrainHeightmap()`은 8/16비트 회색조 PNG를 읽어 검정(샘플 값 0)을 로컬 0, 최대 표현값을 `heightRange`에 대응시키고 첫 행을 로컬 Z=0에 놓습니다. 파일당 32 MiB, 격자당 262,144개 표본, 그리드 간격 최소 0.00001m, 로컬 폭·깊이 최대 10,000,000m와 로컬 표고 ±10,000,000m를 지원합니다. 3×3 이상에서 `GenerateMountain()`은 고정 시드로 지정한 최고 높이까지 표고를 재생성하고 `ApplyBrush()`는 Raise/Lower/Smooth를 적용합니다. 등고선 간격은 로컬 표고 원점을 기준으로 하며 최대 65,536개 선분을 반환합니다.
 
-독립 격자는 각각 호출 스레드에서 편집하고 게시한 `ModelHandle`은 읽기 전용으로 사용합니다. 잘못된 수치·레이아웃은 `std::invalid_argument`, 표고 인덱스 범위 초과는 `std::out_of_range`, 등고선 예산 초과는 `std::length_error`입니다. Editor의 **Window → Terrain**은 브러시 드래그를 Undo 한 단계로 묶고, Edit 중에 등고선과 측정 표고를 갱신합니다. Scene에 지형이 있으면 격자를 v14로 저장하며 기존 v1–v13 Scene을 읽습니다. [Terrain.h](../include/minvex/Terrain.h) · [측량 Quick Start](../examples/QuickStart/Survey.cpp)
+독립 격자는 각각 호출 스레드에서 편집하고 게시한 `ModelHandle`은 읽기 전용으로 사용합니다. 잘못된 수치·레이아웃은 `std::invalid_argument`, 표고 인덱스 범위 초과는 `std::out_of_range`, 등고선 예산 초과는 `std::length_error`입니다. Editor의 **Window → Terrain**은 브러시 드래그를 Undo 한 단계로 묶고, Edit 중에 등고선과 측정 표고를 갱신합니다. Scene은 지형 격자를 v14 이상에 저장하고 기존 v1–v13도 읽습니다. [Terrain.h](../include/minvex/Terrain.h) · [측량 Quick Start](../examples/QuickStart/Survey.cpp)
 
 ### 상자 받침과 중력 미리보기
 
@@ -416,7 +476,7 @@ Blend1D는 X 오름차순·Y=0인 1~64개 sample을 요구하며 인접 두 Clip
 
 `SetBlendParameter(name, value)`·`SeekBlendTree(phase)`·`BlendTreeDuration()`을 제공함. 파라미터는 유한한 값, phase는 [0,1]임. 파라미터 편집은 phase를 유지하며 Pause·속도·Loop·역재생은 기존 제어를 따름. Stop은 Tree·파라미터를 유지하고 phase=0, ResetPose는 Tree도 해제함. Play는 단일 Clip으로 전환하고 Tree에서 CrossFade하면 현재 base TRS/Morph를 frozen source로 사용함.
 
-Viewer·EditorDocument도 `PlayBlendTree/SetBlendParameter/SeekBlendTree` Result Facade를 제공함. Editor Animation Controls에서 이름·파라미터·Clip·threshold/좌표 편집과 Apply/Play, 현재 weight·2D 삼각분할 보기를 제공하며 편집은 Undo/Redo 대상임. Scene v13는 최대 1024개 공유 Tree 정의와 독립 phase/파라미터/재생 상태를 저장하며 reader는 v1~v14임. Reimport는 실제 Skeleton/Morph layout과 모든 참조 Clip index/name·Scale 호환성을 검사함.
+Viewer·EditorDocument도 `PlayBlendTree/SetBlendParameter/SeekBlendTree` Result Facade를 제공함. Editor Animation Controls에서 이름·파라미터·Clip·threshold/좌표 편집과 Apply/Play, 현재 weight·2D 삼각분할 보기를 제공하며 편집은 Undo/Redo 대상임. Scene v13는 최대 1024개 공유 Tree 정의와 독립 phase/파라미터/재생 상태를 저장하며 reader는 v1~v16임. Reimport는 실제 Skeleton/Morph layout과 모든 참조 Clip index/name·Scale 호환성을 검사함.
 
 잘못된 입력/호환성은 low-level API에서 `std::invalid_argument`임. 반환한 handle은 정의의 수명을 유지하며 `Tree()` 참조는 Player/Scene 편집 후 다시 조회함. immutable 정의의 동시 조회·서로 다른 Player 사용은 가능하고 같은 Player의 동시 수정/평가는 금지임. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
 
@@ -439,7 +499,7 @@ Player는 TRS Additive 레이어 1개를 보유함. `SetAdditiveAnimation(clip, 
 
 `Additive()`의 상태는 Clip·Time·Speed·Loop·Weight·State·Reference·JointMask임. 레이어 속도는 Player 속도와 곱해지고 playhead/loop는 base와 독립임. `RestoreAdditiveAnimation(state)`로 전체 설정을 검증·교체하며 `SetAdditiveWeight/SetAdditiveMask/SeekAdditive()`로 개별 편집함. Seek는 duration까지 clamp함. Pause/Resume은 base와 레이어를 함께 제어하고 Stop은 두 시간을 0으로 되돌리며 설정은 유지함. Play/PlayBlendTree/CrossFade는 레이어를 유지하고 ResetPose는 해제함. `ClearAdditiveAnimation()`은 base를 유지하며 레이어만 제거함.
 
-Viewer·EditorDocument에도 같은 제어의 Result Facade를 제공함. Editor는 Clip·Skeleton/현재 base/Clip sample 기준 선택, weight·시간·속도·loop, Joint/Subtree mask, Base/Delta/Final 비교를 제공함. 편집은 Undo/Redo 대상이며 Scene v13는 레이어 reference·mask·재생 상태를 저장하고 reader는 v1~v14임. Reimport는 Skeleton·레이어 Clip index/name·시간과 reference/Scale 호환성을 검사함. Pose v1은 최종 TRS snapshot만 저장함.
+Viewer·EditorDocument에도 같은 제어의 Result Facade를 제공함. Editor는 Clip·Skeleton/현재 base/Clip sample 기준 선택, weight·시간·속도·loop, Joint/Subtree mask, Base/Delta/Final 비교를 제공함. 편집은 Undo/Redo 대상이며 Scene v13는 레이어 reference·mask·재생 상태를 저장하고 reader는 v1~v16임. Reimport는 Skeleton·레이어 Clip index/name·시간과 reference/Scale 호환성을 검사함. Pose v1은 최종 TRS snapshot만 저장함.
 
 공유 Model/Clip은 수정하지 않으며 레이어·기준 Pose·mask는 Player별로 소유함. 상태 참조는 Player/Scene 편집 후 다시 조회하고 같은 Player의 동시 수정/평가는 금지임. weight 0 또는 전체 mask 0인 레이어의 시간 변화는 정적인 base의 On-Demand 이미지를 무효화하지 않음. SDK 1.0.0 소비자는 함께 재빌드해야 하며 ImportVersion 6은 유지함.
 
@@ -466,7 +526,7 @@ Player 큐는 최대 1024개임. 초과 시 `AnimationEventOverflow`를 던지�
 
 track당 최대 1024개, overlay 최대 256 track, 기본 track별·인스턴스 전체 overlay별 이름/페이로드 합계는 각각 1 MiB임. 이름은 1~256 bytes, payload는 최대 4096 bytes의 NUL 없는 UTF-8이며 시간은 유한한 [0,duration] 오름차순임. 잘못된 데이터는 `std::invalid_argument`임. Player/Scene의 동시 수정·평가는 금지이고 Viewer는 생성한 owner thread에서 사용함. callback은 명시적 Dispatch를 호출한 스레드에서 실행하며 전달된 참조는 해당 호출 동안만 유효함.
 
-Editor는 Timeline marker, 추가·삭제·시간·이름·payload 편집, 수집 Seek 선택과 발생 로그를 제공함. marker 편집은 Undo/Redo 대상이며 큐 배출·로그는 문서를 dirty로 만들지 않음. Scene v13는 overlay와 Clip identity를 저장하고 reader는 v1~v14임. 발생 큐·callback·로그는 저장하지 않으며 Undo/Redo는 과거 큐를 재발송하지 않음. Reimport는 overlay Clip identity/duration을 검사함. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
+Editor는 Timeline marker, 추가·삭제·시간·이름·payload 편집, 수집 Seek 선택과 발생 로그를 제공함. marker 편집은 Undo/Redo 대상이며 큐 배출·로그는 문서를 dirty로 만들지 않음. Scene v13는 overlay와 Clip identity를 저장하고 reader는 v1~v16임. 발생 큐·callback·로그는 저장하지 않으며 Undo/Redo는 과거 큐를 재발송하지 않음. Reimport는 overlay Clip identity/duration을 검사함. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
 
 ### Shared Skeleton / Leader Pose / Socket (SDK 1.0)
 
@@ -524,7 +584,7 @@ Follower는 자체 애니메이션 Player의 TRS·Morph 재생과 이벤트 수�
 
 잘못된 입력·누락된 소켓/본·호환성·순환·singular TRS는 `std::invalid_argument`임. world-preserving detach 또는 SetWorldTransform 결과에 shear가 있으면 TRS로 저장할 수 없어 변경 전에 거부함. `EditorDocument`는 공유 Skeleton·Leader·소켓·부착 API를 같은 인수로 제공하고 Result 오류 및 Undo/Redo를 적용함. 전체 Pose 저장은 Follower의 표시되는 최종 local TRS를 저장하며 local shear는 거부함. overrides-only 저장은 dormant 독립 Player의 override임. Viewer는 owner thread에서 `GetScene()`을 통해 사용함.
 
-Scene writer는 v13이며 지형을 내장한 Scene은 v14로 저장함. reader는 v1~v14임. 최대 1024개의 공유 Skeleton 정의를 중복 없이 저장하고 본/기준 자세/공유 소켓, 인스턴스 소켓 override, Leader·Transform 부모·부착 소켓을 복원함. 파일의 ObjectId는 새 런타임 ID로 매핑하며 모순된 참조·순환·256단계 초과 chain은 거부함. v1~v11에서는 새 관계가 없는 일반 객체로 읽음. 기존 16 MiB JSON·65536 객체·4096 모델 제한을 유지함. 이전 SDK reader는 v13를 읽을 수 없음. Pose v1·ImportVersion 6은 유지하고 정적 SDK 소비자는 1.0.0 헤더/라이브러리로 함께 재빌드해야 함.
+Scene writer는 기본 v13, 지형만 추가하면 v14, 파티클 효과는 v15, 고급 파티클 모듈은 v16을 사용함. reader는 v1~v16임. 최대 1024개의 공유 Skeleton 정의를 중복 없이 저장하고 본/기준 자세/공유 소켓, 인스턴스 소켓 override, Leader·Transform 부모·부착 소켓을 복원함. 파일의 ObjectId는 새 런타임 ID로 매핑하며 모순된 참조·순환·256단계 초과 chain은 거부함. v1~v11에서는 새 관계가 없는 일반 객체로 읽음. 기존 16 MiB JSON·65536 객체·4096 모델 제한을 유지함. 이전 SDK reader는 v13를 읽을 수 없음. Pose v1·ImportVersion 6은 유지하고 정적 SDK 소비자는 1.0.0 헤더/라이브러리로 함께 재빌드해야 함.
 
 예제는 [Equipment](../examples/Equipment/Main.cpp), 설치 SDK 소비자는 [SdkConsumer/Equipment](../examples/SdkConsumer/Equipment.cpp)임. C++/Editor 기능을 제공하며 Python/JavaScript의 장착 제어 바인딩은 제공하지 않음.
 
@@ -653,7 +713,7 @@ auto changed = viewer.SetQuality(quality); // Result<void> 확인 필요
 
 ```sh
 python -m pip wheel . --wheel-dir out/wheels
-python -m pip install --force-reinstall out/wheels/minvex-1.1.1-cp312-cp312-win_amd64.whl
+python -m pip install --force-reinstall out/wheels/minvex-1.2.0-cp312-cp312-win_amd64.whl
 python python/examples/viewer.py examples/assets/MorphRibbon.gltf --frames 60
 ```
 
@@ -806,12 +866,12 @@ Facade·IO는 Result를 사용하고, low-level Asset/Scene/Animation API는 `Im
 
 | 항목 | 현재 규칙 |
 |---|---|
-| **Scene** | writer v13(지형 포함 시 v14) / reader v1~v14. 외부 모델 참조·계층·카메라·조명·Pose·Clip/Cross-fade·Blend Tree·Additive·Event overlay·재질/Morph override·Shared Skeleton·Leader Pose·Socket 저장. 로드 시 runtime ID 재매핑 |
+| **Scene** | writer v13(지형 v14, 기본 파티클 v15, 고급 파티클 v16) / reader v1~v16. 외부 모델 참조·계층·카메라·조명·Pose·Clip/Cross-fade·Blend Tree·Additive·Event overlay·재질/Morph override·Shared Skeleton·Leader Pose·Socket·파티클 효과와 시드 저장. 로드 시 runtime ID 재매핑 |
 | **Pose / Quality / Import** | Pose v1, Quality writer v2 / reader v1~v2, ImportVersion 6. Pose는 skeleton signature 호환 필요 |
 | **Quality** | Low·Medium·High, Overrides가 있으면 Custom. 기본 `AllowFallback=false`; 미지원 설정 대체는 명시적으로 허용 |
 | **SDK** | 정적 라이브러리. 소비자는 같은 architecture·compiler/toolset·configuration·C++ runtime을 사용함. MSVC로 빌드한 패키지는 ZIP 이름과 manifest의 `msvcToolset`에 컴파일러 `major.minor`를 표시하며 C++ 소비자의 컴파일러 ID와 `major.minor`를 `find_package`에서 검사함. 전체 컴파일러 버전은 `compiler`와 CMake의 `Minvex_COMPILER`에 기록함 |
 
-Scene v13은 v12 이하의 reader에서, 지형을 포함한 Scene v14는 v13 이하의 reader에서 열 수 없습니다. Scene/Pose/Quality 저장은 임시 파일 작성 후 교체합니다. 지형 격자는 Scene에 포함하며 일반 모델은 외부 파일을 참조합니다. Undo 이력·UI 상태·Telemetry는 Scene에 저장하지 않음.
+각 Scene 버전을 열려면 해당 버전 이상을 지원하는 reader가 필요합니다. Scene/Pose/Quality 저장은 임시 파일 작성 후 교체합니다. 지형 격자는 Scene에 포함하며 일반 모델은 외부 파일을 참조합니다. Undo 이력·UI 상태·Telemetry는 Scene에 저장하지 않음.
 
 Scene의 모델·텍스처 디렉터리 상대 참조는 실제 부모 디렉터리를 기준으로 계산함. macOS의 `/var` → `/private/var` 같은 디렉터리 링크나 Windows junction을 통해 저장·로드해도 같은 리소스를 가리키며, 프로젝트를 함께 옮길 수 있음.
 
@@ -821,7 +881,7 @@ Minvex 자체 코드는 Apache-2.0을 적용함. SDK 설치 접두사 최상위�
 
 ## 지원 범위
 
-이 문서는 SDK 1.1.1의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
+이 문서는 SDK 1.2.0의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
 
 CPU-only 구성의 native 초기화·실행은 `UnsupportedFeature`를 반환함.
 

@@ -126,6 +126,7 @@ cmake --build --preset windows-release --parallel 4
 ./out/build/windows-release/bin/minvex_rendering_enhancement.exe --pbr
 ./out/build/windows-release/bin/minvex_rendering_enhancement.exe --morph
 ./out/build/windows-release/bin/minvex_equipment.exe
+./out/build/windows-release/bin/minvex_particles.exe
 ./out/build/windows-release/bin/minvex_ui_overlay.exe
 ./out/build/windows-release/bin/minvex_fitting.exe
 ```
@@ -137,6 +138,7 @@ cmake --build --preset windows-release --parallel 4
 cmake --preset macos-release
 cmake --build --preset macos-release --parallel 4
 ./out/build/macos-release/bin/minvex_editor
+./out/build/macos-release/bin/minvex_particles
 ```
 
 ### 로컬 SDK 설치
@@ -152,7 +154,7 @@ macOS에서는 `out/build/macos-release`를 사용합니다. 설치한 SDK의 `o
 | 분야                       | 현재 지원 기능                                                                                                                                                |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Asset**                | glTF/GLB, OBJ/MTL, FBX(Static·Skin·Animation·Blend Shape Bake), 검사·재임포트·Hot Reload·비동기 로딩                                                               |
-| **Scene**                | 객체 계층·Transform, 모델 인스턴스 공유, 소켓·부착 노드, Scene v13 및 지형 포함 v14 저장·불러오기                                                                                |
+| **Scene**                | 객체 계층·Transform, 모델 인스턴스 공유, 소켓·부착 노드, 지형과 파티클 설정을 포함하는 Scene 저장·불러오기 |
 | **Mesh**                 | Static/Skeletal Mesh, GPU Skinning, 정점당 최대 4개 Bone 영향                                                                                                   |
 | **Morph**                | Morph Target, GPU Morph, 노드별 독립 Weight, Weight Animation                                                                                                |
 | **Material·Lighting**    | Base Color·Texture·Normal Map, 독립 Ambient·Directional·Point·Spot·LTC Rect Light, Sun Basic/PCF/PCSS·Point/Spot Hard/PCF 그림자, HDR·FXAA                                                            |
@@ -161,6 +163,7 @@ macOS에서는 `out/build/macos-release`를 사용합니다. 설치한 SDK의 `o
 | **화면 UI**                | 텍스트·버튼·패널·숫자 입력, 시스템/Font 폴더 폰트, 계층·Row/Column/Grid 자동 배치·Fixed/Fill/Hug·scroll/clip, 리치텍스트, UI Undo/Redo, 상태별 디자인, UI Designer·별도 UI 파일                      |
 | **Skeleton·Pose**        | Bone Transform, Reference/Full/Partial Pose, Override, Pose 저장·불러오기, Shared Skeleton·Leader Pose 의상/파츠 동기화                                              |
 | **Animation**            | Clip 재생·정지·반복·역재생, 속도·시간 제어, Pose Blending·채널 마스크, Blend1D/Blend2D, Additive Animation·Joint Mask, Animation Event, Clip Cross-fade, Timeline Scrubbing |
+| **Particles**            | 이벤트·서브 이미터, 평면·지형·메시 충돌, Sprite·Mesh·Ribbon·Beam, PNG 플립북, GPU 스프라이트 모션, 모듈 그래프와 Editor 미리보기 |
 | **실행 방식**                | Standalone Viewer, Embedded Runtime, Editor                                                                                                             |
 | **Editor UX**            | OS 파일 탐색기, Quick Open, Drag & Drop, Asset Browser, Hierarchy, Inspector, Gizmo, Blend Tree·Additive·Event Track·Leader Pose·소켓 편집, Undo/Redo            |
 | **Debugging**            | Wireframe, Normal·UV·Depth, Skeleton·Bone Weight, Shadow Map·Blocker·Penumbra·Visibility, Bounding Box, GPU Resource Inspector                          |
@@ -171,6 +174,8 @@ macOS에서는 `out/build/macos-release`를 사용합니다. 설치한 SDK의 `o
 | **Python**               | CPython 3.12, Viewer·Scene·Lighting·Pose·Animation·Blend Tree·Additive·Morph·Material·Quality·Event API, Wheel                                                   |
 | **Web**                  | WebAssembly·WebGL2 Canvas, JavaScript API, URL·파일·메모리 로딩, Animation·Blend Tree·Additive·Event·Morph·PBR, Context 복구                                     |
 | **Platform**             | Windows x64 / D3D11, macOS Apple Silicon arm64 / Metal, Browser WebGL2                                                                        |
+
+Editor의 **Window → Particles**에서 객체에 효과를 만들고, 이미터와 모듈을 바꾸면서 Viewport에서 확인할 수 있습니다. 고급 파티클 기능을 사용하는 씬은 v16으로 저장합니다. GPU 모션은 컴퓨트를 지원하는 네이티브 장치에서 동작하며 지원 범위를 벗어나는 구성은 CPU로 미리 봅니다. `minvex_particles`는 연기와 불꽃을 보여 주는 C++ 예제입니다. Windows x64/D3D11에서 검증했으며 macOS Metal 실행 검증이 남아 있습니다. [파티클 사용 계약](docs/API.md#파티클-효과)
 
 ## 실행 요구사항
 
