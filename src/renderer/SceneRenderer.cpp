@@ -304,7 +304,10 @@ void SceneRenderer::DrawImpl(const Scene& scene,const Mat4& viewProjection,bool 
     const bool sortBlended = debug_.View == DebugView::Lit || debug_.View == DebugView::Unlit;
     sg_pipeline activePipeline{}; // Isolated to this draw sequence, including a single atlas face.
     MeshLighting frameLighting;
-    std::optional<material_params_t> fragment;
+    // Clang can discard the generated typedef's alignment as a template argument.
+    // WebGL reads these bytes from a Float32Array.
+    struct alignas(16) MaterialUniforms { material_params_t Values; };
+    std::optional<MaterialUniforms> fragment;
     if (!shadowPass) {
         const auto& camera = scene.MainCamera;
         frameLighting.Advanced = settings_.Lighting == LightingMode::Advanced;
@@ -325,7 +328,7 @@ void SceneRenderer::DrawImpl(const Scene& scene,const Mat4& viewProjection,bool 
         frameLighting.Pbr = settings_.Pbr && frameLighting.Advanced;
         frameLighting.Eye = camera.Position;
         frameLighting.ViewDirection = {camera.Position.X-camera.Target.X,camera.Position.Y-camera.Target.Y,camera.Position.Z-camera.Target.Z};
-        fragment.emplace(PrepareMaterialUniforms(scene.Sun, frameLighting));
+        fragment.emplace(MaterialUniforms{PrepareMaterialUniforms(scene.Sun, frameLighting)});
     }
     const auto drawColor = [&](const RenderItem& item, const ModelPart& part, const GpuModel& model,
                                const MaterialAsset& material, std::size_t i, const Mat4& transform,
@@ -348,7 +351,7 @@ void SceneRenderer::DrawImpl(const Scene& scene,const Mat4& viewProjection,bool 
                 stats_.Optimization.InstancedObjects+=count;++stats_.Optimization.InstanceDraws;stats_.Optimization.SavedDrawCalls+=count-1;
             }
         }
-        renderer->DrawPrepared(drawTransform,viewProjection,*fragment,activePipeline,material,texture,sampler,palette,settings_.Lighting == LightingMode::Unlit,lighting);
+        renderer->DrawPrepared(drawTransform,viewProjection,fragment->Values,activePipeline,material,texture,sampler,palette,settings_.Lighting == LightingMode::Unlit,lighting);
         ++stats_.LastDrawCalls;stats_.Optimization.LodDraws[level]+=count;stats_.Optimization.SourceTriangles+=mesh.Primitives[i].Geometry.Indices.size()/3*count;
         if (debug_.View == DebugView::Wireframe) {stats_.LastWireLines+=mesh.Primitives[i].Geometry.Indices.size();}else {const auto triangles=renderer->TriangleCount(level)*count;stats_.LastTriangles+=triangles;stats_.Optimization.SubmittedTriangles+=triangles;}
     };

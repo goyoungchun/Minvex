@@ -292,7 +292,7 @@ material_params_t PrepareMaterialUniforms(const DirectionalLight& light,const Me
 void MeshRenderer::Draw(const Mat4& model,const Mat4& viewProjection,const DirectionalLight& light,
                         const MaterialAsset& material,sg_view texture,sg_sampler sampler,std::span<const Mat4> palette,
                         bool forceUnlit,const MeshLighting& lighting) const {
-    auto fragment=PrepareMaterialUniforms(light,lighting);
+    alignas(16) auto fragment=PrepareMaterialUniforms(light,lighting);
     sg_pipeline active{};
     DrawPrepared(model,viewProjection,fragment,active,material,texture,sampler,palette,forceUnlit,lighting);
 }
