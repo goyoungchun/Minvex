@@ -8,7 +8,7 @@ on:
         description: Existing release tag to build and publish
         type: string
         required: true
-        default: v1.2.0
+        default: v1.2.1
       verify_existing:
         description: Verify archives from this revision for an existing release
         type: boolean
@@ -102,22 +102,23 @@ jobs:
 
           The Windows archive filename includes the required MSVC compiler major.minor (for example, MSVC-19.51). Check your compiler with cl /Bv. If the versions differ, select the matching MSVC toolset or build the SDK from this release tag with your compiler.
 
-          New in 1.2.0
+          New in 1.2.1
 
-          - Author multi-emitter effects under Window → Particles in the Editor. The viewport supports live preview, pause, step, restart and timeline scrubbing.
-          - Configure bursts and loops, life curves, PNG flipbooks, event-driven sub-emitters, and a scalar module graph.
-          - Render Sprite, Mesh, Ribbon and Beam particles. Collision responses include Kill and Bounce against planes, terrain and rigid scene triangles.
-          - Compute-capable native rendering can evaluate motion for untextured additive sprites without collision or trails on the GPU. Other emitter configurations and WebGL2 use the CPU path.
+          - Configure Standalone Viewer GPU resource pool sizes. Compatible mesh primitives share shaders and pipelines, and consecutive draws reuse pipeline state.
+          - Inspect the actual particle path, CPU fallback reason and submitted count for each emitter. Toggle emitters and sub-emitter event routes while live particles continue their simulation.
+          - Add a camera-centered equirectangular panorama and render alpha-blended mesh materials, including glTF BLEND assets.
+          - Use persistent Scene object keys to reconnect after loading, and store application strings in object metadata.
+          - Inspect UI rasterization and upload costs. Text updates can upload only changed regions, and Standalone Viewer uses the platform's frame scheduling facilities to pace capped rendering.
 
           Build minvex_editor from the source tag to use the Editor application. The particle example is in share/minvex/examples/Particles.
 
           The examples are in share/minvex/examples/QuickStart.
 
-          The SDK reads Scene v1 through v16. Scenes use v13 by default, v14 for embedded terrain, v15 for basic particle effects, and v16 for advanced particle modules. Keep referenced meshes and PNGs with the scene and rebuild C++ consumers using the headers and libraries from the same SDK package.
+          The SDK reads Scene v1 through v17. Scenes use v13 by default, v14 for embedded terrain, v15 for basic particle effects, v16 for advanced particle modules, and v17 for persistent object keys, metadata or alpha-blended material overrides. Scenes saved as v17 require a v17 reader. Keep referenced meshes and PNGs with the scene and rebuild C++ consumers using the headers and libraries from the same SDK package.
 
           Building from source requires a C++20 standard library with std::jthread and std::stop_token. Each binary SDK records its compiler and runtime in share/minvex/sdk-manifest.json.
 
-          Known limitation: intermittent long display frames have been observed on macOS. Frame cadence depends on window visibility, OS scheduling and display callbacks; disabling VSync does not guarantee an unlimited callback rate. A fixed maximum frame time is not guaranteed. Intel Mac binaries are not included.
+          The macOS binary targets Apple Silicon. Frame cadence depends on the device, scene, window visibility, OS scheduling and display callbacks. Low quality at 720p and 30 FPS is a performance target on minimum hardware.
 
           License: Apache-2.0. Bundled dependencies retain their own licenses; see LICENSE, NOTICE and share/minvex/licenses.
           NOTES

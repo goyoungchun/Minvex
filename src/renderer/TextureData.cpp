@@ -33,13 +33,13 @@ std::vector<std::uint8_t> Downsample(std::span<const std::uint8_t> source,int wi
     }}return next;
 }
 }
-PackedTexture PackTexture(const ImageAsset& image,int limit,bool srgb,bool compress) {
+PackedTexture PackTexture(const ImageAsset& image,int limit,bool srgb,bool compress,bool mipmaps) {
     if (image.Width <= 0 || image.Height <= 0 || limit <= 0 || image.Rgba.size() != static_cast<std::size_t>(image.Width)*image.Height*4) {throw std::invalid_argument("Invalid texture dimensions/data/limit.");}
     int w=image.Width,h=image.Height;std::span<const std::uint8_t> previous=image.Rgba;std::vector<std::uint8_t> owned;
     while (w > limit || h > limit) {auto next=Downsample(previous,w,h,srgb);w=std::max(1,w/2);h=std::max(1,h/2);owned=std::move(next);previous=owned;}
     PackedTexture packed;packed.Width=w;packed.Height=h;packed.Levels=1;packed.Compressed=compress && w>=4 && h>=4 && w%4==0 && h%4==0;
     const auto append=[&] {if (packed.Compressed) {const auto block=Bc3(previous,w,h);packed.Pixels.insert(packed.Pixels.end(),block.begin(),block.end());}else {packed.Pixels.insert(packed.Pixels.end(),previous.begin(),previous.end());}};append();
-    while (w > 1 || h > 1) {auto next=Downsample(previous,w,h,srgb);owned=std::move(next);previous=owned;w=std::max(1,w/2);h=std::max(1,h/2);++packed.Levels;append();}
+    while (mipmaps && (w > 1 || h > 1)) {auto next=Downsample(previous,w,h,srgb);owned=std::move(next);previous=owned;w=std::max(1,w/2);h=std::max(1,h/2);++packed.Levels;append();}
     return packed;
 }
 }

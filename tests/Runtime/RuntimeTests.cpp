@@ -1,6 +1,7 @@
 #include "TestHarness.h"
 #include <minvex/Viewer.h>
 
+#include <algorithm>
 #include <thread>
 #if defined(_WIN32)
 #include <sokol_gfx.h>
@@ -10,17 +11,77 @@ using namespace test;
 namespace {
 void Require(const lv::Result<void>& result) { if (!result) { throw std::runtime_error(result.Error().Message); } }
 bool Same(lv::Vec3 a, lv::Vec3 b) { return Near(a.X,b.X) && Near(a.Y,b.Y) && Near(a.Z,b.Z); }
+
+int CheckResourcePools() {
+    auto low = lv::MakeQualityProfile(lv::QualityPreset::Low);
+    low.Overrides.TargetFps = 0;
+    lv::ViewerOptions options;
+    options.Width = 320;
+    options.Height = 180;
+    options.Quality = low;
+    options.GpuPools.Buffers = 340;
+    options.GpuPools.Shaders = 12;
+    options.GpuPools.Pipelines = 32;
+    lv::Viewer viewer(options);
+    lv::ModelAsset equipment;
+    equipment.Meshes.push_back({"Equipment", {{lv::MakeCube(), 0, false}, {lv::MakeCube(), 1, false}}});
+    equipment.Parts.push_back({0});
+    equipment.Materials.resize(2);
+    equipment.Materials[1].DoubleSided = true;
+    equipment.ModelBounds = {{-.5f,-.5f,-.5f},{.5f,.5f,.5f}};
+    auto& scene = viewer.GetScene();
+    for (int i = 0; i < 40; ++i) {
+        lv::Transform transform;
+        transform.Position = {static_cast<float>(i % 8) * 2, static_cast<float>(i / 8) * 2, 0};
+        scene.AddModel(std::make_shared<lv::ModelAsset>(equipment), transform);
+    }
+    lv::ViewerRunOptions run;
+    run.FrameLimit = 5;
+    run.OnFrame = [&](lv::Viewer& v, const lv::ViewerFrameInfo& frame) {
+        auto alternate = low;
+        alternate.Overrides.Shadow = lv::ShadowMode::Basic;
+        alternate.Overrides.MsaaSamples = 4;
+        alternate.Overrides.PostProcessing = true;
+        alternate.AllowFallback = true;
+        if (frame.FrameNumber == 0) {
+            std::vector<lv::ObjectId> extra;
+            for (int i = 0; i < 6; ++i) { extra.push_back(scene.AddModel(std::make_shared<lv::ModelAsset>(equipment))); }
+            const auto failed = v.SetQuality(alternate);
+            Check(!failed && failed.Error().Code == lv::ErrorCode::InsufficientResource &&
+                failed.Error().Message.find("340/340") != std::string::npos &&
+                v.GetQuality().Value().Requested == low, "quality failure retains the previous configuration and reports the configured pool count");
+            for (auto id : extra) { scene.RemoveObject(id); }
+        } else {
+            const auto debug = v.GetRenderDebugInfo().Value();
+            const auto count = [&](lv::DebugResourceKind kind) {
+                return std::ranges::count(debug.Resources, kind, &lv::DebugResource::Kind);
+            };
+            Check(debug.RenderedFrames == frame.FrameNumber && count(lv::DebugResourceKind::Buffer) >= 160 &&
+                count(lv::DebugResourceKind::Shader) <= 4 && count(lv::DebugResourceKind::Pipeline) < 32,
+                "80 resident primitives render with shared shader and pipeline slots after each transition");
+            if (frame.FrameNumber < 4) {
+                const auto& next = frame.FrameNumber == 2 ? low : alternate;
+                Require(v.SetQuality(next));
+                Check(v.GetQuality().Value().Requested == next, "quality can change with the whole scene resident");
+            }
+        }
+    };
+    const auto result = viewer.Run(run);
+    Check(bool(result), result ? "viewer renders the large scene" : result.Error().Message.c_str());
+    return Finish();
+}
 }
 
 int main(int argc, char* argv[]) {
     if (argc != 2) { return 2; }
     const std::string mode(argv[1]);
+    if (mode == "resource-pools") { return CheckResourcePools(); }
     const bool animated = mode == "animation" || mode == "animation-manual";
     lv::ViewerOptions viewerOptions;
 #if defined(_WIN32)
     std::uint64_t commits=0;
-    if (mode == "pacing") {
-        viewerOptions.VSync=false;
+    if (mode == "pacing" || mode == "pacing-vsync") {
+        viewerOptions.VSync=mode=="pacing-vsync";
         viewerOptions.Quality=lv::MakeQualityProfile(lv::QualityPreset::Low);
         viewerOptions.Quality.Overrides.TargetFps=5;
     }
@@ -52,7 +113,7 @@ int main(int argc, char* argv[]) {
     };
     options.OnFrame = [&](lv::Viewer& v, const lv::ViewerFrameInfo& info) {
 #if defined(_WIN32)
-        if (mode == "pacing" && info.FrameNumber == 0) {
+        if ((mode == "pacing" || mode == "pacing-vsync") && info.FrameNumber == 0) {
             Check(sg_add_commit_listener({[](void* data) {++*static_cast<std::uint64_t*>(data);},&commits}),
                 "watch D3D11 swapchain submissions across FPS-capped callbacks");
         }
@@ -149,11 +210,12 @@ int main(int argc, char* argv[]) {
     if (closer.joinable()) { closer.request_stop(); closer.join(); }
     Check(!viewer.IsRunning(),"Run returns with running state cleared");
 #if defined(_WIN32)
-    if (mode == "pacing") {
+    if (mode == "pacing" || mode == "pacing-vsync") {
         const auto telemetry=viewer.GetTelemetry();
         Check(telemetry && telemetry.Value().Frames.TotalRenderedFrames == callbacks,
             "cached swapchain blits are not counted as new scene frames");
-        Check(commits > callbacks,"FPS-capped callbacks still fill the discard swapchain");
+        if (mode=="pacing-vsync") {Check(commits>callbacks,"unsubmitted VSync ticks still fill the discard swapchain");}
+        else {Check(commits>=callbacks&&commits<callbacks*10,"timer wakeups do not repeatedly submit cached swapchains");}
     }
 #endif
     if (mode == "callback-error" || mode == "render-error") {

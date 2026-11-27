@@ -49,6 +49,11 @@ struct DebugResource {
     std::uint64_t Bytes=0; // Logical size, zero when unknown/not applicable.
 };
 struct DebugPass {std::string Name,Shader,Pipeline;std::uint64_t DrawCalls=0,Triangles=0;};
+struct UiFrameDebugInfo {
+    bool Composited = false, BitmapUpdated = false;
+    std::uint64_t CanvasRevision = 0, UploadedBytes = 0;
+    double RasterCpuMs = 0, UploadCpuMs = 0;
+};
 struct RenderDebugInfo {
     bool Live=false;
     DebugOptions Options;
@@ -56,6 +61,8 @@ struct RenderDebugInfo {
     std::vector<DebugPass> Passes;
     std::vector<DebugResource> Resources;
     OptimizationStatistics Optimization;
+    std::vector<ParticleEmitterDebugInfo> ParticleEmitters; // Last submitted scene frame.
+    UiFrameDebugInfo Ui; // Last submitted scene frame.
 };
 struct BoneInfluenceStatistics {
     std::size_t SkinnedVertices=0,RigidVertices=0,UnweightedVertices=0;

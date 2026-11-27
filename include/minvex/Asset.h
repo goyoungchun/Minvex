@@ -68,13 +68,14 @@ struct MaterialAsset {
     std::optional<std::size_t> BaseColorTexture;
     bool DoubleSided = false;
     bool Unlit = false;
-    // Negative cutoff means OPAQUE; otherwise MASK. BLEND is not yet supported.
+    // Nonnegative cutoff selects alpha masking. Blending requires a negative cutoff.
     float AlphaCutoff = -1.0f;
     std::optional<std::size_t> NormalTexture; // Linear tangent-space data, TEXCOORD_0.
     float NormalScale = 1.0f;
     ShadingModel Shading = ShadingModel::Basic;
     float MetallicFactor = 1.0f, RoughnessFactor = 1.0f;
     std::optional<std::size_t> MetallicRoughnessTexture; // Linear data: G roughness, B metallic.
+    bool AlphaBlend = false; // Straight alpha, depth-tested without writing depth.
 };
 
 struct MorphTarget {

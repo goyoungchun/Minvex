@@ -16,10 +16,10 @@ DebugRenderer::DebugRenderer(const RenderSettings& s) {
 }
 DebugRenderer::~DebugRenderer() {Destroy();}
 void DebugRenderer::Destroy() noexcept {for (auto p:pipelines_) {if (p.id) {sg_destroy_pipeline(p);}}if (vertices_.id) {sg_destroy_buffer(vertices_);}if (shader_.id) {sg_destroy_shader(shader_);}}
-void DebugRenderer::Prepare(const Scene& scene,const DebugOptions& o,const DebugDraw& commands) {
+void DebugRenderer::Prepare(const Scene& scene,std::span<const RenderItem> items,const DebugOptions& o,const DebugDraw& commands) {
     DebugDraw draw=commands;
     if (o.ShowSkeleton || o.ShowBounds || o.ShowReferencePose || o.View == DebugView::Skeleton || o.View == DebugView::BoundingBox) {
-        for (const auto& item:scene.CollectRenderItems()) {
+        for (const auto& item:items) {
             if (o.ShowSkeleton || o.View == DebugView::Skeleton) {const auto pose=item.Pose ? *item.Pose : scene.EvaluatePose(item.Object);draw.DrawSkeleton(item.Model->Skeleton,pose,item.WorldTransform,{1,.8f,0,1});for (std::size_t i=0;i<item.Model->Skeleton.Joints.size();++i) {if (item.Model->Skeleton.Joints[i].IsJoint) {draw.DrawAxis(item.WorldTransform*pose.Global[i],.05f);}}}
             if (o.ShowReferencePose) {AnimationPlayer reference;reference.Bind(item.Model);draw.DrawSkeleton(item.Model->Skeleton,reference.Evaluate(),item.WorldTransform,{0,1,1,1});}
             if (o.ShowBounds || o.View == DebugView::BoundingBox) {draw.DrawBoundingBox(scene.GetModelBounds(item.Object),{0,1,0,1},item.WorldTransform);}

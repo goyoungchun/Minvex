@@ -27,12 +27,15 @@ void Run() {
     scene.MainCamera.Projection = lv::CameraProjection::Orthographic;
     scene.MainCamera.OrthographicHeight = 2;
     const auto emitter = scene.CreateObject();
+    const auto diagnostics = [&] { return renderer.GetRenderDebugInfo().Value().ParticleEmitters; };
     scene.SetParticleEffect(emitter, lv::MakeParticleEffect({smoke, glow}));
     lv::EmbeddedFrameOptions frame;
     frame.ClearColor = {0, 0, 0, 1};
 
     renderer.Render(scene, target.Target(), frame).Value();
     Check(scene.ParticleCount() == 0, "Embedded Render leaves the simulation clock unchanged");
+    Check(diagnostics().size() == 2 && diagnostics()[0].Path == lv::ParticleRenderPath::None,
+          "empty submission describes each emitter without assigning a render path");
     renderer.Update(scene, 0).Value();
     Check(renderer.Render(scene, target.Target(), frame).Value().SceneRendered, "host update fires initial bursts");
     const auto initial = target.Pixels(renderer);
@@ -64,12 +67,15 @@ void Run() {
     const auto trail = target.Pixels(renderer);
     const auto trailCenter = 4 * (extent * (extent / 2) + 41);
     Check(trail[trailCenter] > 30, "a trail segment appears between the emitter and the particle");
+    Check(diagnostics().at(0).SubmittedParticles == 1, "particle diagnostics count a sprite and its trail once");
     smoke.MaxDrawDistance = 1;
     scene.SetParticleEffect(emitter, lv::MakeParticleEffect({smoke}));
     scene.SeekParticles(emitter, 0.6);
     renderer.Render(scene, target.Target(), frame).Value();
     Check(target.Pixels(renderer)[trailCenter] == 0 && scene.ParticleCount() == 1,
           "distance culling removes trail pixels and preserves simulation");
+    Check(diagnostics().at(0).SubmittedParticles == 0 && diagnostics().at(0).Path == lv::ParticleRenderPath::None,
+          "CPU culling produces zero submitted particles");
     auto shape = smoke;
     shape.MaxDrawDistance = 0;
     shape.Trail = {};
@@ -123,6 +129,23 @@ void Run() {
           std::any_of(shaderResources.begin(), shaderResources.end(), [](const auto& resource) {
               return resource.Name == "Particle GPU simulation output";
           }), "native compute updates position and supplies the on-GPU instance stream to the draw");
+    const auto gpuInfo = diagnostics().at(0);
+    Check(gpuInfo.Object == emitter && gpuInfo.Emitter == 0 && gpuInfo.Path == lv::ParticleRenderPath::Gpu &&
+          gpuInfo.Fallback == lv::ParticleGpuFallback::None && gpuInfo.SubmittedParticles == 1,
+          "the native draw publishes per-emitter compute diagnostics");
+    auto png = glow;
+    png.Flipbook = {lv::LoadParticleTexture(Fixture("ParticleFlipbook.png")), 2, 2, 1};
+    scene.SetParticleEffect(emitter, lv::MakeParticleEffect({glow, png}));
+    scene.SeekParticles(emitter, .5);
+    renderer.Render(scene, target.Target(), frame).Value();
+    const auto mixed = diagnostics();
+    Check(mixed.at(0).Path == lv::ParticleRenderPath::Gpu && mixed.at(1).Path == lv::ParticleRenderPath::Cpu &&
+          mixed.at(1).Requested == lv::ParticleSimulation::Gpu && mixed.at(1).Fallback == lv::ParticleGpuFallback::Texture &&
+          mixed.at(1).SubmittedParticles == 1, "a PNG emitter reports its CPU fallback alongside a GPU emitter");
+    scene.SetVisible(emitter, false);
+    renderer.Render(scene, target.Target(), frame).Value();
+    Check(diagnostics().at(0).Path == lv::ParticleRenderPath::None && diagnostics().at(1).SubmittedParticles == 0,
+          "hidden particle effects leave neither stale paths nor submitted counts");
     renderer.Shutdown().Value();
 }
 } // namespace

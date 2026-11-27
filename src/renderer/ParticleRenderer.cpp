@@ -164,14 +164,16 @@ void ParticleRenderer::Prepare(const Scene& scene, const RenderSettings& setting
     const auto& camera = scene.MainCamera;
 #if !defined(__EMSCRIPTEN__)
     auto* gpu = sg_query_features().compute ? &gpuSprites_ : nullptr;
-    scene.CollectParticleSprites(sprites_, gpu);
+#else
+    std::vector<ParticleGpuSprite>* gpu = nullptr;
+#endif
+    scene.CollectParticleRenderData(sprites_, gpu, &diagnostics_, &tags_);
+#if !defined(__EMSCRIPTEN__)
     if (gpu && !gpu->empty()) {
         if (!compute_) { compute_ = std::make_unique<ParticleComputeRenderer>(settings); }
         compute_->Prepare(*gpu, Mat4::LookAt(camera.Position, camera.Target, camera.Up));
     } else if (compute_) { compute_->Prepare({}, Mat4::Identity()); }
     if (compute_) { triangles_ = 2 * compute_->Count(); }
-#else
-    scene.CollectParticleSprites(sprites_);
 #endif
     if (sprites_.empty()) { textures_.clear(); meshes_.clear(); return; }
 
@@ -194,6 +196,7 @@ void ParticleRenderer::Prepare(const Scene& scene, const RenderSettings& setting
         ++runs_.back().Count;
         instances_.push_back(instance);
     };
+    std::optional<Scene::ParticleRenderTag> lastSubmitted;
     for (std::uint32_t i = 0; i < sprites_.size(); ++i) {
         auto& sprite = sprites_[i];
         if (sprite.Color[3] * 255 + 0.5f < 1) { continue; }
@@ -220,6 +223,15 @@ void ParticleRenderer::Prepare(const Scene& scene, const RenderSettings& setting
                 if ((std::abs(center.X) - radius) * projection.Elements[0] > w ||
                     (std::abs(center.Y) - radius) * projection.Elements[5] > w) { continue; }
             }
+        }
+        // Trail pieces follow their parent in the collected stream. Count a
+        // surviving head or trail once, before alpha sorting reorders the stream.
+        const auto tag = tags_[i];
+        if (!lastSubmitted || lastSubmitted->Emitter != tag.Emitter || lastSubmitted->Sequence != tag.Sequence) {
+            auto& diagnostic = diagnostics_[tag.Emitter];
+            diagnostic.Path = ParticleRenderPath::Cpu;
+            ++diagnostic.SubmittedParticles;
+            lastSubmitted = tag;
         }
         if (sprite.Blend == ParticleBlend::Additive) { append(sprite, center); }
         else {

@@ -123,6 +123,12 @@ void TestFailures() {
     lv::ViewerOptions options; options.Width = 0;
     lv::Viewer invalidOptions(options);
     ErrorIs(invalidOptions.Run(),lv::ErrorCode::InvalidArgument,"bad window settings fail before native initialization");
+    for (int count : {-1, 65536}) {
+        options = {};
+        options.GpuPools.Shaders = count;
+        lv::Viewer invalidPools(options);
+        ErrorIs(invalidPools.Run(), lv::ErrorCode::InvalidArgument, "invalid GPU pool counts fail before native initialization");
+    }
     options = {}; options.CameraControls.MinimumDistance = 0;
     lv::Viewer invalidControls(options);
     ErrorIs(invalidControls.AddModel(Fixture("SharedBox.glb")),lv::ErrorCode::InvalidArgument,"bad camera control settings fail before import");

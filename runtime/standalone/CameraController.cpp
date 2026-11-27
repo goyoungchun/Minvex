@@ -1,4 +1,5 @@
 #include "CameraController.h"
+#include "core/Utf8.h"
 
 #include <algorithm>
 #include <cmath>
@@ -21,25 +22,6 @@ Vec3 Normalize(Vec3 a) {
 Vec3 Rotate(Vec3 v, Vec3 axis, double radians) {
     return Add(Add(Scale(v, std::cos(radians)), Scale(Cross(axis,v), std::sin(radians))), Scale(axis, Dot(axis,v)*(1-std::cos(radians))));
 }
-bool ValidUtf8(const std::string& text) {
-    for (std::size_t i = 0; i < text.size();) {
-        const auto first = static_cast<unsigned char>(text[i++]);
-        if (first < 0x80) { continue; }
-        unsigned remaining = 0, code = 0, minimum = 0;
-        if (first >= 0xC2 && first <= 0xDF) { remaining = 1; code = first & 0x1F; minimum = 0x80; }
-        else if (first >= 0xE0 && first <= 0xEF) { remaining = 2; code = first & 0x0F; minimum = 0x800; }
-        else if (first >= 0xF0 && first <= 0xF4) { remaining = 3; code = first & 0x07; minimum = 0x10000; }
-        else { return false; }
-        if (remaining > text.size()-i) { return false; }
-        while (remaining--) {
-            const auto next = static_cast<unsigned char>(text[i++]);
-            if ((next & 0xC0) != 0x80) { return false; }
-            code = (code << 6) | (next & 0x3F);
-        }
-        if (code < minimum || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) { return false; }
-    }
-    return true;
-}
 }
 
 void ValidateViewerOptions(const ViewerOptions& options) {
@@ -48,6 +30,10 @@ void ValidateViewerOptions(const ViewerOptions& options) {
         throw std::invalid_argument("Viewer requires dimensions in 1..16384 and a nonempty UTF-8 title of at most 126 bytes.");
     }
     for (float c : options.ClearColor) { if (!std::isfinite(c) || c < 0 || c > 1) { throw std::invalid_argument("ClearColor components must be in [0, 1]."); } }
+    const auto& pools = options.GpuPools;
+    for (const int slots : {pools.Buffers, pools.Images, pools.Samplers, pools.Shaders, pools.Pipelines, pools.Views}) {
+        if (slots < 0 || slots > 65535) { throw std::invalid_argument("Viewer GPU pool counts must be in 0..65535 (zero uses the default)."); }
+    }
     const auto& c = options.CameraControls;
     if (!std::isfinite(c.OrbitSpeed) || c.OrbitSpeed < 0 || !std::isfinite(c.PanSpeed) || c.PanSpeed < 0 ||
         !std::isfinite(c.ZoomSpeed) || c.ZoomSpeed < 0 || !std::isfinite(c.MinimumDistance) || c.MinimumDistance <= 0 ||

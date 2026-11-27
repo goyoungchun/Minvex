@@ -347,6 +347,8 @@ struct EmitterState {
     std::vector<ChildBirth> Routed;
     double Time = 0, SpawnTime = 0, DelayElapsed = 0, RatePhase = 0;
     bool Started = false;
+    bool EmissionEnabled = true;
+    unsigned DisabledRoutes = 0;
     std::uint32_t Sequence = 0;
 
     void Reset() noexcept {
@@ -399,8 +401,9 @@ void EmitterContext::Notify(ParticleEventKind kind, const Particle& particle, do
             Published->Events.push_back({Object, Index, kind, particle.Sequence, EndTime - age, position});
         } else { ++Published->Dropped; }
     }
+    if (States[Index].DisabledRoutes & (1u << static_cast<unsigned>(kind))) { return; }
     for (const auto& route : emitter.EventRoutes) {
-        if (route.Event != kind || !Effect.Emitters()[route.Target].Enabled) { continue; }
+        if (route.Event != kind || !Effect.Emitters()[route.Target].Enabled || !States[route.Target].EmissionEnabled) { continue; }
         auto& births = States[route.Target].Routed;
         if (births.size() < births.capacity()) { births.push_back({age, position, route.Count}); }
     }
@@ -655,7 +658,7 @@ struct ParticleInstance {
         bool required = HasRoutes || NeedsEventTransform;
         for (std::size_t i = 0; !required && i < emitters.size(); ++i) {
             const auto& e = emitters[i];
-            required = e.Enabled && e.Space == ParticleSpace::World && (replay || (Emitting && States[i].CanSpawn(e.Spawn, delta)));
+            required = e.Enabled && e.Space == ParticleSpace::World && (replay || (Emitting && States[i].EmissionEnabled && States[i].CanSpawn(e.Spawn, delta)));
         }
         if (!required) { return; }
         SpawnWorld = scene.GetWorldTransform(id);
@@ -668,7 +671,7 @@ struct ParticleInstance {
         for (const auto i : Effect->EmitterOrder()) {
             auto& state = States[i];
             state.Advance({*Effect, States, colliders, events, id, i, PlaybackTime, delta, SpawnWorld, SpawnInverse,
-                           Mix(Seed + i)}, Emitting);
+                           Mix(Seed + i)}, Emitting && state.EmissionEnabled);
             Live += state.Live.size();
         }
     }
@@ -811,6 +814,20 @@ void Scene::SetParticleEmission(ObjectId id, bool enabled) {
     RequireInstance(particles_.get(), id).Emitting = enabled;
 }
 
+void Scene::SetParticleEmitterEmission(ObjectId id, std::size_t emitter, bool enabled) {
+    RequireInstance(particles_.get(), id).States.at(emitter).EmissionEnabled = enabled;
+}
+
+void Scene::SetParticleEventRoutesEnabled(ObjectId id, std::size_t source, ParticleEventKind event, bool enabled) {
+    if (static_cast<unsigned>(event) > static_cast<unsigned>(ParticleEventKind::Death)) {
+        throw std::invalid_argument("Invalid particle event kind.");
+    }
+    auto& routes = RequireInstance(particles_.get(), id).States.at(source).DisabledRoutes;
+    const auto mask = 1u << static_cast<unsigned>(event);
+    if (enabled) { routes &= ~mask; }
+    else { routes |= mask; }
+}
+
 void Scene::UpdateParticles(double delta) {
     if (!InRange(delta, 0, MaxParticleStepSeconds)) {
         throw std::invalid_argument("Particle delta must be finite and in [0,86400] seconds.");
@@ -875,24 +892,53 @@ bool Scene::ParticleObjectVisible(ObjectId id) const {
 }
 
 void Scene::CollectParticleSprites(std::vector<ParticleSprite>& sprites, std::vector<ParticleGpuSprite>* gpu) const {
+    CollectParticleRenderData(sprites, gpu, nullptr, nullptr);
+}
+
+namespace {
+ParticleGpuFallback GpuFallback(const ParticleEmitter& emitter, bool compute) {
+    if (emitter.Simulation != ParticleSimulation::Gpu) { return ParticleGpuFallback::None; }
+    if (emitter.Geometry.Type != ParticleRendererType::Sprite) { return ParticleGpuFallback::Renderer; }
+    if (emitter.Blend != ParticleBlend::Additive) { return ParticleGpuFallback::Blend; }
+    if (emitter.Collision.Mode != ParticleCollision::Off) { return ParticleGpuFallback::Collision; }
+    if (emitter.Trail.Seconds) { return ParticleGpuFallback::Trail; }
+    if (emitter.Flipbook.Texture) { return ParticleGpuFallback::Texture; }
+    return compute ? ParticleGpuFallback::None : ParticleGpuFallback::ComputeUnavailable;
+}
+}
+
+void Scene::CollectParticleRenderData(std::vector<ParticleSprite>& sprites, std::vector<ParticleGpuSprite>* gpu,
+                                      std::vector<ParticleEmitterDebugInfo>* diagnostics, std::vector<ParticleRenderTag>* tags) const {
     sprites.clear();
     if (gpu) { gpu->clear(); }
-    if (!particles_ || !particles_->Live) { return; }
+    if (diagnostics) { diagnostics->clear(); }
+    if (tags) { tags->clear(); }
+    if (!particles_ || (!particles_->Live && !diagnostics)) { return; }
+    if (diagnostics) { diagnostics->reserve(particles_->Emitters); }
     if (sprites.capacity() < particles_->Live) { sprites.reserve(std::bit_ceil(particles_->Live)); }
     std::size_t trailBudget = MaxParticleTrailsPerScene;
     for (const auto& [id, instance] : particles_->Instances) {
-        if (!instance.Live || !ParticleObjectVisible(id)) { continue; }
+        const bool visible = instance.Live && ParticleObjectVisible(id);
+        if (!visible && !diagnostics) { continue; }
         std::optional<Mat4> world;
         for (std::size_t i = 0; i < instance.States.size(); ++i) {
             const auto& state = instance.States[i];
-            if (state.Live.empty()) { continue; }
             const auto& emitter = instance.Effect->Emitters()[i];
+            const auto fallback = GpuFallback(emitter, gpu != nullptr);
+            ParticleEmitterDebugInfo* info = nullptr;
+            if (diagnostics) {
+                diagnostics->push_back({id, i, emitter.Simulation, ParticleRenderPath::None, fallback, 0});
+                info = &diagnostics->back();
+            }
+            if (!visible || state.Live.empty()) { continue; }
             const bool local = emitter.Space == ParticleSpace::Local;
             const auto renderer = emitter.Geometry.Type;
             if ((local || renderer == ParticleRendererType::Beam) && !world) { world = GetWorldTransform(id); }
-            const bool compute = gpu && emitter.Simulation == ParticleSimulation::Gpu &&
-                renderer == ParticleRendererType::Sprite && emitter.Blend == ParticleBlend::Additive &&
-                emitter.Collision.Mode == ParticleCollision::Off && !emitter.Trail.Seconds && !emitter.Flipbook.Texture;
+            const bool compute = emitter.Simulation == ParticleSimulation::Gpu && fallback == ParticleGpuFallback::None;
+            const auto push = [&](const ParticleSprite& sprite, std::uint32_t sequence) {
+                sprites.push_back(sprite);
+                if (tags) { tags->push_back({diagnostics->size() - 1, sequence}); }
+            };
             std::optional<Vec3> ribbonPrevious;
             const auto seed = Mix(instance.Seed + static_cast<std::uint32_t>(i));
             const auto& graphOrder = instance.Effect->GraphOrder(i);
@@ -915,6 +961,7 @@ void Scene::CollectParticleSprites(std::vector<ParticleSprite>& sprites, std::ve
                     const auto accel = local ? TransformVector(*world, emitter.Acceleration) : emitter.Acceleration;
                     if (Finite(origin) && Finite(velocity) && Finite(accel)) {
                         gpu->push_back({origin, velocity, accel, age, emitter.Drag, sprite});
+                        if (info) { info->Path = ParticleRenderPath::Gpu; ++info->SubmittedParticles; }
                     }
                     continue;
                 }
@@ -936,7 +983,7 @@ void Scene::CollectParticleSprites(std::vector<ParticleSprite>& sprites, std::ve
                     if (ribbonPrevious) {
                         sprite.Position = *ribbonPrevious;
                         sprite.TrailEnd = position;
-                        sprites.push_back(sprite);
+                        push(sprite, p.Sequence);
                     }
                     ribbonPrevious = position;
                     continue;
@@ -944,7 +991,7 @@ void Scene::CollectParticleSprites(std::vector<ParticleSprite>& sprites, std::ve
                 if (renderer == ParticleRendererType::Beam) {
                     sprite.TrailEnd = detail::ParticleAdd(position, TransformVector(*world, emitter.Geometry.BeamTarget));
                 }
-                sprites.push_back(sprite);
+                push(sprite, p.Sequence);
                 if (renderer != ParticleRendererType::Sprite) { continue; }
                 const auto& trail = emitter.Trail;
                 if (!trailBudget || !trail.Seconds || !trail.Width || age <= 0) { continue; }
@@ -962,7 +1009,7 @@ void Scene::CollectParticleSprites(std::vector<ParticleSprite>& sprites, std::ve
                     ParticleSprite piece{previous, size * trail.Width * (1 - fraction * 0.75f), 0, 1, tint, emitter.Blend};
                     piece.TrailEnd = end;
                     piece.MaxDrawDistance = emitter.MaxDrawDistance;
-                    sprites.push_back(piece);
+                    push(piece, p.Sequence);
                     previous = end;
                     --trailBudget;
                 }

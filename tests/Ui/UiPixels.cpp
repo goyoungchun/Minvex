@@ -8,7 +8,47 @@ int RunUiPixels() {
         lv::EmbeddedRenderer renderer;lv::EmbeddedOptions options;options.Quality=lv::MakeQualityProfile(lv::QualityPreset::Low);options.Quality.Overrides.TargetFps=0;options.Quality.Overrides.ResolutionScale=.5f;renderer.Initialize(target.Context(),options).Value();lv::Scene scene;const auto output=target.Target();lv::EmbeddedFrameOptions frame;frame.ClearColor={0,0,0,1};
         auto read=[&] {return target.Pixels(renderer);};
         lv::UiElement e;e.Kind=lv::UiKind::Button;e.Text="Hello 한글";e.Layout={20,20,220,70};e.Normal.Fill.fill({1,0,0,1});e.Normal.Radius.fill(12);const auto id=renderer.GetUi().Add(e).Value();const auto first=renderer.Render(scene,output,frame).Value();Check(first.SceneRendered&&first.RenderWidth==W/2,"UI composes at output resolution with half resolution scene");auto pixels=read();Check(pixels[(40*W+30)*4]>240&&pixels[(40*W+30)*4+1]<10,"UI lands at logical coordinates");Check(pixels[(20*W+20)*4]<10,"rounded corner clips fill");std::size_t white=0;for (int y=20;y<90;++y) {for (int x=20;x<240;++x) {if (pixels[(y*W+x)*4+1]>200) {++white;}}}Check(white>20,"native text survives GPU composite");
-        Check(!renderer.Render(scene,output,frame).Value().SceneRendered,"unchanged UI uses on demand cache");e.Normal.Fill.fill({0,1,0,1});renderer.GetUi().Set(id,e).Value();Check(renderer.Render(scene,output,frame).Value().SceneRendered,"UI edit invalidates on demand");pixels=read();Check(pixels[(40*W+30)*4+1]>240&&pixels[(40*W+30)*4]<10,"edited UI replaces cached pixels");
+        const auto dirty = renderer.GetRenderDebugInfo().Value().Ui;
+        Check(dirty.Composited && dirty.BitmapUpdated && dirty.UploadedBytes == W*H*4 && dirty.RasterCpuMs >= 0 && dirty.UploadCpuMs >= 0,
+            "UI diagnostics include raster and upload submission cost for a changed bitmap");
+        Check(!renderer.Render(scene,output,frame).Value().SceneRendered,"unchanged UI uses on demand cache");
+        frame.ForceRedraw = true;
+        renderer.Render(scene,output,frame).Value();
+        const auto cached = renderer.GetRenderDebugInfo().Value().Ui;
+        Check(cached.Composited && !cached.BitmapUpdated && cached.UploadedBytes == 0 && cached.RasterCpuMs == 0 && cached.CanvasRevision == dirty.CanvasRevision,
+            "resubmitting a scene reports UI bitmap reuse");
+        frame.ForceRedraw = false;
+        e.Normal.Fill.fill({0,1,0,1});renderer.GetUi().Set(id,e).Value();Check(renderer.Render(scene,output,frame).Value().SceneRendered,"UI edit invalidates on demand");pixels=read();Check(pixels[(40*W+30)*4+1]>240&&pixels[(40*W+30)*4]<10,"edited UI replaces cached pixels");
+        const auto partial = renderer.GetRenderDebugInfo().Value().Ui;
+        Check(partial.BitmapUpdated && partial.UploadedBytes > 0 && partial.UploadedBytes < dirty.UploadedBytes / 4,
+            "only the changed rectangle is uploaded");
+        lv::UiElement alarm;
+        alarm.Layout = {20,110,180,30};
+        const auto alarmId = renderer.GetUi().Add(alarm).Value();
+        frame.ForceRedraw = true;
+        for (int tick = 0; tick <= 12; ++tick) {
+            const bool reading = tick % 6 == 0;
+            if (reading) { renderer.GetUi().SetRuntimeText(id, std::to_string(tick)).Value(); }
+            if (tick == 4) { renderer.GetUi().SetRuntimeText(alarmId, "Low water").Value(); }
+            renderer.Render(scene, output, frame).Value();
+            const auto current = renderer.GetRenderDebugInfo().Value().Ui;
+            Check(current.BitmapUpdated == (reading || tick == 4) && (current.UploadedBytes > 0) == current.BitmapUpdated,
+                "UI diagnostics distinguish 5 Hz sensor updates and an immediate alarm in a 30 Hz update schedule");
+        }
+        renderer.GetUi().SetRuntimeText(id, std::nullopt).Value();
+        renderer.GetUi().Remove(alarmId).Value();
+        frame.ForceRedraw = false;
+        // A CPU export can advance the raster cache ahead of the GPU bitmap.
+        auto moved=e;
+        moved.Layout.X+=300;
+        renderer.GetUi().Set(id,moved).Value();
+        renderer.GetUi().Rasterize(W,H).Value();
+        renderer.Render(scene,output,frame).Value();
+        pixels=read();
+        Check(pixels[(40*W+30)*4+1]<10 && pixels[(40*W+330)*4+1]>240 &&
+              renderer.GetRenderDebugInfo().Value().Ui.UploadedBytes==dirty.UploadedBytes,
+            "the GPU fully refreshes when its revision predates a CPU raster export");
+        renderer.GetUi().Set(id,e).Value();
         frame.UiScale=2;renderer.Render(scene,output,frame).Value();pixels=read();Check(pixels[(80*W+60)*4+1]>240&&pixels[(25*W+25)*4+1]<10,"DPI changes rendering without changing logical layout");
         frame.UiScale=1.5f;e.Layout.AnchorX=e.Layout.PivotX=1;e.Layout.X=-12;renderer.GetUi().Set(id,e).Value();renderer.Render(scene,output,frame).Value();pixels=read();Check(pixels[(60*W+330)*4+1]>240,"fractional DPI preserves right anchor layout");renderer.GetUi().ProcessInput({lv::UiInputType::Down,330/1.5f,60/1.5f},W/1.5f,H/1.5f).Value();renderer.GetUi().ProcessInput({lv::UiInputType::Up,330/1.5f,60/1.5f},W/1.5f,H/1.5f).Value();Check(renderer.GetUi().PollActivations().Value()==std::vector<lv::UiId>{id},"fractional DPI hit-test matches composed pixels");
         renderer.GetUi().Clear().Value();renderer.Render(scene,output,frame).Value();pixels=read();Check(pixels[(60*W+330)*4+1]<10,"clearing canvas removes stale overlay");

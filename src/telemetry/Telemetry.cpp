@@ -23,7 +23,9 @@ ResourceCost Cost(const Scene& scene,const QualityState& quality,std::uint64_t& 
     if(settings.Lighting==LightingMode::Advanced){if(!scene.RectLights.empty()){cost.TextureBytes+=65536;}if(settings.Shadow!=ShadowMode::Off){cost.RenderTargetBytes+=detail::ShadowLayout(scene).Bytes();}}
     std::unordered_set<const ModelAsset*> assets;
     std::unordered_map<const ModelAsset*,std::unordered_set<std::size_t>> meshes,images;
-    for (const auto& item:scene.CollectRenderItems()) {
+    bool usesMeshFallback = false;
+    const auto items = scene.CollectRenderItems();
+    for (const auto& item:items) {
         if (assets.insert(item.Model.get()).second) {detail::HashResourceIdentity(signature,item.Model.get());}
         const auto& asset=*item.Model;
         for (const auto& part:asset.Parts) {
@@ -31,7 +33,8 @@ ResourceCost Cost(const Scene& scene,const QualityState& quality,std::uint64_t& 
             for (const auto& primitive:asset.Meshes.at(part.MeshIndex).Primitives) {
                 if (firstMesh) {
                     cost.BufferBytes=Add(cost.BufferBytes,Add(Multiply(primitive.Geometry.Vertices.size(),sizeof(Vertex)),Multiply(primitive.Geometry.Indices.size(),detail::IndexElementBytes(primitive.Geometry.Vertices.size()))));
-                    if (settings.Lod) {for (const auto& lod:primitive.Lods) {cost.BufferBytes=Add(cost.BufferBytes,Multiply(lod.Indices.size(),detail::IndexElementBytes(primitive.Geometry.Vertices.size())));}}cost.TextureBytes=Add(cost.TextureBytes,4);cost.BufferBytes=Add(cost.BufferBytes,Multiply(Multiply(primitive.Geometry.Vertices.size(),primitive.MorphTargets.size()),48));
+                    if (settings.Lod) {for (const auto& lod:primitive.Lods) {cost.BufferBytes=Add(cost.BufferBytes,Multiply(lod.Indices.size(),detail::IndexElementBytes(primitive.Geometry.Vertices.size())));}}cost.BufferBytes=Add(cost.BufferBytes,Multiply(Multiply(primitive.Geometry.Vertices.size(),primitive.MorphTargets.size()),48));
+                    usesMeshFallback = true;
                 }
                 const auto& material=scene.GetMaterial(item.Object,primitive.MaterialIndex);
                 for (int role=0;role<3;++role) {
@@ -47,7 +50,19 @@ ResourceCost Cost(const Scene& scene,const QualityState& quality,std::uint64_t& 
             }
         }
     }
-    detail::HashMaterialResources(signature,scene);detail::HashLightAllocations(signature,scene,settings.Lighting==LightingMode::Advanced,settings.Shadow!=ShadowMode::Off);cost.TotalBytes=Add(cost.RenderTargetBytes,Add(cost.TextureBytes,cost.BufferBytes));return cost;
+    if (usesMeshFallback) {cost.TextureBytes=Add(cost.TextureBytes,4);}
+    detail::HashMaterialResources(signature,items);
+    detail::HashLightAllocations(signature,scene,settings.Lighting==LightingMode::Advanced,settings.Shadow!=ShadowMode::Off);
+    if (const auto& panorama = scene.GetEnvironmentPanorama().Image) {
+        detail::HashResourceIdentity(signature, panorama.get());
+        int width = panorama->Width, height = panorama->Height;
+        while (width > settings.MaxTextureSize || height > settings.MaxTextureSize) {
+            width = std::max(1, width / 2);
+            height = std::max(1, height / 2);
+        }
+        cost.TextureBytes = Add(cost.TextureBytes, Multiply(Multiply(width, height), 4));
+    }
+    cost.TotalBytes=Add(cost.RenderTargetBytes,Add(cost.TextureBytes,cost.BufferBytes));return cost;
 }
 }
 void FrameMonitor::Record(double now,double cpuMs,std::uint64_t draws,std::uint64_t triangles) {

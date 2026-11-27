@@ -30,12 +30,14 @@ struct SceneRenderStats {
 // Draw inside it, and destroy before sg_shutdown().
 class SceneRenderer final {
 public:
-    explicit SceneRenderer(RenderSettings settings = {});
+    explicit SceneRenderer(RenderSettings settings = {}, std::shared_ptr<MeshResourceCache> cache = {});
     ~SceneRenderer();
     SceneRenderer(const SceneRenderer&) = delete;
     SceneRenderer& operator=(const SceneRenderer&) = delete;
 
     void Prepare(const Scene& scene);
+    void Prepare(const Scene& scene, std::vector<RenderItem> items);
+    std::span<const RenderItem> Items() const noexcept { return items_; }
     void Draw(const Scene& scene, float aspect,const ShadowSampling& shadow={});
     void DrawShadow(const Scene& scene,const Mat4& lightViewProjection,ShaderVec4 radial={},bool append=false);
     void ResetShadowStatistics() noexcept {stats_.LastShadowDrawCalls=stats_.LastShadowTriangles=stats_.LastLocalShadowDrawCalls=stats_.LastLocalShadowTriangles=0;}
@@ -47,11 +49,13 @@ public:
     void SetDrawSettings(const RenderSettings& settings) noexcept {settings_=settings;}
     void SetDebugOptions(const DebugOptions& options) noexcept {debug_=options;}
     void Inspect(std::vector<DebugResource>& resources) const;
+    std::span<const ParticleEmitterDebugInfo> ParticleDiagnostics() const noexcept;
     void SetViewport(float aspect,int height) noexcept {aspect_=aspect;height_=height;viewportKnown_=true;}
 
 private:
     struct GpuModel;
     struct AreaLookup;
+    std::shared_ptr<MeshResourceCache> meshResources_;
     std::unique_ptr<AreaLookup> area_;
     std::unique_ptr<ParticleRenderer> particles_;
     std::vector<RenderItem> items_; // One pose/world snapshot shared by every pass of this frame.

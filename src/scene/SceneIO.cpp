@@ -19,6 +19,7 @@ using Json = nlohmann::json;
 constexpr std::size_t MaxBytes = 16 * 1024 * 1024, MaxObjects = 65536, MaxAssets = 4096, MaxDepth = 256;
 constexpr std::uint64_t SceneVersion = 13, TerrainSceneVersion = 14, ParticleSceneVersion = 15;
 constexpr std::uint64_t AdvancedParticleSceneVersion = 16;
+constexpr std::uint64_t ExtendedSceneVersion = 17;
 void Require(bool valid, const char* message) { if (!valid) { throw std::invalid_argument(message); } }
 std::string Utf8(const std::filesystem::path& path) {
     const auto text = path.generic_u8string(); return {text.begin(),text.end()};
@@ -138,15 +139,18 @@ Json Materials(const SceneObject& object) {
     Json result=Json::array();if (!object.Model) {Require(object.MaterialOverrides.empty(),"Empty object cannot have material overrides.");return result;}
     for (std::size_t index=0;index<object.Model->Materials.size();++index) {const auto found=object.MaterialOverrides.find(index);if (found == object.MaterialOverrides.end()) {continue;}const auto& m=found->second;ValidateMaterial(m,*object.Model);
         Json entry{{"index",index},{"sourceName",String(object.Model->Materials[index].Name)},{"name",String(m.Name)},{"baseColor",m.BaseColor},{"doubleSided",m.DoubleSided},{"unlit",m.Unlit},{"alphaCutoff",m.AlphaCutoff},{"normalScale",m.NormalScale},{"shading",static_cast<unsigned>(m.Shading)},{"metallic",m.MetallicFactor},{"roughness",m.RoughnessFactor},{"baseTexture",nullptr},{"normalTexture",nullptr},{"metallicRoughnessTexture",nullptr}};
+        if (m.AlphaBlend) { entry["alphaBlend"] = true; }
         if (m.BaseColorTexture) {entry["baseTexture"]=*m.BaseColorTexture;}if (m.NormalTexture) {entry["normalTexture"]=*m.NormalTexture;}if (m.MetallicRoughnessTexture) {entry["metallicRoughnessTexture"]=*m.MetallicRoughnessTexture;}result.push_back(std::move(entry));
     }Require(result.size() == object.MaterialOverrides.size(),"Invalid overridden material index.");return result;
 }
-void Materials(const Json& entries,Scene& scene,ObjectId id) {
+void Materials(const Json& entries,Scene& scene,ObjectId id,std::uint64_t version) {
     const auto& object=scene.GetObject(id);Require(entries.is_array() && entries.size()<=(object.Model ? object.Model->Materials.size():0),"Invalid material override list.");std::unordered_set<std::size_t> seen;
     for (const auto& entry:entries) {const auto index=static_cast<std::size_t>(UInt(entry.at("index")));Require(seen.insert(index).second,"Duplicate material override index.");
         const auto& source=scene.GetMaterial(id,index);Require(String(entry.at("sourceName")) == source.Name,"Saved material identity changed.");auto m=source;m.Name=String(entry.at("name"));
         const auto& color=entry.at("baseColor");Require(color.is_array() && color.size() == 4,"Expected four material color components.");for (int i=0;i<4;++i) {m.BaseColor[i]=Float(color[i]);}
         m.DoubleSided=entry.at("doubleSided").get<bool>();m.Unlit=entry.at("unlit").get<bool>();m.AlphaCutoff=Float(entry.at("alphaCutoff"));m.NormalScale=Float(entry.at("normalScale"));m.Shading=static_cast<ShadingModel>(UInt(entry.at("shading"),2));m.MetallicFactor=Float(entry.at("metallic"));m.RoughnessFactor=Float(entry.at("roughness"));
+        Require(version >= ExtendedSceneVersion || !entry.contains("alphaBlend"), "Alpha blend overrides require Scene v17.");
+        m.AlphaBlend = entry.value("alphaBlend", false);
         const auto texture=[&](const char* key)->std::optional<std::size_t> {const auto& value=entry.at(key);return value.is_null() ? std::nullopt:std::optional<std::size_t>(static_cast<std::size_t>(UInt(value)));};m.BaseColorTexture=texture("baseTexture");m.NormalTexture=texture("normalTexture");m.MetallicRoughnessTexture=texture("metallicRoughnessTexture");scene.SetMaterial(id,index,m);
     }
 }
@@ -516,12 +520,10 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
         // Model sources are canonical. Resolve directory aliases (e.g. macOS
         // /var -> /private/var) before computing portable relative references.
         const auto base = std::filesystem::weakly_canonical(std::filesystem::absolute(path).parent_path());
-        Json root{{"format","MinvexScene"},{"version",SceneVersion},{"assets",Json::array()},{"objects",Json::array()},{"blendTrees",Json::array()},{"sharedSkeletons",Json::array()}};
+        Json root{{"format","MinvexScene"},{"assets",Json::array()},{"objects",Json::array()},{"blendTrees",Json::array()},{"sharedSkeletons",Json::array()}};
         const bool hasParticles = scene.HasParticleEffects();
-        if (hasParticles) {
-            root["version"] = ParticleSceneVersion;
-            root["particleEffects"] = Json::array();
-        }
+        auto version = hasParticles ? ParticleSceneVersion : SceneVersion;
+        if (hasParticles) { root["particleEffects"] = Json::array(); }
         TreeIds trees;
         std::unordered_map<const ParticleEffect*,std::size_t> particleEffects;
         std::unordered_map<const SharedSkeletonAsset*, std::size_t> skeletons;
@@ -532,7 +534,7 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
             Require(assetIds.size() < MaxAssets,"Scene asset limit exceeded.");
             const auto id = assetIds.size()+1;
             if (model->Terrain) {
-                if (!hasParticles) { root["version"] = TerrainSceneVersion; }
+                version = std::max(version, TerrainSceneVersion);
                 root["assets"].push_back({{"id",id},{"terrain",Terrain(*model->Terrain)}});
                 assetIds.emplace(model.get(),id);
                 return;
@@ -564,13 +566,17 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
                 {"position",Vector(t.Position)},{"rotation",rotation},{"scale",Vector(t.Scale)},{"animation",Animation(object,trees)},{"materials",Materials(object)},
                 {"sharedSkeleton", object.SharedSkeleton ? skeletons.at(object.SharedSkeleton.get()) : 0},
                 {"leaderPose", object.LeaderPose ? ids.at(object.LeaderPose) : 0}, {"sockets", Sockets(object.Sockets)}, {"attachmentSocket", String(object.AttachmentSocket)}});
+            if (!object.UserKey.empty()) { root["objects"].back()["userKey"] = object.UserKey; }
+            if (!object.UserMetadata.empty()) { root["objects"].back()["metadata"] = object.UserMetadata; }
+            const bool blends = std::ranges::any_of(object.MaterialOverrides, [](const auto& entry) { return entry.second.AlphaBlend; });
+            if (!object.UserKey.empty() || !object.UserMetadata.empty() || blends) { version = ExtendedSceneVersion; }
             if (hasParticles) {
                 const auto binding = scene.GetParticleEffect(id);
                 if (binding) {
                     const auto [entry, added] = particleEffects.try_emplace(binding.Effect.get(), particleEffects.size() + 1);
                     if (added) {
                         for (const auto& emitter : binding.Effect->Emitters()) {
-                            if (HasAdvancedParticles(emitter)) { root["version"] = AdvancedParticleSceneVersion; }
+                            if (HasAdvancedParticles(emitter)) { version = std::max(version, AdvancedParticleSceneVersion); }
                             if (emitter.Geometry.Mesh) {
                                 Require(!emitter.Geometry.Mesh->SourcePath.empty() || bool(emitter.Geometry.Mesh->Terrain),
                                         "A custom particle mesh requires a Scene asset source.");
@@ -593,6 +599,8 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
                 }
             }
         }
+        root["version"] = version;
+        if (version >= ParticleSceneVersion && !hasParticles) { root["particleEffects"] = Json::array(); }
         const auto& c = scene.MainCamera; const auto& l = scene.Sun;
         root["camera"] = {{"position",Vector(c.Position)},{"target",Vector(c.Target)},{"up",Vector(c.Up)},
             {"fov",c.VerticalFovRadians},{"near",c.NearPlane},{"far",c.FarPlane},{"projection",c.Projection == CameraProjection::Orthographic ? "orthographic":"perspective"},{"orthographicHeight",c.OrthographicHeight}};
@@ -611,7 +619,7 @@ Result<void> SaveScene(const Scene& scene, const std::filesystem::path& path, st
 Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry& registry) {
     try {
         const auto root = ReadJson(path); const auto version = UInt(root.at("version"));
-        Require(detail::MatchesDocumentFormat(root.at("format"), "MinvexScene") && (version >= 1 && version <= AdvancedParticleSceneVersion),"Unsupported scene format/version.");
+        Require(detail::MatchesDocumentFormat(root.at("format"), "MinvexScene") && (version >= 1 && version <= ExtendedSceneVersion),"Unsupported scene format/version.");
         const auto& assets = root.at("assets"); const auto& objects = root.at("objects");
         Require(assets.is_array() && assets.size() <= MaxAssets,"Invalid scene asset list.");
         Require(objects.is_array() && objects.size() <= MaxObjects,"Invalid scene object list.");
@@ -633,10 +641,19 @@ Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry&
         }
         for (const auto& object : objects) {
             Require(version >= ParticleSceneVersion || !object.contains("particles"), "Particle bindings require Scene v15.");
+            Require(version >= ExtendedSceneVersion || (!object.contains("userKey") && !object.contains("metadata")), "User keys and metadata require Scene v17.");
             const auto id = UInt(object.at("id"));
             Require(id && !ids.contains(id),"Duplicate/zero object ID.");
             const auto runtimeId = scene.CreateObject(String(object.at("name")));
             ids.emplace(id,runtimeId);
+            if (object.contains("userKey")) { scene.SetUserKey(runtimeId, String(object.at("userKey"))); }
+            if (object.contains("metadata")) {
+                const auto& metadata = object.at("metadata");
+                Require(metadata.is_object() && metadata.size() <= MaxSceneObjectMetadataEntries, "Invalid Scene metadata object.");
+                for (const auto& [key, value] : metadata.items()) {
+                    scene.SetUserMetadata(runtimeId, key, String(value));
+                }
+            }
             Transform t; t.Position = Vector(object.at("position")); t.Scale = Vector(object.at("scale"));
             const auto& rotation = object.at("rotation"); Require(rotation.is_array() && rotation.size() == 4,"Expected a quaternion.");
             t.Rotation = {Float(rotation[0]),Float(rotation[1]),Float(rotation[2]),Float(rotation[3])};
@@ -693,7 +710,7 @@ Result<SceneArchive> LoadScene(const std::filesystem::path& path, AssetRegistry&
             const auto asset = UInt(object.at("asset"));
             if (asset) { scene.SetModel(ids.at(UInt(object.at("id"))),models.at(asset)); }
             if (version >= 2) { Animation(object.at("animation"),scene,ids.at(UInt(object.at("id"))),version>=6,version>=8,version>=9 ? &trees:nullptr,version>=10,version>=11); }
-            if (version>=7) {Materials(object.at("materials"),scene,ids.at(UInt(object.at("id"))));}
+            if (version>=7) {Materials(object.at("materials"),scene,ids.at(UInt(object.at("id"))),version);}
         }
         if (version >= 12) {
             std::unordered_map<std::uint64_t, SharedSkeletonHandle> skeletons;

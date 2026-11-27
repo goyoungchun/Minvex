@@ -266,6 +266,44 @@ void SceneSurfaceCollisions() {
     scene.CollectParticleSprites(sprites);
     Check(sprites.size() == 1 && Near(sprites[0].Position.Y, 0), "collider cache rebuilds after visibility changes");
 }
+
+void RuntimeEmitterGates() {
+    lv::ParticleEmitter water, splash;
+    water.Spawn = {0, 0, {{0, 1}, {1, 1}, {2, 1}}};
+    water.Initial.Lifetime = {.25f, .25f};
+    water.EmitEvents = true;
+    water.EventRoutes = {{lv::ParticleEventKind::Death, 1, 1}};
+    splash.Spawn.Rate = 0;
+    splash.Initial.Lifetime = {3, 3};
+    const auto effect = lv::MakeParticleEffect({water, splash});
+    lv::Scene scene;
+    const auto tank = scene.CreateObject();
+    const auto other = scene.CreateObject();
+    scene.SetParticleEffect(tank, effect);
+    scene.SetParticleEffect(other, effect);
+    scene.UpdateParticles(0);
+    scene.SetParticleEventRoutesEnabled(tank, 0, lv::ParticleEventKind::Death, false);
+    Check(scene.ParticleCount(tank) == 1 && scene.ParticleTime(tank) == 0, "toggling a route keeps existing water and its clock");
+    scene.UpdateParticles(.5);
+    const auto events = scene.PollParticleEvents();
+    Check(events.Events.size() == 4 && scene.ParticleCount(tank) == 0 && scene.ParticleCount(other) == 1,
+          "disabled routes preserve published events and leave other effect instances active");
+    scene.SetParticleEventRoutesEnabled(tank, 0, lv::ParticleEventKind::Death, true);
+    scene.UpdateParticles(.75);
+    Check(scene.ParticleCount(tank) == 1, "only new source events are routed after re-enabling");
+    scene.SetParticleEmitterEmission(tank, 1, false);
+    scene.UpdateParticles(1);
+    Check(scene.ParticleCount(tank) == 1 && scene.ParticleTime(tank) == 2.25,
+          "disabling the target preserves its live splash and rejects new routed births");
+    scene.SetParticleEmitterEmission(tank, 0, false);
+    scene.RestartParticles(tank);
+    scene.UpdateParticles(.5);
+    Check(scene.ParticleCount(tank) == 0, "emitter gates survive restart and block scheduled births");
+    scene.SetParticleEmitterEmission(tank, 0, true);
+    scene.UpdateParticles(0);
+    Check(scene.ParticleCount(tank) == 1, "scheduled emission resumes from its paused cursor");
+    Rejects([&] { scene.SetParticleEventRoutesEnabled(tank, 0, static_cast<lv::ParticleEventKind>(8), true); }, "invalid event kind is rejected");
+}
 } // namespace
 
 int main() {
@@ -275,6 +313,7 @@ int main() {
     ExtendedModules();
     CollisionAndTrails();
     EventRoutesAndGraph();
+    RuntimeEmitterGates();
     SceneSurfaceCollisions();
     return Finish();
 }

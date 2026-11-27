@@ -47,6 +47,25 @@ bool StandaloneApplicationAvailable() noexcept {
 #endif
 }
 
+#if defined(__APPLE__)
+double StandaloneDisplayDeadline(int targetFps) noexcept {
+    if (!_sapp_macos_mtl_display_link_active()) { return 0; }
+    NSScreen* screen = _sapp.macos.window.screen;
+    if (!screen) { screen = NSScreen.mainScreen; }
+    const NSInteger refresh = screen.maximumFramesPerSecond;
+    if (refresh > 0) {
+        // Preserve native refresh on displays that cannot divide cleanly.
+        // The shared scheduler still handles returned ticks and rate changes.
+        const float preferred = targetFps > 0 && refresh % targetFps == 0 ? targetFps : refresh;
+        CADisplayLink* link = _sapp.mtl.display_link;
+        if (link.preferredFrameRateRange.preferred != preferred) {
+            link.preferredFrameRateRange = CAFrameRateRange{preferred, preferred, preferred};
+        }
+    }
+    return _sapp.mtl.display_link.targetTimestamp;
+}
+#endif
+
 void RunStandaloneApplication(const sapp_desc& description) {
     auto branded = description;
     if (!branded.icon.sokol_default && !branded.icon.images[0].pixels.ptr) {

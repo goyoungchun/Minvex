@@ -19,6 +19,7 @@
   "terrainSceneVersion": 14,
   "particleSceneVersion": 15,
   "advancedParticleSceneVersion": 16,
+  "extendedSceneVersion": 17,
   "poseVersion": 1,
   "qualityVersion": 2,
   "uiVersion": 3,

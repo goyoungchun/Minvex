@@ -41,3 +41,26 @@ void main() {
 }
 @end
 @program post present_vs post_fs
+
+@fs panorama_fs
+layout(binding=0) uniform panorama_params {
+    vec4 camera_right;
+    vec4 camera_up;
+    vec4 camera_forward;
+    vec4 panorama_options;
+};
+layout(binding=0) uniform texture2D panorama_texture;
+layout(binding=0) uniform sampler panorama_sampler;
+in vec2 uv;
+out vec4 frag_color;
+void main() {
+    vec2 screen = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    vec3 ray = normalize(camera_forward.xyz + screen.x * camera_right.xyz + screen.y * camera_up.xyz);
+    float longitude = abs(ray.x) + abs(ray.z) > 1e-6 ? atan(ray.x, -ray.z) : 0.0;
+    vec2 spherical = vec2(0.5 + longitude / 6.28318530718 - panorama_options.x,
+                          acos(clamp(ray.y, -1.0, 1.0)) / 3.14159265359);
+    vec3 color = textureLod(sampler2D(panorama_texture, panorama_sampler), spherical, 0.0).rgb;
+    frag_color = vec4(color * panorama_options.y, 1.0);
+}
+@end
+@program panorama present_vs panorama_fs

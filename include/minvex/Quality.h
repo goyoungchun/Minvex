@@ -116,6 +116,7 @@ bool IntersectsFrustum(const Bounds& bounds, const Mat4& world, const Mat4& view
 class RenderScheduler {
 public:
     bool Due(double now, int targetFps) const;
+    double SecondsUntilDue(double now, int targetFps) const; // Zero when eligible.
     bool NeedsRender(OnDemandMode mode, std::uint64_t signature, bool dynamic) const noexcept;
     void Submitted(double now, std::uint64_t signature) noexcept;
     void Invalidate() noexcept { valid_ = false; }

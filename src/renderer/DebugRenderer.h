@@ -6,7 +6,7 @@ class DebugRenderer final {
 public:
     explicit DebugRenderer(const RenderSettings& settings);
     ~DebugRenderer();
-    void Prepare(const Scene& scene,const DebugOptions& options,const DebugDraw& commands);
+    void Prepare(const Scene& scene,std::span<const RenderItem> items,const DebugOptions& options,const DebugDraw& commands);
     void Draw(const Mat4& viewProjection,bool depthTest);
     void Inspect(std::vector<DebugResource>& resources) const;
     std::size_t LineCount() const noexcept {return lines_;}

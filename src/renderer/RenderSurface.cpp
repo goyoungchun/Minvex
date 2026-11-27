@@ -6,6 +6,8 @@
 #include "GraphicsTelemetry.h"
 #include "DebugRenderer.h"
 #include "DebugResources.h"
+#include "TextureData.h"
+#include "telemetry/ResourceSignature.h"
 #include "debug.glsl.h"
 #include "present.glsl.h"
 #include <algorithm>
@@ -13,6 +15,8 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <numbers>
+#include <unordered_set>
 
 namespace lv::detail {
 namespace {void Require(bool value,const char* message) {if (!value) {throw std::runtime_error(message);}}}
@@ -45,6 +49,9 @@ struct RenderSurface::Targets {
 };
 struct RenderSurface::ShadowTargets {
     std::uint64_t Signature=0;bool Valid=false;
+    std::array<float,3> Direction{};
+    Mat4 ViewProjection=Mat4::Identity();
+    Vec3 Extent{1,1,1};
     sg_image Color{},Depth{};sg_view ColorView{},DepthView{},Texture{};sg_sampler Sampler{};
     explicit ShadowTargets(int size) {
         try {sg_image_desc d{};d.width=d.height=size;d.sample_count=1;d.pixel_format=SG_PIXELFORMAT_R32F;d.usage.color_attachment=true;Color=sg_make_image(d);d.pixel_format=SG_PIXELFORMAT_DEPTH;d.usage={};d.usage.depth_stencil_attachment=true;Depth=sg_make_image(d);
@@ -71,6 +78,83 @@ struct RenderSurface::Presenter {
     }
     void Destroy() noexcept {if (PostPipeline.id) {sg_destroy_pipeline(PostPipeline);}if (PostShader.id) {sg_destroy_shader(PostShader);}if (Pipeline.id) {sg_destroy_pipeline(Pipeline);}if (ColorOnlyPipeline.id) {sg_destroy_pipeline(ColorOnlyPipeline);}if (Shader.id) {sg_destroy_shader(Shader);}if (Sampler.id) {sg_destroy_sampler(Sampler);}Pipeline=ColorOnlyPipeline=PostPipeline={};Shader=PostShader={};Sampler={};}
     ~Presenter() {Destroy();}
+};
+struct RenderSurface::Panorama {
+    std::shared_ptr<const ImageAsset> Source;
+    int Samples, TextureLimit;
+    bool Hdr;
+    sg_shader Shader{};
+    sg_pipeline Pipeline{};
+    sg_image Image{};
+    sg_view View{};
+    sg_sampler Sampler{};
+    std::uint64_t Bytes = 0;
+
+    Panorama(const EnvironmentPanorama& panorama, const RenderSettings& settings)
+        : Source(panorama.Image), Samples(settings.MsaaSamples), TextureLimit(settings.MaxTextureSize), Hdr(settings.PostProcessing) {
+        try {
+            const auto packed = PackTexture(*Source, TextureLimit, true, false, false);
+            sg_image_desc image{};
+            image.width = packed.Width;
+            image.height = packed.Height;
+            image.pixel_format = SG_PIXELFORMAT_SRGB8A8;
+            Bytes = static_cast<std::uint64_t>(packed.Width) * packed.Height * 4;
+            image.data = {packed.Pixels.data(), static_cast<std::size_t>(Bytes)};
+            image.label = "environment-panorama";
+            Image = sg_make_image(image);
+            RequireGpuResource(sg_query_image_state(Image), Image.id, ImagePool, "panorama texture");
+            sg_view_desc view{};
+            view.texture.image = Image;
+            View = sg_make_view(view);
+            RequireGpuResource(sg_query_view_state(View), View.id, ViewPool, "panorama texture view");
+            sg_sampler_desc sampler{};
+            sampler.min_filter = sampler.mag_filter = SG_FILTER_LINEAR;
+            sampler.wrap_u = SG_WRAP_REPEAT;
+            sampler.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
+            Sampler = sg_make_sampler(sampler);
+            RequireGpuResource(sg_query_sampler_state(Sampler), Sampler.id, SamplerPool, "panorama sampler");
+            Shader = sg_make_shader(panorama_shader_desc(sg_query_backend()));
+            RequireGpuResource(sg_query_shader_state(Shader), Shader.id, ShaderPool, "panorama shader");
+            sg_pipeline_desc pipeline{};
+            pipeline.shader = Shader;
+            pipeline.sample_count = Samples;
+            pipeline.colors[0].pixel_format = Hdr ? SG_PIXELFORMAT_RGBA16F : sg_query_desc().environment.defaults.color_format;
+            pipeline.depth.compare = SG_COMPAREFUNC_ALWAYS;
+            pipeline.label = "environment-panorama";
+            Pipeline = sg_make_pipeline(pipeline);
+            RequireGpuResource(sg_query_pipeline_state(Pipeline), Pipeline.id, PipelinePool, "panorama pipeline");
+        } catch (...) { Destroy(); throw; }
+    }
+
+    ~Panorama() { Destroy(); }
+    void Destroy() noexcept {
+        if (Pipeline.id) { sg_destroy_pipeline(Pipeline); }
+        if (Shader.id) { sg_destroy_shader(Shader); }
+        if (Sampler.id) { sg_destroy_sampler(Sampler); }
+        if (View.id) { sg_destroy_view(View); }
+        if (Image.id) { sg_destroy_image(Image); }
+    }
+    bool Matches(const EnvironmentPanorama& panorama, const RenderSettings& settings) const noexcept {
+        return Source == panorama.Image && Samples == settings.MsaaSamples && Hdr == settings.PostProcessing &&
+            TextureLimit == settings.MaxTextureSize;
+    }
+    void Draw(const EnvironmentPanorama& panorama, const Camera& camera, float aspect) const {
+        const auto view = Mat4::LookAt(camera.Position, camera.Target, camera.Up).Elements;
+        const auto y = std::tan(camera.VerticalFovRadians * .5f);
+        const auto x = y * aspect;
+        panorama_params_t params{};
+        params.camera_right = {view[0] * x, view[4] * x, view[8] * x, 0};
+        params.camera_up = {view[1] * y, view[5] * y, view[9] * y, 0};
+        params.camera_forward = {-view[2], -view[6], -view[10], 0};
+        params.panorama_options = {panorama.RotationRadians / (2 * std::numbers::pi_v<float>), panorama.Intensity, 0, 0};
+        sg_bindings bindings{};
+        bindings.views[VIEW_panorama_texture] = View;
+        bindings.samplers[SMP_panorama_sampler] = Sampler;
+        sg_apply_pipeline(Pipeline);
+        sg_apply_bindings(bindings);
+        sg_apply_uniforms(UB_panorama_params, SG_RANGE(params));
+        sg_draw(0, 3, 1);
+    }
 };
 struct RenderSurface::DebugPreview {
     sg_shader Shader{};sg_pipeline Pipeline{};
@@ -100,11 +184,15 @@ void RenderSurface::SetUi(const UiCanvas* canvas,float scale) {
     ui_=canvas;uiRevision_=revision;uiScale_=scale;
 }
 Result<void> RenderSurface::Fail(lv::Error error) {state_.LastError=error;return Result<void>::Failure(std::move(error));}
+void RenderSurface::RecordPoolExhaustion(unsigned item) noexcept {
+    if (applying_ && !applyingPoolError_[0]) { DescribeFullPool(applyingPoolError_, sizeof(applyingPoolError_), item); }
+}
 Result<void> RenderSurface::ApplyQuality(const QualityProfile& profile,const Scene& scene,int width,int height) {
     if (!sg_isvalid() || sg_query_pass_state() != SG_PASSSTATE_NONE || applying_) {return Fail({ErrorCode::InvalidState,"Apply quality outside render passes on the graphics thread.","Apply from OnFrame or between frames.",{}});}
     const auto caps=QueryQualityCapabilities();auto resolved=ResolveQuality(profile,caps,std::max(1,width),std::max(1,height));
     if (!resolved) {return Fail(resolved.Error());}
     if (((debug_.View == DebugView::ShadowMap || debug_.View == DebugView::ShadowVisibility) && resolved.Value().Effective->Shadow == ShadowMode::Off) || (debug_.View >= DebugView::ShadowBlockers && debug_.View <= DebugView::ShadowPenumbra && resolved.Value().Effective->Shadow != ShadowMode::Pcss)) {return Fail({ErrorCode::UnsupportedFeature,"The selected shadow diagnostic requires compatible shadow settings.","Select Lit before disabling shadows.",{}});}
+    applyingPoolError_[0] = '\0';
     applying_=true;struct Reset {bool& Flag;~Reset(){Flag=false;}}reset{applying_};
     try {
         auto next=std::move(resolved).Value();const auto& settings=*next.Effective;
@@ -119,12 +207,22 @@ Result<void> RenderSurface::ApplyQuality(const QualityProfile& profile,const Sce
         std::unique_ptr<ShadowTargets> shadow;const bool replaceShadow=!shadow_ || !state_.Effective || settings.ShadowResolution != state_.Effective->ShadowResolution || settings.Shadow == ShadowMode::Off || width <= 0 || height <= 0;
         if (replaceShadow && settings.Shadow != ShadowMode::Off && width > 0 && height > 0) {shadow=std::make_unique<ShadowTargets>(settings.ShadowResolution);}
         std::unique_ptr<SceneRenderer> renderer;
-        if (rebuild) {renderer=std::make_unique<SceneRenderer>(settings);renderer->Prepare(scene);}
+        if (rebuild) {
+            if (!meshResources_) {meshResources_=CreateMeshResourceCache();}
+            renderer=std::make_unique<SceneRenderer>(settings,meshResources_);
+            renderer->Prepare(scene);
+        }
+        const auto& environment = scene.GetEnvironmentPanorama();
+        std::unique_ptr<Panorama> panorama;
+        if (environment.Image && (!panorama_ || !panorama_->Matches(environment, settings))) {
+            panorama = std::make_unique<Panorama>(environment, settings);
+        }
         std::unique_ptr<Presenter> presenter;if (!presenter_) {presenter=std::make_unique<Presenter>();}
         std::unique_ptr<GraphicsTelemetry> telemetry;if (!telemetry_) {telemetry=std::make_unique<GraphicsTelemetry>();}
         const bool changed=state_.Effective && (state_.Requested != next.Requested || *state_.Effective != settings || next.RenderWidth != state_.RenderWidth || next.RenderHeight != state_.RenderHeight);
         if (changed && frameMonitor_.Snapshot(RenderClockSeconds()).SampleCount) {previousFrames_=frameMonitor_.Snapshot(RenderClockSeconds());previousFrames_->DebugRendering=debug_ != DebugOptions{} || !debugDraw_.Lines().empty();if (telemetry_) {previousFrames_->GpuFrameMs=telemetry_->GpuTime();}previousName_=state_.Requested.Name;}
         if (resize) {targets_.swap(targets);}if (rebuild) {renderer_.swap(renderer);}if (presenter) {presenter_.swap(presenter);}
+        if (panorama || !environment.Image) { panorama_.swap(panorama); }
         if (rebuild || resize) {debugRenderer_.reset();debugPreview_.reset();}
         if (replaceShadow) {shadow_.swap(shadow);}
         if(maskChanged){if(shadow_){shadow_->Valid=false;}if(localShadow_){localShadow_->Invalidate();}}
@@ -135,7 +233,10 @@ Result<void> RenderSurface::ApplyQuality(const QualityProfile& profile,const Sce
     } catch (const GpuPoolExhausted& e) {return Fail({ErrorCode::InsufficientResource,e.what(),GpuPoolHint,{}});}
     catch (const std::bad_alloc& e) {return Fail({ErrorCode::InsufficientResource,e.what(),"Reduce quality and retry; previous resources are retained.",{}});}
     catch (const std::invalid_argument& e) {return Fail({ErrorCode::InvalidArgument,e.what(),"Check Scene lighting, material and transform inputs; previous settings/resources are retained.",{}});}
-    catch (const std::exception& e) {return Fail({ErrorCode::Rendering,e.what(),"Quality application failed; previous settings/resources are retained.",{}});}
+    catch (const std::exception& e) {
+        if (applyingPoolError_[0]) { return Fail({ErrorCode::InsufficientResource, applyingPoolError_, GpuPoolHint, {}}); }
+        return Fail({ErrorCode::Rendering,e.what(),"Quality application failed; previous settings/resources are retained.",{}});
+    }
 }
 Result<void> RenderSurface::Resize(const Scene& scene,int width,int height) {
     if (width <= 0 || height <= 0) {uiRenderer_.reset();targets_.reset();shadow_.reset();localShadow_.reset();state_.RenderWidth=state_.RenderHeight=0;state_.Applied=false;outputWidth_=width;outputHeight_=height;scheduler_.Invalidate();return Result<void>::Success();}
@@ -143,43 +244,65 @@ Result<void> RenderSurface::Resize(const Scene& scene,int width,int height) {
     if (width == failedWidth_ && height == failedHeight_ && state_.LastError) {return Result<void>::Failure(*state_.LastError);}
     auto result=ApplyQuality(state_.Requested,scene,width,height);if (!result) {failedWidth_=width;failedHeight_=height;outputWidth_=width;outputHeight_=height;scheduler_.Invalidate();}return result;
 }
-bool RenderSurface::Due(double now) const {return scheduler_.Due(now,state_.Effective ? state_.Effective->TargetFps:0);}
+bool RenderSurface::Due(double now) const {return SecondsUntilDue(now)==0;}
+double RenderSurface::SecondsUntilDue(double now) const {return scheduler_.SecondsUntilDue(now,state_.Effective ? state_.Effective->TargetFps:0);}
 bool RenderSurface::Render(const Scene& scene,double now,bool force,const std::array<float,4>& clear,bool bypassPacing) {
     ProfileScope profileRender(FramePhase::Render);
     if (!targets_ || !renderer_ || !state_.Effective || (!bypassPacing && !Due(now))) {return false;}
+    const auto cpuStart=RenderClockSeconds();
+    auto items = [&] {
+        ProfileScope profilePrepare(FramePhase::Prepare);
+        return scene.CollectRenderItems();
+    }();
     std::uint64_t signature=0;
     const auto mode=state_.Effective->OnDemand;
+    const auto geometry = (shadow_ || mode != OnDemandMode::Off) ? SceneGeometrySignature(items) : 0;
     if (mode != OnDemandMode::Off) {
-        signature=SceneRenderSignature(scene);
+        signature=SceneRenderSignature(scene,geometry);
         for (float value:clear) {signature^=std::bit_cast<std::uint32_t>(value);signature*=1099511628211ull;}
-        if (!scheduler_.NeedsRender(mode,signature,dirty_ || force || bypassPacing) && !SceneHasActiveAnimation(scene)) {return false;}
+        if (!scheduler_.NeedsRender(mode,signature,dirty_ || force || bypassPacing) && !SceneHasActiveAnimation(scene,items)) {return false;}
     }
     const bool overlay=debug_.View != DebugView::ShadowMap && (debug_.ShowSkeleton || debug_.ShowBounds || debug_.ShowReferencePose || debug_.View == DebugView::Skeleton || debug_.View == DebugView::BoundingBox || !debugDraw_.Lines().empty());
     if (overlay && !debugRenderer_) {debugRenderer_=std::make_unique<DebugRenderer>(*state_.Effective);}
     if (!overlay) {debugRenderer_.reset();}
     if (debug_.View == DebugView::ShadowMap && !debugPreview_) {debugPreview_=std::make_unique<DebugPreview>(*state_.Effective);}
-    const auto cpuStart=RenderClockSeconds();telemetry_->BeginGpu(cpuStart,frameMonitor_);
+    telemetry_->BeginGpu(cpuStart,frameMonitor_);
     struct EndGpu {GraphicsTelemetry& Telemetry;~EndGpu() {Telemetry.EndGpu();}} gpuScope{*telemetry_};
     renderer_->SetDebugOptions(debug_);renderer_->SetViewport(static_cast<float>(std::max(1,outputWidth_))/std::max(1,outputHeight_),state_.RenderHeight);
-    {ProfileScope profilePrepare(FramePhase::Prepare);renderer_->Prepare(scene);}
-    const auto assets=renderer_->GetStats().ResidentAssetSignature;
+    {ProfileScope profilePrepare(FramePhase::Prepare);renderer_->Prepare(scene,std::move(items));}
+    const auto& environment = scene.GetEnvironmentPanorama();
+    if (environment.Image && (!panorama_ || !panorama_->Matches(environment, *state_.Effective))) {
+        panorama_ = std::make_unique<Panorama>(environment, *state_.Effective);
+    } else if (!environment.Image) { panorama_.reset(); }
+    const bool drawPanorama = panorama_ && (debug_.View == DebugView::Lit || debug_.View == DebugView::Unlit);
+    auto assets=renderer_->GetStats().ResidentAssetSignature;
+    if (panorama_) { HashResourceIdentity(assets, panorama_->Source.get()); }
     if (monitoredAssets_ && *monitoredAssets_ != assets) {frameMonitor_.Reset();telemetry_->ResetGpu();}
     monitoredAssets_=assets;ShadowSampling shadow;
-    if (debugRenderer_) {debugRenderer_->Prepare(scene,debug_,debugDraw_);}
+    if (debugRenderer_) {debugRenderer_->Prepare(scene,renderer_->Items(),debug_,debugDraw_);}
     debugLines_=debugRenderer_ ? debugRenderer_->LineCount():0;debugCalls_=debugLines_ ? 1:0;
     renderer_->ResetShadowStatistics();
-    const auto geometry=shadow_ ? SceneGeometrySignature(scene):0;
     if (shadow_) {
-        shadow.ViewProjection=renderer_->ShadowViewProjection(scene,&shadow.Extent);shadow.Texture=shadow_->Texture;shadow.Sampler=shadow_->Sampler;shadow.Settings=*state_.Effective;
-        const auto key=ShadowKey(geometry,shadow.ViewProjection);
-        if (!shadow_->Valid||shadow_->Signature!=key) {
+        const auto sun=scene.Sun.Direction;
+        const std::array direction{sun.X,sun.Y,sun.Z};
+        if (!shadow_->Valid||shadow_->Signature!=geometry||shadow_->Direction!=direction) {
+            shadow_->ViewProjection=renderer_->ShadowViewProjection(scene,&shadow_->Extent);
             sg_pass p{};p.attachments.colors[0]=shadow_->ColorView;p.attachments.depth_stencil=shadow_->DepthView;p.action.colors[0].load_action=SG_LOADACTION_CLEAR;p.action.colors[0].clear_value={1,1,1,1};p.action.depth.load_action=SG_LOADACTION_CLEAR;p.action.depth.clear_value=1;sg_begin_pass(p);
-            try {renderer_->DrawShadow(scene,shadow.ViewProjection);}catch (...) {sg_end_pass();shadow_->Valid=false;throw;}sg_end_pass();shadow_->Signature=key;shadow_->Valid=true;
+            try {renderer_->DrawShadow(scene,shadow_->ViewProjection);}catch (...) {sg_end_pass();shadow_->Valid=false;throw;}
+            sg_end_pass();
+            shadow_->Signature=geometry;
+            shadow_->Direction=direction;
+            shadow_->Valid=true;
         }
+        shadow.ViewProjection=shadow_->ViewProjection;
+        shadow.Extent=shadow_->Extent;
+        shadow.Texture=shadow_->Texture;
+        shadow.Sampler=shadow_->Sampler;
+        shadow.Settings=*state_.Effective;
     }
-    const auto layout=ShadowLayout(scene);
-    if(shadow_&&state_.Effective->Lighting==LightingMode::Advanced&&layout.Faces) {
-        const auto caps=QueryQualityCapabilities();
+    const auto layout=(shadow_&&state_.Effective->Lighting==LightingMode::Advanced) ? ShadowLayout(scene) : LocalShadowLayout{};
+    if(layout.Faces) {
+        const auto& caps=state_.Capabilities;
         if(layout.Bytes()+RenderTargetBytes(*state_.Effective,state_.RenderWidth,state_.RenderHeight)>caps.RenderTargetBudgetBytes){throw std::length_error("Local shadow atlas exceeds the attachment budget; reduce Scene.LocalShadowResolution.");}
         if(!localShadow_||!localShadow_->Matches(layout)){auto next=std::make_unique<LocalShadowAtlas>(layout);localShadow_=std::move(next);}
         const auto before=renderer_->GetStats();shadow.Local=&localShadow_->Update(scene,*renderer_,geometry);const auto after=renderer_->GetStats();renderer_->SetLocalShadowStatistics(after.LastShadowDrawCalls-before.LastShadowDrawCalls,after.LastShadowTriangles-before.LastShadowTriangles);
@@ -187,15 +310,34 @@ bool RenderSurface::Render(const Scene& scene,double now,bool force,const std::a
 
     sg_pass pass{};pass.attachments.colors[0]=targets_->Attachment;pass.attachments.resolves[0]=targets_->Resolve;pass.attachments.depth_stencil=targets_->DepthAttachment;
     pass.action.colors[0].load_action=SG_LOADACTION_CLEAR;pass.action.colors[0].clear_value={clear[0],clear[1],clear[2],clear[3]};pass.action.depth.load_action=SG_LOADACTION_CLEAR;pass.action.depth.clear_value=1;
+    // Post, UI and presentation only read the resolved single-sample image.
+    if (targets_->Resolve.id) { pass.action.colors[0].store_action=SG_STOREACTION_DONTCARE; }
     const auto aspect=static_cast<float>(std::max(1,outputWidth_))/static_cast<float>(std::max(1,outputHeight_));
     sg_begin_pass(pass);try {
         if (debug_.View == DebugView::ShadowMap) {sg_bindings b{};b.views[VIEW_debug_texture]=shadow_->Texture;b.samplers[SMP_debug_sampler]=shadow_->Sampler;sg_apply_pipeline(debugPreview_->Pipeline);sg_apply_bindings(b);sg_draw(0,3,1);}
-        else {renderer_->Draw(scene,aspect,shadow);if (debugRenderer_) {debugRenderer_->Draw(scene.MainCamera.ViewProjection(aspect),debug_.DepthTest);}}
+        else {
+            if (drawPanorama) {
+                (void)scene.MainCamera.ProjectionMatrix(aspect);
+                panorama_->Draw(environment, scene.MainCamera, aspect);
+            }
+            renderer_->Draw(scene,aspect,shadow);
+            if (debugRenderer_) {debugRenderer_->Draw(scene.MainCamera.ViewProjection(aspect),debug_.DepthTest);}
+        }
     }catch (...) {sg_end_pass();throw;}sg_end_pass();
     if (targets_->PostAttachment.id) {sg_pass p{};p.attachments.colors[0]=targets_->PostAttachment;p.action.colors[0].load_action=SG_LOADACTION_DONTCARE;sg_begin_pass(p);sg_bindings bindings{};bindings.views[VIEW_rendered_texture]=targets_->Texture;bindings.samplers[SMP_rendered_sampler]=presenter_->Sampler;post_params_t post{};post.post_options={1.0f/state_.RenderWidth,1.0f/state_.RenderHeight,debug_.View == DebugView::Lit ? 0.0f:1.0f,0};sg_apply_pipeline(presenter_->PostPipeline);sg_apply_bindings(bindings);sg_apply_uniforms(UB_post_params,SG_RANGE(post));sg_draw(0,3,1);sg_end_pass();}
-    if (ui_&&!ui_->Empty()) {if (!uiRenderer_) {uiRenderer_=std::make_unique<UiRenderer>();}uiRenderer_->Composite(*ui_,targets_->PostTexture.id ? targets_->PostTexture:targets_->Texture,outputWidth_,outputHeight_,uiScale_);}else {uiRenderer_.reset();}
+    UiFrameDebugInfo uiDiagnostics;
+    if (ui_ && !ui_->Empty()) {
+        if (!uiRenderer_) {uiRenderer_=std::make_unique<UiRenderer>();}
+        uiDiagnostics = uiRenderer_->Composite(*ui_,targets_->PostTexture.id ? targets_->PostTexture:targets_->Texture,
+            outputWidth_,outputHeight_,uiScale_);
+    } else { uiRenderer_.reset(); }
     const auto cpuEnd=RenderClockSeconds();const auto stats=renderer_->GetStats();
-    frameMonitor_.Record(cpuEnd,(cpuEnd-cpuStart)*1000,(debug_.View == DebugView::ShadowMap ? 1:stats.LastDrawCalls+debugCalls_)+stats.LastShadowDrawCalls+(state_.Effective->PostProcessing ? 1:0)+(uiRenderer_ ? 1:0),(debug_.View == DebugView::ShadowMap ? 1:stats.LastTriangles)+stats.LastShadowTriangles+(state_.Effective->PostProcessing ? 1:0)+(uiRenderer_ ? 1:0));
+    const auto extraDraws = (drawPanorama ? 1u : 0u) + (state_.Effective->PostProcessing ? 1u : 0u) + (uiRenderer_ ? 1u : 0u);
+    frameMonitor_.Record(cpuEnd,(cpuEnd-cpuStart)*1000,(debug_.View == DebugView::ShadowMap ? 1:stats.LastDrawCalls+debugCalls_)+stats.LastShadowDrawCalls+extraDraws,(debug_.View == DebugView::ShadowMap ? 1:stats.LastTriangles)+stats.LastShadowTriangles+extraDraws);
+    const auto particleDiagnostics = renderer_->ParticleDiagnostics();
+    lastParticleDiagnostics_.assign(particleDiagnostics.begin(), particleDiagnostics.end());
+    lastUiDiagnostics_ = uiDiagnostics;
+    lastPanoramaDrawn_ = drawPanorama;
     scheduler_.Submitted(now,signature);dirty_=false;++frames_;return true;
 }
 void RenderSurface::Present(bool hasDepth) const {
@@ -210,13 +352,17 @@ TelemetrySnapshot RenderSurface::Telemetry(double now) {
     if (telemetry_) {result.Frames.GpuFrameMs=telemetry_->GpuTime();if (!result.Frames.GpuSampleCount) {result.Frames.AverageGpuMs=result.Frames.P95GpuMs=result.Frames.GpuFrameMs;}}
     const auto stats=Stats();result.ResidentAssetSignature=stats.ResidentAssetSignature;result.Resident.TextureBytes=stats.LogicalTextureBytes;result.Resident.BufferBytes=stats.LogicalBufferBytes;
     result.Optimization=stats.Optimization;
+    if (panorama_) {
+        result.Resident.TextureBytes += panorama_->Bytes;
+        HashResourceIdentity(result.ResidentAssetSignature, panorama_->Source.get());
+    }
     if (targets_ && state_.Effective) {result.Resident.RenderTargetBytes=RenderTargetBytes(*state_.Effective,state_.RenderWidth,state_.RenderHeight);}
     if (uiRenderer_) {result.Resident.RenderTargetBytes+=uiRenderer_->PixelBytes();result.Resident.TextureBytes+=uiRenderer_->PixelBytes();result.Resident.BufferBytes+=uiRenderer_->UploadBytes();}
     if(localShadow_) {result.Resident.RenderTargetBytes+=localShadow_->Bytes();}
     result.Resident.TotalBytes=result.Resident.TextureBytes+result.Resident.BufferBytes+result.Resident.RenderTargetBytes;
     result.PreviousQualityFrames=previousFrames_;result.PreviousQualityName=previousName_;return result;
 }
-void RenderSurface::Clear() noexcept {uiRenderer_.reset();ui_=nullptr;uiRevision_=0;debugRenderer_.reset();debugPreview_.reset();debugDraw_.Clear();debug_={};debugLines_=debugCalls_=0;targets_.reset();shadow_.reset();localShadow_.reset();renderer_.reset();presenter_.reset();telemetry_.reset();frameMonitor_.Reset();monitoredAssets_.reset();previousFrames_.reset();previousName_.clear();state_.Effective.reset();state_.Applied=false;state_.RenderWidth=state_.RenderHeight=0;scheduler_.Invalidate();}
+void RenderSurface::Clear() noexcept {uiRenderer_.reset();ui_=nullptr;uiRevision_=0;lastUiDiagnostics_={};lastParticleDiagnostics_.clear();lastPanoramaDrawn_=false;panorama_.reset();debugRenderer_.reset();debugPreview_.reset();debugDraw_.Clear();debug_={};debugLines_=debugCalls_=0;targets_.reset();shadow_.reset();localShadow_.reset();renderer_.reset();meshResources_.reset();presenter_.reset();telemetry_.reset();frameMonitor_.Reset();monitoredAssets_.reset();previousFrames_.reset();previousName_.clear();state_.Effective.reset();state_.Applied=false;state_.RenderWidth=state_.RenderHeight=0;scheduler_.Invalidate();}
 
 Result<void> RenderSurface::SetDebugOptions(const DebugOptions& options) {
     if (!sg_isvalid() || sg_query_pass_state() != SG_PASSSTATE_NONE) {return Result<void>::Failure({ErrorCode::InvalidState,"Change debug options outside passes on the graphics thread.","Use OnFrame or between renders.",{}});}
@@ -233,6 +379,14 @@ sg_sampler RenderSurface::InspectionSampler(int target) const noexcept {return t
 RenderDebugInfo RenderSurface::Inspect() const {
     RenderDebugInfo r;r.Live=sg_isvalid();r.Options=debug_;r.RenderedFrames=frames_;r.LineCount=debugLines_+(debug_.View == DebugView::Wireframe ? Stats().LastWireLines:0);r.LineDrawCalls=debugCalls_;
     if (!r.Live) {return r;}const auto stats=Stats();r.Optimization=stats.Optimization;
+    r.ParticleEmitters = lastParticleDiagnostics_;
+    r.Ui = lastUiDiagnostics_;
+    if (panorama_) {
+        if (lastPanoramaDrawn_) { r.Passes.push_back({"Environment", "panorama", "Equirectangular panorama", 1, 1}); }
+        InspectImage(r.Resources, panorama_->Image, "Environment panorama");
+        InspectShader(r.Resources, panorama_->Shader, "panorama");
+        InspectPipeline(r.Resources, panorama_->Pipeline, "Environment panorama");
+    }
     if (shadow_) {r.Passes.push_back({"Sun shadow","shadow_mesh / shadow_skin","R32F + depth, masked triangles",stats.LastShadowDrawCalls-stats.LastLocalShadowDrawCalls,stats.LastShadowTriangles-stats.LastLocalShadowTriangles});InspectImage(r.Resources,shadow_->Color,"Shadow depth color",true);InspectImage(r.Resources,shadow_->Depth,"Shadow depth attachment",true);}
     if (targets_) {r.Passes.push_back({"Scene",debug_.View == DebugView::ShadowMap ? "debug_preview":"mesh / skin",DebugViewName(debug_.View),debug_.View == DebugView::ShadowMap ? 1:stats.LastDrawCalls,debug_.View == DebugView::ShadowMap ? 1:stats.LastTriangles});InspectImage(r.Resources,targets_->Color,"Resolved scene color",true);InspectImage(r.Resources,targets_->Msaa,"MSAA scene color",true);InspectImage(r.Resources,targets_->Depth,"Scene depth attachment",true);InspectImage(r.Resources,targets_->PostColor,"Final post output",true);}
     if (debugCalls_) {r.Passes.push_back({"Debug overlay","debug_lines",debug_.DepthTest ? "Depth-tested lines":"Always-visible lines",debugCalls_,0});}
@@ -241,6 +395,11 @@ RenderDebugInfo RenderSurface::Inspect() const {
     if (localShadow_) {r.Passes.push_back({"Local shadows","shadow_mesh / shadow_skin","Cached radial atlas with per-face culling",stats.LastLocalShadowDrawCalls,stats.LastLocalShadowTriangles});localShadow_->Inspect(r.Resources);}
     if (renderer_) {renderer_->Inspect(r.Resources);}if (debugRenderer_) {debugRenderer_->Inspect(r.Resources);}if (debugPreview_) {InspectShader(r.Resources,debugPreview_->Shader,"Shadow preview");InspectPipeline(r.Resources,debugPreview_->Pipeline,"Shadow preview");}
     for (const auto& resource:r.Resources) {if (resource.Kind == DebugResourceKind::Buffer && (resource.Name == "Wireframe edge indices" || resource.Name == "Debug line stream")) {r.DebugBufferBytes+=resource.Bytes;}}
-    if (presenter_) {InspectShader(r.Resources,presenter_->Shader,"present");InspectPipeline(r.Resources,presenter_->Pipeline,"Host/swapchain present");InspectPipeline(r.Resources,presenter_->ColorOnlyPipeline,"Host color-only present");InspectShader(r.Resources,presenter_->PostShader,"post");InspectPipeline(r.Resources,presenter_->PostPipeline,"Post output");}return r;
+    if (presenter_) {InspectShader(r.Resources,presenter_->Shader,"present");InspectPipeline(r.Resources,presenter_->Pipeline,"Host/swapchain present");InspectPipeline(r.Resources,presenter_->ColorOnlyPipeline,"Host color-only present");InspectShader(r.Resources,presenter_->PostShader,"post");InspectPipeline(r.Resources,presenter_->PostPipeline,"Post output");}
+    std::unordered_set<std::uint64_t> seen;
+    std::erase_if(r.Resources, [&](const DebugResource& entry) {
+        return !seen.insert((std::uint64_t(entry.Kind) << 32) | entry.Id).second;
+    });
+    return r;
 }
 }

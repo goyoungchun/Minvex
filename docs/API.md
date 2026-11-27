@@ -1,6 +1,6 @@
 # Minvex API
 
-**C++20 Graphics SDK · Version 1.2.0 · Namespace `lv`**
+**C++20 Graphics SDK · Version 1.2.1 · Namespace `lv`**
 
 모듈별 주요 타입과 API를 정리한 사용 안내임. 전체 선언은 연결된 공개 헤더에서 확인할 수 있음.
 
@@ -90,7 +90,7 @@ run.OnFrame = [](lv::Viewer& v, const lv::ViewerFrameInfo&) {
 | `Clip / Visible / Enabled / BlocksInput` | clip은 viewport logical rectangle이며 글자·도형·그림자·hit test에 적용함. disabled 버튼은 입력을 차단하지만 활성화하지 않음. BlocksInput=false인 요소는 입력을 통과시킴 |
 | `ProcessInput / PollActivations` | 계층 paint 순서·ancestor clip·동일 affine transform으로 rounded hit-test. 같은 버튼에서 down/release해야 활성화함. Cancel/삭제/상위 비활성화는 capture를 해제함. Tab/Shift+Tab으로 버튼과 숫자 필드에 생성 순서대로 포커스를 이동하고 Enter/Space로 포커스된 버튼을 활성화함. ScrollX/Y는 logical pixel delta(오른쪽/아래 양수)이며 가장 안쪽 scroll ancestor부터 처리함 |
 | `SetFontDirectory / FontDirectory / Fonts / RefreshFonts` | Font 폴더는 기본 CWD/Font이며 create=true로 생성 가능. `Fonts()`는 OS와 폴더의 TTF/OTF/TTC family를 조회하고 `Fonts(false)`는 폴더만 조회함. FontFile은 폴더 상대 경로이며 경로 탈출을 거부함. 파일을 바꾼 뒤 RefreshFonts를 명시적으로 호출함 |
-| `Save / Load` | `Minvex.UI` reader v1~v3, 권장 `.mvxui.json`, atomic 저장. 숫자 필드가 있는 문서는 v3으로 저장하고 그 외에는 v2를 사용함. 계층·배치·rich run·숫자 필드 설정·상대 FontDirectory를 저장함. Load는 전체 검증 후 ID/parent를 재매핑하고 입력을 초기화함. 성공한 Save/Load는 현재 상태를 clean으로 표시함. Load 자체도 Undo 가능함. Scene v13에는 UI를 저장하지 않음 |
+| `Save / Load` | `Minvex.UI` reader v1~v3, 권장 `.mvxui.json`, atomic 저장. 숫자 필드가 있는 문서는 v3으로 저장하고 그 외에는 v2를 사용함. 계층·배치·rich run·숫자 필드 설정·상대 FontDirectory를 저장함. Load는 전체 검증 후 ID/parent를 재매핑하고 입력을 초기화함. 성공한 Save/Load는 현재 상태를 clean으로 표시함. Load 자체도 Undo 가능함. UI는 별도 파일로 저장함 |
 | `BeginEdit / CommitEdit / CancelEdit` | 여러 속성/요소 변경을 하나의 Undo로 묶거나 시작 상태로 취소함. 중첩 편집을 지원하지 않으며 활성 편집 중 Save/Load/Undo/Redo/ClearHistory는 InvalidState임. 빈 묶음은 이력을 추가하지 않음 |
 | `Undo / Redo / History / ClearHistory` | UI 전용 content snapshot과 dirty/saved 상태를 복원함. History는 CanUndo/CanRedo/Editing/Dirty와 이력 수를 반환함. no-op·검증 실패는 redo를 지우지 않으며 새 성공 편집은 redo를 지움. ClearHistory는 content·dirty를 유지함 |
 | `Rasterize` | native shaping, top-left origin의 premultiplied sRGB RGBA8 복사본. UI 변경·DPI·resize 때만 viewer bitmap을 갱신하고 Scene 품질 축소 뒤의 full-resolution pass에서 합성함. UI 합성 자원은 telemetry와 render debugger에 포함함 |
@@ -237,6 +237,8 @@ scene.UpdateParticles(1.0 / 60.0); // 수동 시뮬레이션 예
 
 `EventRoutes`는 같은 효과의 대상 이미터와 방출 개수를 지정합니다. 새 입자는 이벤트의 월드 좌표에서 생성되고 해당 갱신에서 남은 시간만큼 진행합니다. 이미터당 루트 8개, 대상 대기 버스트 최대 4,096개, 입자 용량은 일반 생성과 공유합니다. 루트가 순환하거나 대상 인덱스가 잘못되면 `MakeParticleEffect()`가 거부합니다.
 
+`Scene::SetParticleEmitterEmission(object, emitter, enabled)`은 대상 이미터의 예정 방출과 이벤트 방출을 함께 제어합니다. 이미터 방출 시계는 꺼져 있는 동안 정지하고 살아 있는 입자의 수명은 계속 진행합니다. `SetParticleEventRoutesEnabled(object, source, kind, enabled)`은 특정 이미터가 발행한 Birth/Collision/Death 중 지정한 종류의 서브 이미터 라우팅을 제어합니다. `PollParticleEvents()`는 발행 이벤트를 계속 반환합니다. 꺼져 있는 동안의 라우팅은 건너뜁니다. 게이트는 효과 인스턴스별로 작동하며 Restart와 Seek를 거쳐 유지됩니다. 효과를 다시 연결하거나 Scene을 열면 기본 상태로 시작합니다. 효과가 없거나 이벤트 종류가 잘못되면 `std::invalid_argument`, 이미터 인덱스 초과는 `std::out_of_range`입니다.
+
 ### 충돌과 렌더러
 
 `Collision.Source`는 Plane, Terrain, Mesh, Scene 중 하나입니다. Terrain은 현재 표시되는 지형 삼각형을, Mesh는 표시되는 강체 모델의 LOD0 기본 삼각형을 사용합니다. Scene은 둘 다 사용합니다. 장면 콜라이더는 최대 1,048,576개 삼각형으로 제한되며, 갱신 시점의 형상과 변환으로 점 입자의 이동 구간을 검사합니다. Skin 변형과 Morph 형상은 충돌 계산의 범위 밖입니다.
@@ -248,6 +250,8 @@ scene.UpdateParticles(1.0 / 60.0); // 수동 시뮬레이션 예
 
 `ParticleSimulation::Gpu`는 가속도와 항력을 포함한 위치 계산을 네이티브 컴퓨트 패스에서 수행합니다. 결과를 그래픽스 패스에서 GPU 버퍼로 직접 읽습니다. CPU가 생성, 수명, 이벤트, 그래프와 외형을 평가합니다. 충돌·트레일·PNG가 없는 Additive 스프라이트가 GPU 경로를 사용하며, 다른 조합과 WebGL2는 같은 효과의 CPU 경로를 사용합니다. [Epic Games GPU Sprites](https://dev.epicgames.com/documentation/en-us/unreal-engine/gpusprites-type-data?application_version=4.27)
 
+`GetRenderDebugInfo().Value().ParticleEmitters`는 마지막으로 제출한 Lit/Unlit 프레임의 객체 ID·이미터 인덱스, 요청 경로, 실제 제출 경로, GPU 대체 사유와 입자 수를 반환합니다. 프레임에 제출된 입자가 없으면 `Path`는 `None`입니다. 여러 GPU 제약이 있으면 렌더러, 블렌드, 충돌, 트레일, PNG, 컴퓨트 미지원 순서로 첫 대체 사유를 표시합니다. CPU 경로의 `SubmittedParticles`는 CPU 컬링 후 드로우에 제출한 개별 입자 수입니다. 트레일은 해당 입자에 한 번만 포함하며 Ribbon 연결은 세그먼트당 한 입자로 계산합니다. GPU 경로는 셰이더 컬링과 깊이 테스트 전 드로우에 전달된 인스턴스 수를 반환합니다.
+
 `ParticleModuleGraph`는 최대 32개의 스칼라 노드를 연결합니다. Constant, Age, Random, Add, Subtract, Multiply, Min, Max, Sine, Saturate를 지원하며, 출력은 크기·불투명도·회전과 초기 속도입니다. 무작위 입력은 입자 시드에서 계산합니다. 연결은 선언 순서와 무관하고, 잘못된 연결과 순환은 효과 생성 시 거부합니다.
 
 ### Editor에서 편집과 재생
@@ -256,7 +260,7 @@ scene.UpdateParticles(1.0 / 60.0); // 수동 시뮬레이션 예
 
 **Play scene particles**, **Restart**, **Step**, **Speed**, **Preview time**은 Viewport 미리보기를 제어합니다. `SeekParticles()`는 시드와 현재 객체 변환을 기준으로 선택 효과의 생성을 다시 평가합니다. 재생·일시정지·시간 이동은 씬의 저장 상태에 영향을 주지 않습니다. **Frame emitter**는 씬 카메라를 편집합니다.
 
-Scene v16은 이벤트·루트, 지형·메시 충돌, 렌더러, GPU 설정, 그래프와 v15의 기본 파티클 정보를 저장합니다. 공유 효과와 메시 모델은 한 번만 기록하며 파일 기반 메시와 PNG는 Scene에 대한 상대 경로를 사용합니다. 프로젝트 이동 시 외부 에셋도 함께 이동합니다. 다시 열면 효과 설정을 복원하고 시뮬레이션은 처음부터 시작합니다. reader는 v1~v16이며, 고급 기능 없이 저장한 파티클 씬은 v15를 사용합니다.
+Scene v16 이상은 이벤트·루트, 지형·메시 충돌, 렌더러, GPU 설정, 그래프와 v15의 기본 파티클 정보를 저장합니다. 공유 효과와 메시 모델은 한 번만 기록하며 파일 기반 메시와 PNG는 Scene에 대한 상대 경로를 사용합니다. 프로젝트 이동 시 외부 에셋도 함께 이동합니다. 다시 열면 효과 설정을 복원하고 시뮬레이션은 처음부터 시작합니다. reader는 v1~v17이며, 기본 파티클 효과는 v15부터 저장합니다.
 
 ## 카메라·품질·진단
 
@@ -385,7 +389,7 @@ int main() {
 - **단계 전환.** `UiCanvas::PollActivations()`를 순서대로 읽어 새 목표 단계를 정합니다. 새 움직임은 마지막으로 Scene에 적용한 위치에서 시작해 `ViewerFrameInfo::DeltaTimeSeconds`로 진행합니다. 단계 종료 위치는 GLB 조립 자세를 기준으로 계산하고, 분리된 부품은 목표 위치에 도달할 때 숨깁니다. 이전 단계로 돌아가면 그 위치에서 부품을 다시 표시합니다. [단계 전환 소스](../examples/QuickStart/Maintenance.cpp)
 - **한글 레이아웃.** 논리 창 크기를 기준으로 패널 너비와 안내 글자 크기를 조절합니다. 안내문은 `WidthSizing=Fill`과 `HeightSizing=Hug`로 줄 수가 달라질 때 높이를 다시 계산합니다. 샘플은 U+2060 WORD JOINER로 어절 내부의 줄바꿈을 억제하고 공백에서 줄을 나눕니다. 글자 크기와 최소 패널 너비는 가장 긴 어절이 들어가도록 선택합니다. 설명과 부품 목록은 세로 스크롤 영역에 두고 단계 버튼은 패널 하단에 둡니다. [UI 소스](../examples/QuickStart/Maintenance.cpp)
 
-macOS Metal에서 `VSync=false`는 display sync 해제를 요청함. `OnFrame` 호출 빈도와 표시 FPS는 OS의 display callback 및 창 가림 상태의 영향을 받을 수 있으므로, 이 옵션만으로 주사율을 넘는 무제한 FPS를 보장하지 않음.
+macOS Metal에서 `VSync=false`는 display sync 해제를 요청함. 디스플레이 주사율이 `TargetFps`의 배수이면 Viewer가 디스플레이 링크에 해당 속도를 요청함. 활성 디스플레이 링크에서는 표시 타임스탬프로 프레임을 예약함. 실제 호출 빈도와 표시 FPS는 OS의 디스플레이 정책과 창 가림 상태의 영향을 받음.
 
 Standalone·Editor의 기본 창 아이콘은 실행 파일에 포함되며 별도 이미지 파일이나 실행 디렉터리에 의존하지 않음.
 
@@ -394,6 +398,23 @@ Standalone·Editor의 기본 창 아이콘은 실행 파일에 포함되며 별�
 `ViewerRunOptions::FrameLimit`을 지정하면 자동 종료할 수 있습니다. `Run()` 성공 뒤 `GetTelemetry()`에서 종료 시점의 스냅샷을 읽습니다. 품질·디버그 설정을 유지하는 짧은 검사에서는 `Frames.TotalRenderedFrames`로 집계된 렌더 프레임 수를 확인할 수 있습니다.
 
 `Frames.DrawCalls`와 `Frames.Triangles`는 최근 프레임의 제출 통계이며, 해당 프레임에서 수행된 그림자·후처리·UI 작업도 포함합니다. 장면의 일반 삼각형 제출 수는 같은 스냅샷의 `Optimization.SubmittedTriangles`에서 확인합니다. 활성 그래픽 세션에서 장면 패스를 조사하려면 `GetRenderDebugInfo()`의 `Passes`에서 `Scene`을 찾습니다. `OnFrame`은 다음 제출 전에 실행되므로 이 콜백에서 조회하는 진단은 이전 제출까지 반영합니다. 인스턴싱을 사용하면 여러 객체를 한 번의 draw call로 제출할 수 있습니다.
+
+`GetRenderDebugInfo().Value().Ui`는 마지막 제출 프레임의 UI 합성 여부, 캔버스 리비전, 비트맵 갱신 여부, 래스터화와 업로드 준비·제출의 CPU 밀리초, 행 패딩을 포함한 전송 바이트를 반환합니다. 렌더러의 비트맵과 CPU 캐시의 리비전이 일치하면 변경된 영역만 래스터화하고 전송합니다. `BitmapUpdated`는 실제 픽셀 업로드가 있을 때 참입니다. 캔버스 리비전과 크기·배율이 그대로면 기존 비트맵으로 합성하고 래스터화·전송 비용은 0입니다. On-Demand가 프레임을 생략하면 마지막 제출의 스냅샷을 유지합니다.
+
+### Standalone Viewer GPU 풀
+
+`ViewerOptions::GpuPools`에서 전체 그래픽 세션의 Buffer, Image, Sampler, Shader, Pipeline, View 슬롯을 Viewer 생성 전에 지정할 수 있습니다. 각 값은 0 또는 1–65535입니다. 0은 네이티브 기본값이며 리소스별 기본 슬롯 수는 순서대로 128, 128, 64, 32, 64, 256입니다. 범위를 벗어난 값에는 `Run()`이 창 생성 전에 `InvalidArgument`를 반환합니다.
+
+```cpp
+#include <minvex/Viewer.h>
+
+lv::ViewerOptions options;
+options.GpuPools.Buffers = 512;
+options.GpuPools.Pipelines = 96;
+lv::Viewer viewer(options);
+```
+
+메시 프리미티브는 동일한 셰이더와 렌더 상태의 파이프라인을 공유합니다. 품질 변경 중에는 기존 장면과 후보 장면의 지오메트리·텍스처가 함께 메모리에 올라갈 수 있습니다. 풀 한도에 도달하면 `SetQuality()`는 `InsufficientResource`를 반환하고 기존 품질을 유지합니다. 슬롯 수와 GPU 바이트 사용량은 각각 별도 지표입니다. [Viewer.h](../include/minvex/Viewer.h)
 
 ### 파일 없이 스켈레탈 메시 만들기
 
@@ -476,7 +497,7 @@ Blend1D는 X 오름차순·Y=0인 1~64개 sample을 요구하며 인접 두 Clip
 
 `SetBlendParameter(name, value)`·`SeekBlendTree(phase)`·`BlendTreeDuration()`을 제공함. 파라미터는 유한한 값, phase는 [0,1]임. 파라미터 편집은 phase를 유지하며 Pause·속도·Loop·역재생은 기존 제어를 따름. Stop은 Tree·파라미터를 유지하고 phase=0, ResetPose는 Tree도 해제함. Play는 단일 Clip으로 전환하고 Tree에서 CrossFade하면 현재 base TRS/Morph를 frozen source로 사용함.
 
-Viewer·EditorDocument도 `PlayBlendTree/SetBlendParameter/SeekBlendTree` Result Facade를 제공함. Editor Animation Controls에서 이름·파라미터·Clip·threshold/좌표 편집과 Apply/Play, 현재 weight·2D 삼각분할 보기를 제공하며 편집은 Undo/Redo 대상임. Scene v13는 최대 1024개 공유 Tree 정의와 독립 phase/파라미터/재생 상태를 저장하며 reader는 v1~v16임. Reimport는 실제 Skeleton/Morph layout과 모든 참조 Clip index/name·Scale 호환성을 검사함.
+Viewer·EditorDocument도 `PlayBlendTree/SetBlendParameter/SeekBlendTree` Result Facade를 제공함. Editor Animation Controls에서 이름·파라미터·Clip·threshold/좌표 편집과 Apply/Play, 현재 weight·2D 삼각분할 보기를 제공하며 편집은 Undo/Redo 대상임. Scene v13는 최대 1024개 공유 Tree 정의와 독립 phase/파라미터/재생 상태를 저장하며 reader는 v1~v17임. Reimport는 실제 Skeleton/Morph layout과 모든 참조 Clip index/name·Scale 호환성을 검사함.
 
 잘못된 입력/호환성은 low-level API에서 `std::invalid_argument`임. 반환한 handle은 정의의 수명을 유지하며 `Tree()` 참조는 Player/Scene 편집 후 다시 조회함. immutable 정의의 동시 조회·서로 다른 Player 사용은 가능하고 같은 Player의 동시 수정/평가는 금지임. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
 
@@ -499,7 +520,7 @@ Player는 TRS Additive 레이어 1개를 보유함. `SetAdditiveAnimation(clip, 
 
 `Additive()`의 상태는 Clip·Time·Speed·Loop·Weight·State·Reference·JointMask임. 레이어 속도는 Player 속도와 곱해지고 playhead/loop는 base와 독립임. `RestoreAdditiveAnimation(state)`로 전체 설정을 검증·교체하며 `SetAdditiveWeight/SetAdditiveMask/SeekAdditive()`로 개별 편집함. Seek는 duration까지 clamp함. Pause/Resume은 base와 레이어를 함께 제어하고 Stop은 두 시간을 0으로 되돌리며 설정은 유지함. Play/PlayBlendTree/CrossFade는 레이어를 유지하고 ResetPose는 해제함. `ClearAdditiveAnimation()`은 base를 유지하며 레이어만 제거함.
 
-Viewer·EditorDocument에도 같은 제어의 Result Facade를 제공함. Editor는 Clip·Skeleton/현재 base/Clip sample 기준 선택, weight·시간·속도·loop, Joint/Subtree mask, Base/Delta/Final 비교를 제공함. 편집은 Undo/Redo 대상이며 Scene v13는 레이어 reference·mask·재생 상태를 저장하고 reader는 v1~v16임. Reimport는 Skeleton·레이어 Clip index/name·시간과 reference/Scale 호환성을 검사함. Pose v1은 최종 TRS snapshot만 저장함.
+Viewer·EditorDocument에도 같은 제어의 Result Facade를 제공함. Editor는 Clip·Skeleton/현재 base/Clip sample 기준 선택, weight·시간·속도·loop, Joint/Subtree mask, Base/Delta/Final 비교를 제공함. 편집은 Undo/Redo 대상이며 Scene v13는 레이어 reference·mask·재생 상태를 저장하고 reader는 v1~v17임. Reimport는 Skeleton·레이어 Clip index/name·시간과 reference/Scale 호환성을 검사함. Pose v1은 최종 TRS snapshot만 저장함.
 
 공유 Model/Clip은 수정하지 않으며 레이어·기준 Pose·mask는 Player별로 소유함. 상태 참조는 Player/Scene 편집 후 다시 조회하고 같은 Player의 동시 수정/평가는 금지임. weight 0 또는 전체 mask 0인 레이어의 시간 변화는 정적인 base의 On-Demand 이미지를 무효화하지 않음. SDK 1.0.0 소비자는 함께 재빌드해야 하며 ImportVersion 6은 유지함.
 
@@ -526,7 +547,7 @@ Player 큐는 최대 1024개임. 초과 시 `AnimationEventOverflow`를 던지�
 
 track당 최대 1024개, overlay 최대 256 track, 기본 track별·인스턴스 전체 overlay별 이름/페이로드 합계는 각각 1 MiB임. 이름은 1~256 bytes, payload는 최대 4096 bytes의 NUL 없는 UTF-8이며 시간은 유한한 [0,duration] 오름차순임. 잘못된 데이터는 `std::invalid_argument`임. Player/Scene의 동시 수정·평가는 금지이고 Viewer는 생성한 owner thread에서 사용함. callback은 명시적 Dispatch를 호출한 스레드에서 실행하며 전달된 참조는 해당 호출 동안만 유효함.
 
-Editor는 Timeline marker, 추가·삭제·시간·이름·payload 편집, 수집 Seek 선택과 발생 로그를 제공함. marker 편집은 Undo/Redo 대상이며 큐 배출·로그는 문서를 dirty로 만들지 않음. Scene v13는 overlay와 Clip identity를 저장하고 reader는 v1~v16임. 발생 큐·callback·로그는 저장하지 않으며 Undo/Redo는 과거 큐를 재발송하지 않음. Reimport는 overlay Clip identity/duration을 검사함. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
+Editor는 Timeline marker, 추가·삭제·시간·이름·payload 편집, 수집 Seek 선택과 발생 로그를 제공함. marker 편집은 Undo/Redo 대상이며 큐 배출·로그는 문서를 dirty로 만들지 않음. Scene v13는 overlay와 Clip identity를 저장하고 reader는 v1~v17임. 발생 큐·callback·로그는 저장하지 않으며 Undo/Redo는 과거 큐를 재발송하지 않음. Reimport는 overlay Clip identity/duration을 검사함. SDK 1.0.0 소비자는 함께 재빌드해야 하며 Pose v1·ImportVersion 6은 유지함.
 
 ### Shared Skeleton / Leader Pose / Socket (SDK 1.0)
 
@@ -584,7 +605,13 @@ Follower는 자체 애니메이션 Player의 TRS·Morph 재생과 이벤트 수�
 
 잘못된 입력·누락된 소켓/본·호환성·순환·singular TRS는 `std::invalid_argument`임. world-preserving detach 또는 SetWorldTransform 결과에 shear가 있으면 TRS로 저장할 수 없어 변경 전에 거부함. `EditorDocument`는 공유 Skeleton·Leader·소켓·부착 API를 같은 인수로 제공하고 Result 오류 및 Undo/Redo를 적용함. 전체 Pose 저장은 Follower의 표시되는 최종 local TRS를 저장하며 local shear는 거부함. overrides-only 저장은 dormant 독립 Player의 override임. Viewer는 owner thread에서 `GetScene()`을 통해 사용함.
 
-Scene writer는 기본 v13, 지형만 추가하면 v14, 파티클 효과는 v15, 고급 파티클 모듈은 v16을 사용함. reader는 v1~v16임. 최대 1024개의 공유 Skeleton 정의를 중복 없이 저장하고 본/기준 자세/공유 소켓, 인스턴스 소켓 override, Leader·Transform 부모·부착 소켓을 복원함. 파일의 ObjectId는 새 런타임 ID로 매핑하며 모순된 참조·순환·256단계 초과 chain은 거부함. v1~v11에서는 새 관계가 없는 일반 객체로 읽음. 기존 16 MiB JSON·65536 객체·4096 모델 제한을 유지함. 이전 SDK reader는 v13를 읽을 수 없음. Pose v1·ImportVersion 6은 유지하고 정적 SDK 소비자는 1.0.0 헤더/라이브러리로 함께 재빌드해야 함.
+Scene writer는 기본 v13, 지형 v14, 기본 파티클 v15, 고급 파티클 v16, 사용자 키·메타데이터·알파 블렌딩 override v17을 사용함. reader는 v1~v17임. 최대 1024개의 공유 Skeleton 정의와 본·기준 자세·공유 소켓을 저장하고 인스턴스 소켓 override, Leader·Transform 부모·부착 소켓을 복원함. 런타임 ObjectId는 새로 할당하고 모순된 참조·순환·256단계 초과 계층은 거부함. 16 MiB JSON·65536 객체·4096 모델 제한과 Pose v1·ImportVersion 6을 유지함. v17을 사용한 파일을 열려면 v17 reader가 필요함. 정적 SDK의 헤더와 라이브러리를 함께 교체하고 소비자를 재빌드함.
+
+### Scene 사용자 키와 메타데이터
+
+`Scene::SetUserKey(id, key)`는 객체에 Scene 내 고유 키를 설정합니다. 키는 대소문자를 구분하고 NUL 없는 UTF-8 최대 128바이트입니다. 빈 키는 기존 키를 해제합니다. `FindObjectByUserKey(key)`는 재개방한 Scene의 새 ID를 찾고, 키가 없으면 `NoObject`를 반환합니다.
+
+`Scene::SetUserMetadata(id, key, value)`는 객체당 최대 32개의 문자열을 저장합니다. 키는 1–128바이트, 값은 최대 4096바이트의 NUL 없는 UTF-8입니다. `std::nullopt`는 항목을 삭제합니다. 소유 스레드에서 `GetObject(id)`의 `UserKey`와 `UserMetadata`를 읽습니다. 키 중복, 유효하지 않은 UTF-8 또는 ID는 `std::invalid_argument`, 메타데이터 개수 초과는 `std::length_error`입니다. 앱은 Scene을 다시 연 뒤 키와 메타데이터를 읽어 런타임 제어값을 복원할 수 있습니다. [Scene.h](../include/minvex/Scene.h) · [SceneIO.h](../include/minvex/SceneIO.h)
 
 예제는 [Equipment](../examples/Equipment/Main.cpp), 설치 SDK 소비자는 [SdkConsumer/Equipment](../examples/SdkConsumer/Equipment.cpp)임. C++/Editor 기능을 제공하며 Python/JavaScript의 장착 제어 바인딩은 제공하지 않음.
 
@@ -605,7 +632,13 @@ auto changed = viewer.SetMaterial(id, 0, material); // Result<void> 확인 필�
 
 렌더링에는 Advanced lighting과 `QualityOverrides::Pbr=true`가 필요함. Low/Medium은 기본 OFF, High는 ON임. `QualityCapabilities::PbrLighting`을 확인하며 미지원은 거부하고 AllowFallback일 때만 Basic 재질 경로로 대체함. 직접광 Directional/Point/Spot/Rect, Normal Map·Skinning·Instancing·Sun Shadow를 사용하며 IBL은 제공하지 않음.
 
-`Scene::SetMaterial/ResetMaterial`과 `EditorDocument::SetMaterial/ResetMaterial`도 제공함. SetMaterial은 재질 전체 값을 override하며 ResetMaterial로 원본을 복원함. override가 있는 객체는 개별 draw로 처리함. Document 편집은 Undo/Redo 대상이며 Scene v13에 저장함. Texture는 같은 모델 내부 index만 참조함. Reimport 시 override material index/name·texture index 호환성을 검사함. PBR 설정은 현재 Quality writer v2로 저장하며 reader는 v1~v2를 지원함. 정적 SDK 소비자는 공개 구조체 변경 시 헤더/라이브러리를 함께 재빌드해야 함.
+`Scene::SetMaterial/ResetMaterial`과 `EditorDocument::SetMaterial/ResetMaterial`도 제공함. SetMaterial은 재질 전체 값을 override하며 ResetMaterial로 원본을 복원함. override가 있는 객체는 개별 draw로 처리함. Document 편집은 Undo/Redo 대상임. Scene은 일반 재질 override를 v13 이상에 저장함. Texture는 같은 모델 내부 index만 참조함. Reimport 시 override material index/name·texture index 호환성을 검사함. PBR 설정은 현재 Quality writer v2로 저장하며 reader는 v1~v2를 지원함. 정적 SDK 소비자는 공개 구조체 변경 시 헤더/라이브러리를 함께 재빌드해야 함.
+
+`MaterialAsset::AlphaBlend = true`와 음수 `AlphaCutoff`를 지정하면 기본색·정점색·텍스처의 알파를 곱해 straight alpha로 합성합니다. glTF `BLEND`는 이 모드로 가져옵니다. 불투명·마스크 메시를 제출한 뒤 블렌딩 프리미티브를 변환된 바운드 중심의 카메라 깊이순으로 그립니다. 블렌딩은 깊이를 테스트하고 개별 draw를 사용하며 그림자 캐스터에서 제외됩니다. 프리미티브 내부의 삼각형 순서는 메시 인덱스를 따르고, 파티클은 별도 패스로 합성됩니다. 비음수 `AlphaCutoff`와 `AlphaBlend`를 함께 설정하면 `std::invalid_argument`입니다. 블렌딩 재질 override는 Scene v17에 저장합니다. [Asset.h](../include/minvex/Asset.h)
+
+### 환경 파노라마
+
+`Scene::SetEnvironmentPanorama({image, rotationRadians, intensity})`는 Lit/Unlit 프레임에 배경을 그립니다. `image`는 가로 2–8192 픽셀의 2대1 equirectangular sRGB RGBA8 `std::shared_ptr<const lv::ImageAsset>`입니다. 위쪽 행은 +Y이며 −Z가 중앙입니다. Scene은 이미지 소유권을 공유하며 앱은 게시한 픽셀을 불변으로 유지합니다. 회전은 Y축 라디안, 강도는 [0,16]의 선형 RGB 배율입니다. 원근·직교 모두 카메라의 방향과 수직 FOV를 사용해 배경을 투영합니다. 이미지 크기는 유효 품질의 텍스처 한도를 따릅니다. 빈 이미지로 기본 배경색을 복구합니다. 형식이나 수치가 잘못되면 `std::invalid_argument`입니다. 파노라마는 런타임 배경이며 앱에서 장면을 열 때 설정합니다. [Scene.h](../include/minvex/Scene.h)
 
 ### Morph Target
 
@@ -713,7 +746,7 @@ auto changed = viewer.SetQuality(quality); // Result<void> 확인 필요
 
 ```sh
 python -m pip wheel . --wheel-dir out/wheels
-python -m pip install --force-reinstall out/wheels/minvex-1.2.0-cp312-cp312-win_amd64.whl
+python -m pip install --force-reinstall out/wheels/minvex-1.2.1-cp312-cp312-win_amd64.whl
 python python/examples/viewer.py examples/assets/MorphRibbon.gltf --frames 60
 ```
 
@@ -866,7 +899,7 @@ Facade·IO는 Result를 사용하고, low-level Asset/Scene/Animation API는 `Im
 
 | 항목 | 현재 규칙 |
 |---|---|
-| **Scene** | writer v13(지형 v14, 기본 파티클 v15, 고급 파티클 v16) / reader v1~v16. 외부 모델 참조·계층·카메라·조명·Pose·Clip/Cross-fade·Blend Tree·Additive·Event overlay·재질/Morph override·Shared Skeleton·Leader Pose·Socket·파티클 효과와 시드 저장. 로드 시 runtime ID 재매핑 |
+| **Scene** | writer v13(지형 v14, 기본 파티클 v15, 고급 파티클 v16, 사용자 데이터·알파 블렌딩 override v17) / reader v1~v17. 외부 모델 참조·계층·카메라·조명·Pose·Clip/Cross-fade·Blend Tree·Additive·Event overlay·재질/Morph override·Shared Skeleton·Leader Pose·Socket·파티클 효과와 시드·사용자 데이터 저장. 로드 시 runtime ID 재매핑 |
 | **Pose / Quality / Import** | Pose v1, Quality writer v2 / reader v1~v2, ImportVersion 6. Pose는 skeleton signature 호환 필요 |
 | **Quality** | Low·Medium·High, Overrides가 있으면 Custom. 기본 `AllowFallback=false`; 미지원 설정 대체는 명시적으로 허용 |
 | **SDK** | 정적 라이브러리. 소비자는 같은 architecture·compiler/toolset·configuration·C++ runtime을 사용함. MSVC로 빌드한 패키지는 ZIP 이름과 manifest의 `msvcToolset`에 컴파일러 `major.minor`를 표시하며 C++ 소비자의 컴파일러 ID와 `major.minor`를 `find_package`에서 검사함. 전체 컴파일러 버전은 `compiler`와 CMake의 `Minvex_COMPILER`에 기록함 |
@@ -881,8 +914,8 @@ Minvex 자체 코드는 Apache-2.0을 적용함. SDK 설치 접두사 최상위�
 
 ## 지원 범위
 
-이 문서는 SDK 1.2.0의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
+이 문서는 SDK 1.2.1의 공개 API를 설명합니다. 플랫폼별 실행 요구사항은 [README](../README.md#실행-요구사항)를 참고합니다.
 
 CPU-only 구성의 native 초기화·실행은 `UnsupportedFeature`를 반환함.
 
-Python wheel은 기본 renderer ON이며 CPU-only wheel은 `MINVEX_BUILD_RENDERER=OFF`로 구성함. Web은 Skin당 48 Joint·CPU Morph를 사용하며 Shadow/PCSS·HDR·BC3를 제공하지 않음. Asset Import는 문서화된 subset과 진단 경고를 따름. IBL·Emissive/Occlusion 렌더링·Alpha BLEND·Rect shadow는 지원하지 않음.
+Python wheel은 기본 renderer ON이며 CPU-only wheel은 `MINVEX_BUILD_RENDERER=OFF`로 구성함. Web은 Skin당 48 Joint·CPU Morph를 사용하며 Shadow/PCSS·HDR·BC3를 제공하지 않음. Asset Import는 문서화된 subset과 진단 경고를 따름. IBL·Emissive/Occlusion 렌더링·Rect shadow는 지원하지 않음.

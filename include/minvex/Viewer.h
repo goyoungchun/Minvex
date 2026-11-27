@@ -48,6 +48,12 @@ struct CameraControlOptions {
     float MaximumDistance = 100'000'000.0f;
 };
 
+// Slot counts for the entire graphics session. Zero uses the backend default.
+// Explicit counts must be in 1..65535. Set before constructing the Viewer.
+struct ViewerGpuPoolOptions {
+    int Buffers = 0, Images = 0, Samplers = 0, Shaders = 0, Pipelines = 0, Views = 0;
+};
+
 struct ViewerOptions {
     int Width = 1280, Height = 720;
     std::string Title = "Minvex Viewer"; // UTF-8, at most 126 bytes.
@@ -58,6 +64,7 @@ struct ViewerOptions {
     std::array<float, 4> ClearColor{0.035f, 0.045f, 0.065f, 1.0f};
     CameraControlOptions CameraControls;
     QualityProfile Quality;
+    ViewerGpuPoolOptions GpuPools;
 };
 
 struct ModelOptions {

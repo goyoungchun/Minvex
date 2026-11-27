@@ -56,6 +56,12 @@ void TestImports() {
         "\"name\":\"Checker\",\"doubleSided\":true,\"alphaMode\":\"MASK\",\"alphaCutoff\":0.3,\"extensions\":{\"KHR_materials_unlit\":{}},"));
     const auto material = registry.LoadModel(variantPath);
     Check(material->Materials[0].DoubleSided && material->Materials[0].Unlit && Near(material->Materials[0].AlphaCutoff, 0.3f), "MASK, double-sided and unlit material properties are imported");
+    const auto blendPath = temp.File("blend.gltf");
+    Write(blendPath, Replace(Read(Fixture("SharedBox.gltf")), "\"name\": \"Checker\",",
+        "\"name\":\"Checker\",\"alphaMode\":\"BLEND\","));
+    const auto blended = registry.LoadModel(blendPath);
+    Check(blended->Materials[0].AlphaBlend && blended->Materials[0].AlphaCutoff < 0,
+        "BLEND imports without a mask cutoff");
     Write(temp.File("matrix.gltf"), Replace(Read(Fixture("Sparse.gltf")), "\"mesh\": 0", "\"mesh\":0,\"matrix\":[2,0,0,0,0,3,0,0,0,0,4,0,1,2,3,1]"));
     const auto matrix = registry.LoadModel(temp.File("matrix.gltf"));
     Check(Near(matrix->ModelBounds.Min.X, 0) && Near(matrix->ModelBounds.Max.Y, 3.5f) && Near(matrix->ModelBounds.Max.Z, 3), "glTF matrix transforms affect imported bounds");
@@ -94,7 +100,6 @@ void TestFailuresAndLimits() {
     failure(Replace(Replace(Read(Fixture("Sparse.gltf")), "\"asset\":", "\"skins\":[{\"joints\":[0]}],\"asset\":"), "\"mesh\": 0", "\"mesh\":0,\"skin\":0"), lv::ImportErrorCode::InvalidData, "skinned mesh requires joint attributes");
     failure(Replace(json, "\"asset\":", "\"extensionsRequired\":[\"KHR_draco_mesh_compression\"],\"asset\":"), lv::ImportErrorCode::UnsupportedFeature, "unsupported required extension is explicit");
     failure(Replace(json, "\"attributes\":", "\"mode\":1,\"attributes\":"), lv::ImportErrorCode::UnsupportedFeature, "line primitives are explicitly unsupported");
-    failure(Replace(json, "\"name\": \"Checker\",", "\"name\":\"Checker\",\"alphaMode\":\"BLEND\","), lv::ImportErrorCode::UnsupportedFeature, "alpha blending is explicitly unsupported");
     failure(Replace(json, "\"index\": 0", "\"index\":0,\"texCoord\":1"), lv::ImportErrorCode::UnsupportedFeature, "unsupported texture coordinate set is explicit");
     auto glb = Read(Fixture("SharedBox.glb"));
     glb.resize(20);

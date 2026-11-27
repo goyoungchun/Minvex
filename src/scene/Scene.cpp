@@ -1,4 +1,5 @@
 #include <minvex/Scene.h>
+#include "core/Utf8.h"
 
 #include <algorithm>
 #include <atomic>
@@ -10,6 +11,10 @@
 namespace lv {
 namespace {
 std::atomic<ObjectId> nextObjectId{1};
+
+bool ValidUserText(std::string_view value, std::size_t maxBytes) noexcept {
+    return value.size() <= maxBytes && value.find('\0') == std::string_view::npos && detail::ValidUtf8(value);
+}
 }
 
 Mat4 Camera::ViewProjection(float aspect) const {
@@ -95,6 +100,46 @@ const SceneObject& Scene::GetObject(ObjectId id) const {
 bool Scene::Contains(ObjectId id) const noexcept { return objects_.contains(id); }
 
 void Scene::SetName(ObjectId id, std::string name) { (void)GetObject(id); objects_.at(id).Name = std::move(name); }
+
+void Scene::SetUserKey(ObjectId id, std::string key) {
+    const auto& object = GetObject(id);
+    if (!ValidUserText(key, MaxSceneUserKeyBytes)) { throw std::invalid_argument("Invalid Scene user key."); }
+    if (object.UserKey == key) { return; }
+    if (!key.empty() && !userKeys_.try_emplace(key, id).second) { throw std::invalid_argument("Scene user key already exists."); }
+    if (!object.UserKey.empty()) { userKeys_.erase(object.UserKey); }
+    objects_.at(id).UserKey = std::move(key);
+}
+
+ObjectId Scene::FindObjectByUserKey(std::string_view key) const noexcept {
+    const auto found = userKeys_.find(key);
+    return found == userKeys_.end() ? NoObject : found->second;
+}
+
+void Scene::SetUserMetadata(ObjectId id, std::string key, std::optional<std::string> value) {
+    (void)GetObject(id);
+    if (key.empty() || !ValidUserText(key, MaxSceneUserKeyBytes) || (value && !ValidUserText(*value, MaxSceneMetadataValueBytes))) {
+        throw std::invalid_argument("Invalid Scene metadata key or value.");
+    }
+    auto& metadata = objects_.at(id).UserMetadata;
+    if (!value) { metadata.erase(key); return; }
+    if (metadata.size() >= MaxSceneObjectMetadataEntries && !metadata.contains(key)) {
+        throw std::length_error("Scene object metadata entry limit exceeded.");
+    }
+    metadata.insert_or_assign(std::move(key), std::move(*value));
+}
+
+void Scene::SetEnvironmentPanorama(EnvironmentPanorama panorama) {
+    if (!panorama.Image) { panorama_ = {}; return; }
+    const auto& image = *panorama.Image;
+    if (image.Width < 2 || image.Width > 8192 || image.Height != image.Width / 2 || image.Width % 2 != 0 ||
+        image.Rgba.size() != static_cast<std::size_t>(image.Width) * image.Height * 4 ||
+        !std::isfinite(panorama.RotationRadians) || !std::isfinite(panorama.Intensity) ||
+        panorama.Intensity < 0 || panorama.Intensity > 16) {
+        throw std::invalid_argument("Invalid equirectangular environment panorama.");
+    }
+    panorama.RotationRadians = std::remainder(panorama.RotationRadians, 2 * std::numbers::pi_v<float>);
+    panorama_ = std::move(panorama);
+}
 
 void Scene::SetParent(ObjectId id, ObjectId parent) {
     (void)GetObject(id);
@@ -188,32 +233,47 @@ Mat4 Scene::GetWorldTransform(ObjectId id) const {
 
 std::vector<RenderItem> Scene::CollectRenderItems() const {
     PoseCache poses;
-    struct State { Mat4 World; bool Visible; };
-    std::unordered_map<ObjectId, State> states;
-    states.reserve(objects_.size());
+    struct State { Mat4 World = Mat4::Identity(); bool Visible = true; };
+    std::unordered_map<ObjectId, State> parents;
+    std::vector<const SceneObject*> pending;
     std::vector<RenderItem> result;
+    const auto evaluate = [&](State state, const SceneObject& object) {
+        const auto local = object.LocalTransform.Matrix();
+        if (object.AttachmentSocket.empty()) {
+            state.World = object.Parent ? state.World * local : local;
+        } else {
+            state.World = state.World * AttachmentTransform(object, &poses) * local;
+        }
+        state.Visible = state.Visible && object.Visible;
+        return state;
+    };
     // Iterative parent-chain evaluation works even after reparenting to an object
-    // created later, and avoids recursion for deeply nested imported scenes.
+    // created later. Store only ancestors used by multiple evaluations.
     for (const auto id : order_) {
-        std::vector<ObjectId> pending;
-        auto current = id;
-        while (current && !states.contains(current)) {
-            pending.push_back(current);
-            current = GetObject(current).Parent;
-        }
-        State state{Mat4::Identity(), true};
-        if (current) { state = states.at(current); }
-        for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
-            const auto& object = GetObject(*it);
-            state.World = state.World * AttachmentTransform(object, &poses) * object.LocalTransform.Matrix();
-            state.Visible = state.Visible && object.Visible;
-            states.emplace(*it, state);
-        }
         const auto& object = GetObject(id);
+        State state;
+        if (const auto cached = parents.find(id); cached != parents.end()) {
+            state = cached->second;
+        } else {
+            for (auto parent = object.Parent; parent;) {
+                if (const auto ancestor = parents.find(parent); ancestor != parents.end()) {
+                    state = ancestor->second;
+                    break;
+                }
+                pending.push_back(&GetObject(parent));
+                parent = pending.back()->Parent;
+            }
+            for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
+                state = evaluate(state, **it);
+                parents.emplace((*it)->Id, state);
+            }
+            pending.clear();
+            state = evaluate(state, object);
+        }
         if (object.Model && object.Animation.Model() != object.Model) { throw std::invalid_argument("Scene-owned player was rebound; use Scene::SetModel."); }
-        if (states.at(id).Visible && object.Model) {
+        if (state.Visible && object.Model) {
             const auto pose = object.LeaderPose || object.Animation.NeedsEvaluation() ? ResolvePose(id, poses) : nullptr;
-            result.push_back({id, object.Model, states.at(id).World,&object.Animation,&object.MaterialOverrides,pose});
+            result.push_back({id, object.Model, state.World,&object.Animation,&object.MaterialOverrides,pose});
         }
     }
     return result;
@@ -235,7 +295,12 @@ void Scene::RemoveObject(ObjectId id) {
         for (auto ancestor : chain) { membership[ancestor] = inSubtree; }
         if (inSubtree) { removed.insert(candidate); }
     }
-    for (const auto removedId : removed) { EraseParticleEffect(removedId); objects_.erase(removedId); }
+    for (const auto removedId : removed) {
+        EraseParticleEffect(removedId);
+        const auto& key = objects_.at(removedId).UserKey;
+        if (!key.empty()) { userKeys_.erase(key); }
+        objects_.erase(removedId);
+    }
     for (auto& [remainingId, object] : objects_) {
         (void)remainingId;
         if (removed.contains(object.LeaderPose)) { object.LeaderPose = NoObject; object.Animation.ClearAnimationEventQueue(); }

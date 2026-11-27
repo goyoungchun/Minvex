@@ -34,7 +34,8 @@ auto Edit(Function function) -> Result<decltype(function())> {
 }
 std::unique_ptr<EditorDocument::Snapshot> EditorDocument::Capture() const {
     auto s=std::make_unique<Snapshot>();s->Registry=registry_;s->Library=library_;s->Selection=selection_;s->Revision=revision_;
-    s->World.objects_=world_.objects_;s->World.order_=world_.order_;s->World.MainCamera=world_.MainCamera;s->World.Sun=world_.Sun;s->World.Ambient=world_.Ambient;s->World.LocalShadowResolution=world_.LocalShadowResolution;s->World.PointLights=world_.PointLights;s->World.SpotLights=world_.SpotLights;s->World.RectLights=world_.RectLights;
+    s->World.objects_=world_.objects_;s->World.userKeys_=world_.userKeys_;s->World.order_=world_.order_;s->World.MainCamera=world_.MainCamera;s->World.Sun=world_.Sun;s->World.Ambient=world_.Ambient;s->World.LocalShadowResolution=world_.LocalShadowResolution;s->World.PointLights=world_.PointLights;s->World.SpotLights=world_.SpotLights;s->World.RectLights=world_.RectLights;
+    s->World.panorama_=world_.panorama_;
     world_.CopyParticleEffectsTo(s->World);
     return s;
 }

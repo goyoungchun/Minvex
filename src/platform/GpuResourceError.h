@@ -16,7 +16,7 @@ inline constexpr GpuPool SamplerPool{"sampler", &sg_desc::sampler_pool_size};
 inline constexpr GpuPool ShaderPool{"shader", &sg_desc::shader_pool_size};
 inline constexpr GpuPool PipelinePool{"pipeline", &sg_desc::pipeline_pool_size};
 inline constexpr GpuPool ViewPool{"view", &sg_desc::view_pool_size};
-inline constexpr char GpuPoolHint[] = "Share model handles, use per-object material overrides, or reduce unique graphics resources.";
+inline constexpr char GpuPoolHint[] = "For Standalone Viewer, increase the corresponding ViewerOptions::GpuPools count before creating the Viewer. You can also reduce unique graphics resources or share model handles.";
 
 // An exhausted Sokol pool has no free slots. Report slots, which are independent of GPU byte usage.
 inline void DescribeFullPool(char* output, std::size_t size, GpuPool pool) noexcept {

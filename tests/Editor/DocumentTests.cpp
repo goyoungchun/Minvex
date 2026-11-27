@@ -82,7 +82,10 @@ void InvalidArchives() {
     auto legacyBrand = valid; legacyBrand["format"] = "MinuvexScene"; Write(file, legacyBrand.dump());
     Check(bool(lv::LoadScene(file, registry)), "pre-rename Scene format remains readable");
     const auto rejects = [&](Json j,const char* label) { Write(file,j.dump()); auto result = lv::LoadScene(file,registry); Check(!result && result.Error().Code == lv::ErrorCode::InvalidData,label); };
-    auto j = valid; j["version"] = 17; rejects(j,"future scene versions rejected");
+    auto j = valid; j["version"] = 18; rejects(j,"future scene versions rejected");
+    j = valid; j["objects"][0]["userKey"] = "tank"; rejects(j,"user keys are rejected in a legacy archive");
+    j["version"] = 17; j["objects"][1]["userKey"] = "tank"; rejects(j,"duplicate user keys are rejected on load");
+    j = valid; j["version"] = 17; j["objects"][0]["metadata"] = {{"valve", 1}}; rejects(j,"metadata archive values must be strings");
     j = valid; j["version"] = 1.0; rejects(j,"noninteger schema version rejected");
     j = valid; j["objects"][1]["id"] = j["objects"][0]["id"]; rejects(j,"duplicate object IDs rejected");
     j = valid; j["objects"][0]["id"] = 0; rejects(j,"zero object IDs rejected");
@@ -110,6 +113,39 @@ void InvalidArchives() {
     Check(!lv::SaveScene(scene,folder) && std::filesystem::is_directory(folder),"failed replacement preserves destination directory");
     bool temporaryLeft = false; for (const auto& entry : std::filesystem::directory_iterator(temp.Path)) { temporaryLeft |= entry.path().filename().string().find(".tmp-") != std::string::npos; }
     Check(!temporaryLeft,"failed save cleans temporary file");
+    scene.SetUserKey(child, "노즐-01");
+    scene.SetUserMetadata(child, "splash", "off");
+    Check(bool(lv::SaveScene(scene,file)) && Json::parse(Read(file))["version"] == 17, "user data opts into Scene v17");
+    auto withUserData = lv::LoadScene(file, registry);
+    if (!withUserData) { throw std::runtime_error(withUserData.Error().Message); }
+    auto& loadedScene = withUserData.Value().World;
+    const auto reconnect = loadedScene.FindObjectByUserKey("노즐-01");
+    Check(reconnect != lv::NoObject && reconnect != child && loadedScene.GetObject(reconnect).UserMetadata.at("splash") == "off",
+        "a Unicode user key reconnects the object and its state after ID remapping");
+    loadedScene.RemoveObject(loadedScene.GetObject(reconnect).Parent);
+    Check(loadedScene.FindObjectByUserKey("노즐-01") == lv::NoObject, "subtree removal releases persistent keys");
+    scene.AddModel(lv::MakeTerrainModel(lv::TerrainGrid({2,2,1,1,{}}, std::array<double,4>{})));
+    Check(bool(lv::SaveScene(scene, file)) && Json::parse(Read(file))["version"] == 17 && bool(lv::LoadScene(file, registry)),
+        "serialized terrain after a keyed object preserves the higher scene version");
+    const auto glass = temp.File("glass.gltf");
+    auto gltf = Json::parse(Read(Fixture("MultiPrimitive.gltf")));
+    gltf["materials"][0]["alphaMode"] = "BLEND";
+    Write(glass, gltf.dump());
+    const auto glassModel = registry.LoadModel(glass);
+    Check(glassModel->Materials[0].AlphaBlend, "glTF BLEND is imported as a blended material");
+    lv::Scene materialScene;
+    const auto modelId = materialScene.AddModel(glassModel);
+    auto override = materialScene.GetMaterial(modelId, 0);
+    override.BaseColor[3] = .35f;
+    materialScene.SetMaterial(modelId, 0, override);
+    const auto savedMaterial = lv::SaveScene(materialScene, file);
+    if (!savedMaterial) { throw std::runtime_error(savedMaterial.Error().Message); }
+    auto loadedMaterialResult = lv::LoadScene(file, registry);
+    if (!loadedMaterialResult) { throw std::runtime_error(loadedMaterialResult.Error().Message); }
+    auto& loadedMaterial = loadedMaterialResult.Value();
+    const auto& restored = loadedMaterial.World.GetMaterial(loadedMaterial.World.ObjectIds().front(), 0);
+    Check(Json::parse(Read(file))["version"] == 17 && restored.AlphaBlend && Near(restored.BaseColor[3],.35f),
+        "Scene v17 preserves per-object alpha blending overrides");
     lv::Scene deep; lv::ObjectId last = 0; for (int i = 0; i < 257; ++i) { last = deep.CreateObject("deep",last); }
     Check(!lv::SaveScene(deep,file),"archive hierarchy depth limit enforced");
     lv::EditorDocument doc; auto asset = doc.ImportModel(Fixture("SharedBox.glb")); Check(bool(asset),"asset imported for invalid reference tests");

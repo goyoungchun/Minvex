@@ -46,7 +46,7 @@ void Resources() {
     auto imageModel=std::make_shared<lv::ModelAsset>(*model);imageModel->Images={{1024,512,std::vector<std::uint8_t>(1024*512*4,255)}};imageModel->Textures={lv::TextureAsset{}};for (auto& mat:imageModel->Materials) {mat.BaseColorTexture=0;}
     lv::Scene imageScene;imageScene.AddModel(imageModel);auto low=lv::EstimateQualityResources(lv::MakeQualityProfile(lv::QualityPreset::Low),caps,imageScene,100,50);auto high=lv::EstimateQualityResources(lv::MakeQualityProfile(lv::QualityPreset::High),caps,imageScene,100,50);
     std::uint64_t lowMip=0;for (int w=512,h=256;;w=std::max(1,w/2),h=std::max(1,h/2)) {lowMip+=std::uint64_t(w)*h*4;if (w == 1 && h == 1) {break;}}
-    Check(low && high && low.Value().Cost.TextureBytes == lowMip+model->Meshes[0].Primitives.size()*4 && high.Value().Cost.TextureBytes > low.Value().Cost.TextureBytes,"texture reduction and complete NPOT mip chain with per-primitive fallback");
+    Check(low && high && low.Value().Cost.TextureBytes == lowMip+4 && high.Value().Cost.TextureBytes > low.Value().Cost.TextureBytes,"texture reduction and complete NPOT mip chain with a shared mesh fallback");
     Check(imageModel->Images[0].Width == 1024 && imageModel->Images[0].Rgba.size() == 1024*512*4,"estimation does not modify or resample CPU assets");
     auto replacement=std::make_shared<lv::ModelAsset>(*imageModel);lv::Scene replacedScene;replacedScene.AddModel(replacement);
     auto replaced=lv::EstimateQualityResources(lv::MakeQualityProfile(lv::QualityPreset::Low),caps,replacedScene,100,50,&low.Value());

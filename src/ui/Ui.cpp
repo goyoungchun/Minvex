@@ -480,12 +480,21 @@ Result<void> UiCanvas::Load(const std::filesystem::path& path) {
     }catch (...) {return Result<void>::Failure(ErrorFromException(ErrorCode::InvalidData,path));}
 }
 Result<std::vector<std::uint8_t>> UiCanvas::Rasterize(int width,int height,float scale) const {
-    const auto& p=*impl_;if (!p.Ready()) {return Fail<std::vector<std::uint8_t>>(ErrorCode::WrongThread,"UI accessed from another thread.");}
+    auto raster=RasterizeRegion(width,height,scale,std::nullopt);
+    if (!raster) {return Result<std::vector<std::uint8_t>>::Failure(raster.Error());}
+    return Result<std::vector<std::uint8_t>>::Success(std::move(raster).Value().Pixels);
+}
+Result<UiCanvas::RasterRegion> UiCanvas::RasterizeRegion(int width,int height,float scale,
+    std::optional<std::uint64_t> uploadedRevision) const {
+    const auto& p=*impl_;if (!p.Ready()) {return Fail<RasterRegion>(ErrorCode::WrongThread,"UI accessed from another thread.");}
     try {
         Require(width>=1&&height>=1&&width<=4096&&height<=4096,"UI raster dimensions must be 1..4096.");Range(scale,.25f,4);
         const auto directory=std::filesystem::absolute(p.Directory).lexically_normal();
         const bool reuse=p.Raster&&p.Raster->Width==width&&p.Raster->Height==height&&p.Raster->Scale==scale&&p.Raster->Directory==directory;
-        if (reuse&&p.Raster->Version==p.Version) {return Result<std::vector<std::uint8_t>>::Success(p.Raster->Pixels);}
+        const bool partial=reuse&&uploadedRevision==p.Raster->Version;
+        if (reuse&&p.Raster->Version==p.Version) {
+            return Result<RasterRegion>::Success(partial ? RasterRegion{} : RasterRegion{0,0,width,height,p.Raster->Pixels});
+        }
         const auto& resolved=p.Resolve(width/scale,height/scale);
         std::vector<PaintItem> items;items.reserve(resolved.size());
         std::vector<bool> changed;changed.reserve(resolved.size());
@@ -500,10 +509,11 @@ Result<std::vector<std::uint8_t>> UiCanvas::Rasterize(int width,int height,float
             changed.push_back(different);items.push_back(std::move(item));
         }
         if (reuse) {for (std::size_t i=items.size();i<p.Raster->Items.size();++i) {Include(damage,p.Raster->Items[i].Bounds);}}
-        // Work on a copy so a failed font/raster operation cannot publish a
-        // partly repaired image or metadata for the next call.
-        auto pixels=reuse ? p.Raster->Pixels:std::vector<std::uint8_t>(static_cast<std::size_t>(width)*height*4);
-        if (reuse&&!damage.Empty()) {for (int y=damage.Top;y<damage.Bottom;++y) {std::memset(pixels.data()+(static_cast<std::size_t>(y)*width+damage.Left)*4,0,static_cast<std::size_t>(damage.Right-damage.Left)*4);}}
+        // Repaint only the dirty rectangle into scratch storage. The existing
+        // bitmap stays valid if layout or native text rasterization fails.
+        const int dirtyWidth=damage.Right-damage.Left,dirtyHeight=damage.Bottom-damage.Top;
+        const auto dirtyStride=static_cast<std::size_t>(dirtyWidth)*4;
+        RasterRegion dirty{damage.Left,damage.Top,dirtyWidth,dirtyHeight,std::vector<std::uint8_t>(dirtyStride*dirtyHeight)};
         for (std::size_t index=0;index<resolved.size();++index) {
             const auto& item=items[index];if (!item.Visible) {continue;}
             const auto& r=resolved[index];const auto& e=item.Element;const auto& s=item.Style;const Geometry g(r.Box);
@@ -514,21 +524,77 @@ Result<std::vector<std::uint8_t>> UiCanvas::Rasterize(int width,int height,float
             // matching an uncached raster. Unchanged distant elements are free.
             if (area.Empty()&&!changed[index]) {continue;}
 #if !defined(_WIN32) && !defined(__APPLE__)
-            if (e.Kind!=UiKind::Panel&&detail::HasText(e)) {return Fail<std::vector<std::uint8_t>>(ErrorCode::UnsupportedFeature,"Native text requires Windows or macOS.");}
+            if (e.Kind!=UiKind::Panel&&detail::HasText(e)) {return Fail<RasterRegion>(ErrorCode::UnsupportedFeature,"Native text requires Windows or macOS.");}
 #endif
             auto text=e.Kind!=UiKind::Panel&&detail::HasText(e) ? detail::NativeText(e,p.Directory,tw,th,scale,s.Text,&p.TextContext):std::vector<std::uint8_t>{};
+            const bool fill=std::ranges::any_of(s.Fill,[](const UiColor& color){return color[3]>0;});
+            const bool border=s.BorderWidth>0&&s.Border[3]>0;
+            const bool shadow=s.Shadow[3]>0;
+            const bool decorated=fill||border||shadow;
+            if (!decorated&&text.empty()) {continue;}
             const float aa=1/(scale*std::min(g.SX,g.SY));
-            for (int y=area.Top;y<area.Bottom;++y) {for (int x=area.Left;x<area.Right;++x) {const float wx=(x+.5f)/scale,wy=(y+.5f)/scale;if (detail::UiClipped(resolved,index,wx,wy)) {continue;}const auto xy=g.Local(wx,wy);const float lx=xy[0],ly=xy[1];auto* target=pixels.data()+(static_cast<std::size_t>(y)*width+x)*4;std::uint8_t layer[4]{};auto* dst=layer;
-                if (s.Shadow[3]>0) {const float sd=Distance(lx-s.ShadowX,ly-s.ShadowY,g.W,g.H,s.Radius);const float coverage=s.ShadowBlur>0 ? .5f*std::erfc(sd/(s.ShadowBlur*.70710678f)):std::clamp(.5f-sd/aa,0.0f,1.0f);Blend(dst,s.Shadow,coverage);}
-                const float distance=Distance(lx,ly,g.W,g.H,s.Radius),coverage=std::clamp(.5f-distance/aa,0.0f,1.0f);if (coverage<=0) {Composite(target,layer,s.Opacity);continue;}
-                const float u=std::clamp(lx/g.W,0.0f,1.0f),v=std::clamp(ly/g.H,0.0f,1.0f);UiColor fill;for (int k=0;k<4;++k) {fill[k]=std::lerp(std::lerp(s.Fill[0][k],s.Fill[1][k],u),std::lerp(s.Fill[3][k],s.Fill[2][k],u),v);}Blend(dst,fill,coverage);
-                if (s.BorderWidth>0) {Blend(dst,s.Border,std::clamp((distance+s.BorderWidth)/aa+.5f,0.0f,1.0f)*coverage);}
-                if (!text.empty()&&lx>=0&&ly>=0&&lx<g.W&&ly<g.H) {const int tx=std::clamp(static_cast<int>(lx*scale),0,tw-1),ty=std::clamp(static_cast<int>(ly*scale),0,th-1);Composite(dst,text.data()+(static_cast<std::size_t>(ty)*tw+tx)*4,coverage);}Composite(target,layer,s.Opacity);
-            }}
+            for (int y=area.Top;y<area.Bottom;++y) {
+                for (int x=area.Left;x<area.Right;++x) {
+                    const float wx=(x+.5f)/scale,wy=(y+.5f)/scale;
+                    if (detail::UiClipped(resolved,index,wx,wy)) {continue;}
+                    const auto xy=g.Local(wx,wy);
+                    const float lx=xy[0],ly=xy[1];
+                    const std::uint8_t* glyph=nullptr;
+                    if (!text.empty()&&lx>=0&&ly>=0&&lx<g.W&&ly<g.H) {
+                        const int tx=std::clamp(static_cast<int>(lx*scale),0,tw-1);
+                        const int ty=std::clamp(static_cast<int>(ly*scale),0,th-1);
+                        glyph=text.data()+(static_cast<std::size_t>(ty)*tw+tx)*4;
+                    }
+                    const bool textPixel=glyph&&glyph[3]>0;
+                    if (!decorated&&!textPixel) {continue;}
+                    std::uint8_t layer[4]{};
+                    if (shadow) {
+                        const float sd=Distance(lx-s.ShadowX,ly-s.ShadowY,g.W,g.H,s.Radius);
+                        const float coverage=s.ShadowBlur>0 ? .5f*std::erfc(sd/(s.ShadowBlur*.70710678f)):std::clamp(.5f-sd/aa,0.0f,1.0f);
+                        Blend(layer,s.Shadow,coverage);
+                    }
+                    const float distance=Distance(lx,ly,g.W,g.H,s.Radius);
+                    const float coverage=std::clamp(.5f-distance/aa,0.0f,1.0f);
+                    if (coverage>0) {
+                        if (fill) {
+                            const float u=std::clamp(lx/g.W,0.0f,1.0f),v=std::clamp(ly/g.H,0.0f,1.0f);
+                            UiColor color;
+                            for (int k=0;k<4;++k) {
+                                color[k]=std::lerp(std::lerp(s.Fill[0][k],s.Fill[1][k],u),std::lerp(s.Fill[3][k],s.Fill[2][k],u),v);
+                            }
+                            Blend(layer,color,coverage);
+                        }
+                        if (border) {Blend(layer,s.Border,std::clamp((distance+s.BorderWidth)/aa+.5f,0.0f,1.0f)*coverage);}
+                        if (textPixel) {Composite(layer,glyph,coverage);}
+                    }
+                    auto* target=dirty.Pixels.data()+static_cast<std::size_t>(y-damage.Top)*dirtyStride+(x-damage.Left)*4;
+                    Composite(target,layer,s.Opacity);
+                }
+            }
         }
-        if (!items.empty()&&cacheBytes<=RasterCacheBudget) {p.Raster=RasterCache{width,height,scale,p.Version,directory,std::move(items),pixels};}
+        const auto applyDirty=[&](std::vector<std::uint8_t>& target) {
+            for (int y=0;y<dirtyHeight;++y) {
+                std::memcpy(target.data()+(static_cast<std::size_t>(damage.Top+y)*width+damage.Left)*4,
+                            dirty.Pixels.data()+static_cast<std::size_t>(y)*dirtyStride,dirtyStride);
+            }
+        };
+        const bool keepCache=!items.empty()&&cacheBytes<=RasterCacheBudget;
+        if (partial) {
+            if (keepCache) {
+                applyDirty(p.Raster->Pixels);
+                p.Raster->Items.swap(items);
+                p.Raster->Version=p.Version;
+            } else {p.Raster.reset();}
+            return Result<RasterRegion>::Success(std::move(dirty));
+        }
+        if (reuse) {
+            auto pixels=p.Raster->Pixels;
+            applyDirty(pixels);
+            dirty={0,0,width,height,std::move(pixels)};
+        }
+        if (keepCache) {p.Raster=RasterCache{width,height,scale,p.Version,directory,std::move(items),dirty.Pixels};}
         else {p.Raster.reset();}
-        return Result<std::vector<std::uint8_t>>::Success(std::move(pixels));
-    }catch (...) {return Result<std::vector<std::uint8_t>>::Failure(ErrorFromException(ErrorCode::InvalidData));}
+        return Result<RasterRegion>::Success(std::move(dirty));
+    }catch (...) {return Result<RasterRegion>::Failure(ErrorFromException(ErrorCode::InvalidData));}
 }
 } // namespace lv

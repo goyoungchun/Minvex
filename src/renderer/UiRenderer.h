@@ -1,4 +1,5 @@
 #pragma once
+#include <minvex/Debug.h>
 #include <minvex/Ui.h>
 #include <sokol_gfx.h>
 namespace lv::detail {
@@ -10,7 +11,7 @@ class UiRenderer final {
 public:
     UiRenderer();
     ~UiRenderer();
-    void Composite(const UiCanvas& canvas,sg_view scene,int width,int height,float scale);
+    UiFrameDebugInfo Composite(const UiCanvas& canvas,sg_view scene,int width,int height,float scale);
     sg_view Texture() const noexcept {return outputView_;}
     sg_image Image() const noexcept {return output_;}
     sg_image OverlayImage() const noexcept {return overlay_;}
@@ -23,6 +24,7 @@ private:
     sg_buffer upload_{};
     int rowPitch_=0;
     std::vector<std::uint8_t> padded_;
+    const UiCanvas* canvas_=nullptr;
     std::uint64_t revision_=0;int width_=0,height_=0;float scale_=0;
     void ClearImages() noexcept;
 };

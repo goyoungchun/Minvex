@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <stdexcept>
 #include <type_traits>
 
@@ -19,11 +20,127 @@ static_assert(std::extent_v<decltype(skin_params_t::joint_matrices)> == ShaderSk
 static_assert(alignof(mesh_params_t) >= 16 && offsetof(mesh_params_t, normal_matrix) == 64);
 static_assert(std::is_standard_layout_v<Vertex>);
 
+namespace {
+void ApplyMeshPipeline(sg_pipeline pipeline, sg_pipeline& active) {
+    if (pipeline.id && pipeline.id == active.id) { return; }
+    sg_apply_pipeline(pipeline);
+    active = pipeline;
+}
+}
+
+struct MeshFallback {
+    sg_image Image{};
+    sg_view View{};
+    sg_sampler Linear{}, Nearest{};
+
+    ~MeshFallback() {
+        if (!sg_isvalid()) { return; }
+        if (Nearest.id) { sg_destroy_sampler(Nearest); }
+        if (Linear.id) { sg_destroy_sampler(Linear); }
+        if (View.id) { sg_destroy_view(View); }
+        if (Image.id) { sg_destroy_image(Image); }
+    }
+};
+
+class MeshResourceCache {
+    // The generated shader identifies the fixed vertex layout, including instance
+    // attributes. Wireframe differs in primitive type and index format.
+    struct PipelineKey {
+        unsigned Shader;
+        int Samples;
+        sg_pixel_format Color, Depth;
+        sg_index_type Index;
+        sg_primitive_type Primitive;
+        sg_face_winding Winding;
+        sg_cull_mode Cull;
+        bool Blended;
+        auto operator<=>(const PipelineKey&) const = default;
+    };
+
+public:
+    std::shared_ptr<sg_shader> Shader(const sg_shader_desc* desc, const char* name) {
+        auto& entry = shaders_[desc];
+        if (auto existing = entry.lock()) { return existing; }
+        auto shader = std::shared_ptr<sg_shader>(new sg_shader{}, [](sg_shader* handle) {
+            if (handle->id && sg_isvalid()) { sg_destroy_shader(*handle); }
+            delete handle;
+        });
+        *shader = sg_make_shader(desc);
+        RequireGpuResource(sg_query_shader_state(*shader), shader->id, ShaderPool, name);
+        entry = shader;
+        return shader;
+    }
+
+    std::shared_ptr<sg_pipeline> Pipeline(const sg_pipeline_desc& desc, const char* name) {
+        const auto d = sg_query_pipeline_defaults(desc);
+        const PipelineKey key{d.shader.id, d.sample_count, d.colors[0].pixel_format, d.depth.pixel_format,
+            d.index_type, d.primitive_type, d.face_winding, d.cull_mode, d.colors[0].blend.enabled};
+        auto& entry = pipelines_[key];
+        if (auto existing = entry.lock()) { return existing; }
+        auto pipeline = std::shared_ptr<sg_pipeline>(new sg_pipeline{}, [](sg_pipeline* handle) {
+            if (handle->id && sg_isvalid()) { sg_destroy_pipeline(*handle); }
+            delete handle;
+        });
+        *pipeline = sg_make_pipeline(desc);
+        RequireGpuResource(sg_query_pipeline_state(*pipeline), pipeline->id, PipelinePool, name);
+        entry = pipeline;
+        return pipeline;
+    }
+
+    std::shared_ptr<MeshFallback> Fallback() {
+        if (auto existing = fallback_.lock()) { return existing; }
+        auto fallback = std::make_shared<MeshFallback>();
+        const std::uint32_t white = 0xFFFFFFFF;
+        sg_image_desc image{};
+        image.width = image.height = 1;
+        image.pixel_format = SG_PIXELFORMAT_SRGB8A8;
+        image.data = SG_RANGE(white);
+        fallback->Image = sg_make_image(image);
+        RequireGpuResource(sg_query_image_state(fallback->Image), fallback->Image.id, ImagePool, "mesh fallback image");
+        sg_view_desc view{};
+        view.texture.image = fallback->Image;
+        fallback->View = sg_make_view(view);
+        RequireGpuResource(sg_query_view_state(fallback->View), fallback->View.id, ViewPool, "mesh fallback view");
+        sg_sampler_desc sampler{};
+        sampler.min_filter = sampler.mag_filter = SG_FILTER_LINEAR;
+        fallback->Linear = sg_make_sampler(sampler);
+        RequireGpuResource(sg_query_sampler_state(fallback->Linear), fallback->Linear.id, SamplerPool, "mesh linear sampler");
+        sampler.min_filter = sampler.mag_filter = SG_FILTER_NEAREST;
+        fallback->Nearest = sg_make_sampler(sampler);
+        RequireGpuResource(sg_query_sampler_state(fallback->Nearest), fallback->Nearest.id, SamplerPool, "mesh nearest sampler");
+        fallback_ = fallback;
+        return fallback;
+    }
+
+    void Prune() {
+        std::erase_if(shaders_, [](const auto& entry) { return entry.second.expired(); });
+        std::erase_if(pipelines_, [](const auto& entry) { return entry.second.expired(); });
+    }
+
+private:
+    std::map<const sg_shader_desc*, std::weak_ptr<sg_shader>> shaders_;
+    std::map<PipelineKey, std::weak_ptr<sg_pipeline>> pipelines_;
+    std::weak_ptr<MeshFallback> fallback_;
+};
+
+std::shared_ptr<MeshResourceCache> CreateMeshResourceCache() { return std::make_shared<MeshResourceCache>(); }
+void PruneMeshResourceCache(MeshResourceCache& cache) { cache.Prune(); }
+
+sg_shader MeshRenderer::UseShader(const sg_shader_desc* desc, const char* name) {
+    shaderRefs_.push_back(cache_->Shader(desc, name));
+    return *shaderRefs_.back();
+}
+
+sg_pipeline MeshRenderer::UsePipeline(const sg_pipeline_desc& desc, const char* name) {
+    pipelineRefs_.push_back(cache_->Pipeline(desc, name));
+    return *pipelineRefs_.back();
+}
+
 MeshRenderer::~MeshRenderer() {
     Shutdown();
 }
 
-void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinned, int samples,sg_pixel_format colorFormat,bool shadow,std::span<const MeshLod> lods,std::span<const MorphTarget> morphs,[[maybe_unused]] const MeshPrimitive* source,bool extendedLighting) {
+void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinned, int samples,sg_pixel_format colorFormat,bool shadow,std::span<const MeshLod> lods,std::span<const MorphTarget> morphs,[[maybe_unused]] const MeshPrimitive* source,bool extendedLighting,std::shared_ptr<MeshResourceCache> cache) {
     if (vertices_.id || indices_.id || shader_.id || pipelines_[0].id) {
         throw std::logic_error("MeshRenderer is already initialized.");
     }
@@ -35,6 +152,7 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
         bool Committed = false;
         ~Rollback() { if (!Committed) { Renderer.Shutdown(); } }
     } rollback{*this};
+    cache_ = cache ? std::move(cache) : CreateMeshResourceCache();
     ValidateMesh(mesh);
     extendedLighting_=extendedLighting;
     const auto optimized=OptimizeMesh(mesh,lods);const auto& data=optimized.Geometry;
@@ -82,12 +200,12 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
     skinned_ = skinned;
     doubleSided_=doubleSided;
 #if defined(__EMSCRIPTEN__)
-    shader_=sg_make_shader(extendedLighting_ ? (skinned ? lit_skin_shader_desc(sg_query_backend()):lit_mesh_shader_desc(sg_query_backend())):(skinned ? skin_shader_desc(sg_query_backend()):mesh_shader_desc(sg_query_backend())));
+    shader_=UseShader(extendedLighting_ ? (skinned ? lit_skin_shader_desc(sg_query_backend()):lit_mesh_shader_desc(sg_query_backend())):(skinned ? skin_shader_desc(sg_query_backend()):mesh_shader_desc(sg_query_backend())), "mesh shader");
 #else
-    shader_ = sg_make_shader(extendedLighting_ ? (morphCount_ ? (skinned ? lit_morph_skin_shader_desc(sg_query_backend()):lit_morph_mesh_shader_desc(sg_query_backend())):(skinned ? lit_skin_shader_desc(sg_query_backend()):lit_mesh_shader_desc(sg_query_backend()))):(morphCount_ ? (skinned ? morph_skin_shader_desc(sg_query_backend()):morph_mesh_shader_desc(sg_query_backend())):(skinned ? skin_shader_desc(sg_query_backend()):mesh_shader_desc(sg_query_backend()))));
+    shader_ = UseShader(extendedLighting_ ? (morphCount_ ? (skinned ? lit_morph_skin_shader_desc(sg_query_backend()):lit_morph_mesh_shader_desc(sg_query_backend())):(skinned ? lit_skin_shader_desc(sg_query_backend()):lit_mesh_shader_desc(sg_query_backend()))):(morphCount_ ? (skinned ? morph_skin_shader_desc(sg_query_backend()):morph_mesh_shader_desc(sg_query_backend())):(skinned ? skin_shader_desc(sg_query_backend()):mesh_shader_desc(sg_query_backend()))), "mesh shader");
 #endif
 
-    RequireGpuResource(sg_query_shader_state(shader_), shader_.id, ShaderPool, "mesh shader");
+
 
     sg_pipeline_desc pipelineDesc{};
     pipelineDesc.shader = shader_;
@@ -117,83 +235,38 @@ void MeshRenderer::Initialize(const MeshData& mesh, bool doubleSided, bool skinn
     pipelineDesc.label = "minvex-mesh-pipeline";
     for (int i = 0; i < 2; ++i) {
         pipelineDesc.face_winding = i == 0 ? SG_FACEWINDING_CCW : SG_FACEWINDING_CW;
-        pipelines_[i] = sg_make_pipeline(pipelineDesc);
-        RequireGpuResource(sg_query_pipeline_state(pipelines_[i]), pipelines_[i].id, PipelinePool, "mesh pipeline");
-        if (doubleSided) {
-            auto twoSided = pipelineDesc;
-            twoSided.cull_mode = SG_CULLMODE_NONE;
-            doubleSidedPipelines_[i] = sg_make_pipeline(twoSided);
-            RequireGpuResource(sg_query_pipeline_state(doubleSidedPipelines_[i]), doubleSidedPipelines_[i].id,
-                PipelinePool, "double-sided mesh pipeline");
-        }
+        pipelines_[i] = UsePipeline(pipelineDesc, "mesh pipeline");
     }
     if (shadow) {
 #if defined(__EMSCRIPTEN__)
-        shadowShader_=sg_make_shader(skinned ? shadow_skin_shader_desc(sg_query_backend()):shadow_mesh_shader_desc(sg_query_backend()));
+        shadowShader_=UseShader(skinned ? shadow_skin_shader_desc(sg_query_backend()):shadow_mesh_shader_desc(sg_query_backend()), "mesh shadow shader");
 #else
-        shadowShader_=sg_make_shader(morphCount_ ? (skinned ? morph_shadow_skin_shader_desc(sg_query_backend()):morph_shadow_mesh_shader_desc(sg_query_backend())):(skinned ? shadow_skin_shader_desc(sg_query_backend()):shadow_mesh_shader_desc(sg_query_backend())));
+        shadowShader_=UseShader(morphCount_ ? (skinned ? morph_shadow_skin_shader_desc(sg_query_backend()):morph_shadow_mesh_shader_desc(sg_query_backend())):(skinned ? shadow_skin_shader_desc(sg_query_backend()):shadow_mesh_shader_desc(sg_query_backend())), "mesh shadow shader");
 #endif
-        RequireGpuResource(sg_query_shader_state(shadowShader_), shadowShader_.id, ShaderPool, "mesh shadow shader");
-        sg_pipeline_desc d{};d.shader=shadowShader_;d.sample_count=1;d.colors[0].pixel_format=SG_PIXELFORMAT_R32F;d.depth.pixel_format=SG_PIXELFORMAT_DEPTH;d.depth.compare=SG_COMPAREFUNC_LESS_EQUAL;d.depth.write_enabled=true;d.index_type=indexType;d.cull_mode=doubleSided || skinned ? SG_CULLMODE_NONE:SG_CULLMODE_BACK;d.layout.buffers[0].stride=sizeof(Vertex);
+        sg_pipeline_desc d{};d.shader=shadowShader_;d.sample_count=1;d.colors[0].pixel_format=SG_PIXELFORMAT_R32F;d.depth.pixel_format=SG_PIXELFORMAT_DEPTH;d.depth.compare=SG_COMPAREFUNC_LESS_EQUAL;d.depth.write_enabled=true;d.index_type=indexType;d.cull_mode=skinned ? SG_CULLMODE_NONE:SG_CULLMODE_BACK;d.layout.buffers[0].stride=sizeof(Vertex);
         const auto attr=[&](int index,sg_vertex_format format,int offset) {d.layout.attrs[index].format=format;d.layout.attrs[index].offset=offset;};
         if (skinned) {attr(ATTR_shadow_skin_position,SG_VERTEXFORMAT_FLOAT3,offsetof(Vertex,Position));attr(ATTR_shadow_skin_color0,SG_VERTEXFORMAT_FLOAT4,offsetof(Vertex,Color));attr(ATTR_shadow_skin_texcoord0,SG_VERTEXFORMAT_FLOAT2,offsetof(Vertex,TexCoord));attr(ATTR_shadow_skin_joint_indices,SG_VERTEXFORMAT_USHORT4,offsetof(Vertex,Joints));attr(ATTR_shadow_skin_joint_weights,SG_VERTEXFORMAT_FLOAT4,offsetof(Vertex,Weights));}
         else {attr(ATTR_shadow_mesh_position,SG_VERTEXFORMAT_FLOAT3,offsetof(Vertex,Position));attr(ATTR_shadow_mesh_color0,SG_VERTEXFORMAT_FLOAT4,offsetof(Vertex,Color));attr(ATTR_shadow_mesh_texcoord0,SG_VERTEXFORMAT_FLOAT2,offsetof(Vertex,TexCoord));}
-        d.cull_mode=skinned ? SG_CULLMODE_NONE:SG_CULLMODE_BACK;
         for (int i = 0; i < 2; ++i) {
             d.face_winding = i == 0 ? SG_FACEWINDING_CCW : SG_FACEWINDING_CW;
-            shadowPipelines_[i] = sg_make_pipeline(d);
-            RequireGpuResource(sg_query_pipeline_state(shadowPipelines_[i]), shadowPipelines_[i].id,
-                PipelinePool, "mesh shadow pipeline");
-            if (doubleSided) {
-                auto twoSided = d;
-                twoSided.cull_mode = SG_CULLMODE_NONE;
-                doubleSidedShadowPipelines_[i] = sg_make_pipeline(twoSided);
-                RequireGpuResource(sg_query_pipeline_state(doubleSidedShadowPipelines_[i]), doubleSidedShadowPipelines_[i].id,
-                    PipelinePool, "double-sided mesh shadow pipeline");
-            }
+            shadowPipelines_[i] = UsePipeline(d, "mesh shadow pipeline");
         }
     }
-    const std::uint32_t white = 0xFFFFFFFF;
-    sg_image_desc imageDesc{};
-    imageDesc.width = imageDesc.height = 1;
-    imageDesc.pixel_format = SG_PIXELFORMAT_SRGB8A8;
-    imageDesc.data = SG_RANGE(white);
-    whiteImage_ = sg_make_image(imageDesc);
-    RequireGpuResource(sg_query_image_state(whiteImage_), whiteImage_.id, ImagePool, "fallback image");
-    sg_view_desc viewDesc{};
-    viewDesc.texture.image = whiteImage_;
-    whiteView_ = sg_make_view(viewDesc);
-    RequireGpuResource(sg_query_view_state(whiteView_), whiteView_.id, ViewPool, "fallback image view");
-    sg_sampler_desc samplerDesc{};
-    samplerDesc.min_filter = samplerDesc.mag_filter = SG_FILTER_LINEAR;
-    whiteSampler_ = sg_make_sampler(samplerDesc);
-    RequireGpuResource(sg_query_sampler_state(whiteSampler_), whiteSampler_.id, SamplerPool, "linear fallback sampler");
-    samplerDesc.min_filter=samplerDesc.mag_filter=SG_FILTER_NEAREST;nearestSampler_=sg_make_sampler(samplerDesc);
-    RequireGpuResource(sg_query_sampler_state(nearestSampler_), nearestSampler_.id, SamplerPool, "nearest fallback sampler");
+    if (doubleSided) { PrepareDoubleSided(); }
+    fallback_ = cache_->Fallback();
     indexCount_ = static_cast<int>(mesh.Indices.size());
     rollback.Committed = true;
 }
 
-void MeshRenderer::Draw(const Mat4& model, const Mat4& viewProjection, const DirectionalLight& light,
-                        const MaterialAsset& material, sg_view texture, sg_sampler sampler, std::span<const Mat4> palette, bool forceUnlit,const MeshLighting& lighting) const {
-    if (!pipelines_[0].id) {
-        throw std::logic_error("Initialize MeshRenderer before drawing.");
-    }
-    mesh_params_t uniforms{};
-    uniforms.mvp = viewProjection * model;
-    uniforms.normal_matrix = model.NormalMatrix();
-    uniforms.model_matrix=model;uniforms.shadow_matrix=lighting.Shadow ? lighting.Shadow->ViewProjection*model:Mat4::Identity();
+material_params_t PrepareMaterialUniforms(const DirectionalLight& light,const MeshLighting& lighting) {
     light.Validate();
     const auto length = std::hypot(double(light.Direction.X), double(light.Direction.Y), double(light.Direction.Z));
     material_params_t fragment{};
-    fragment.base_color = {material.BaseColor[0], material.BaseColor[1], material.BaseColor[2], material.BaseColor[3]};
     fragment.light_direction = {static_cast<float>(-light.Direction.X/length), static_cast<float>(-light.Direction.Y/length), static_cast<float>(-light.Direction.Z/length), light.Intensity};
     fragment.light_color = {light.Color.X, light.Color.Y, light.Color.Z, light.Ambient};
     fragment.ambient_color={light.Ambient+lighting.Ambient.Color.X*lighting.Ambient.Intensity,light.Ambient+lighting.Ambient.Color.Y*lighting.Ambient.Intensity,light.Ambient+lighting.Ambient.Color.Z*lighting.Ambient.Intensity,0};
-    fragment.options = {material.AlphaCutoff, material.Unlit || material.Shading == ShadingModel::Unlit || forceUnlit ? 1.0f : 0.0f, 0,lighting.Advanced ? 1.0f:0.0f};
-    fragment.pbr_options={material.MetallicFactor,material.RoughnessFactor,lighting.Pbr && material.Shading == ShadingModel::Pbr ? 1.0f:0.0f,0};
+    fragment.options.W = lighting.Advanced ? 1.0f : 0.0f;
     fragment.eye_position={lighting.Eye.X,lighting.Eye.Y,lighting.Eye.Z,0};fragment.view_direction={lighting.ViewDirection.X,lighting.ViewDirection.Y,lighting.ViewDirection.Z,0};
-    fragment.normal_options={material.NormalScale,lighting.Advanced && lighting.NormalTexture.id ? 1.0f:0.0f,0,0};
     fragment.debug_options={static_cast<float>(lighting.Debug.View),lighting.NearPlane,lighting.FarPlane,lighting.Orthographic ? 1.0f:0.0f};
     if (lighting.Shadow) {
         const auto& s=lighting.Shadow->Settings;const auto e=lighting.Shadow->Extent;
@@ -213,19 +286,44 @@ void MeshRenderer::Draw(const Mat4& model, const Mat4& viewProjection, const Dir
             std::size_t index=0;const auto add=[&](const auto& l) {fragment.local_shadow_params[index]={static_cast<float>(atlas.FirstFace[index]),l.Shadow.Filter==LocalShadowFilter::Pcf ? 1.0f:0.0f,l.Shadow.DepthBias/l.Range,l.Shadow.SlopeBias/l.Range};++index;};for(const auto& l:lighting.Points){add(l);}for(const auto& l:lighting.Spots){add(l);}
         }
     }
+    return fragment;
+}
+
+void MeshRenderer::Draw(const Mat4& model,const Mat4& viewProjection,const DirectionalLight& light,
+                        const MaterialAsset& material,sg_view texture,sg_sampler sampler,std::span<const Mat4> palette,
+                        bool forceUnlit,const MeshLighting& lighting) const {
+    auto fragment=PrepareMaterialUniforms(light,lighting);
+    sg_pipeline active{};
+    DrawPrepared(model,viewProjection,fragment,active,material,texture,sampler,palette,forceUnlit,lighting);
+}
+
+void MeshRenderer::DrawPrepared(const Mat4& model,const Mat4& viewProjection,material_params_t& fragment,sg_pipeline& activePipeline,
+                                const MaterialAsset& material,sg_view texture,sg_sampler sampler,std::span<const Mat4> palette,
+                                bool forceUnlit,const MeshLighting& lighting) const {
+    if (!pipelines_[0].id) { throw std::logic_error("Initialize MeshRenderer before drawing."); }
+    mesh_params_t uniforms{};
+    uniforms.mvp = viewProjection * model;
+    uniforms.normal_matrix = model.NormalMatrix();
+    uniforms.model_matrix=model;uniforms.shadow_matrix=lighting.Shadow ? lighting.Shadow->ViewProjection*model:Mat4::Identity();
+    const bool blended = material.AlphaBlend && (lighting.Debug.View == DebugView::Lit || lighting.Debug.View == DebugView::Unlit);
+    fragment.base_color = {material.BaseColor[0], material.BaseColor[1], material.BaseColor[2], material.BaseColor[3]};
+    fragment.options.X = material.AlphaCutoff;
+    fragment.options.Y = material.Unlit || material.Shading == ShadingModel::Unlit || forceUnlit ? 1.0f : 0.0f;
+    fragment.pbr_options={material.MetallicFactor,material.RoughnessFactor,lighting.Pbr && material.Shading == ShadingModel::Pbr ? 1.0f:0.0f,0};
+    fragment.normal_options={material.NormalScale,lighting.Advanced && lighting.NormalTexture.id ? 1.0f:0.0f,blended ? 1.0f:0.0f,0};
     sg_bindings bindings{};
     bindings.vertex_buffers[0] = vertices_;
     bindings.index_buffer = lighting.Lod && lighting.Lod<=lodBuffers_.size() ? lodBuffers_[lighting.Lod-1]:indices_;
-    bindings.views[VIEW_base_texture] = texture.id ? texture : whiteView_;
-    bindings.samplers[SMP_base_sampler] = sampler.id ? sampler : whiteSampler_;
-    bindings.views[VIEW_normal_texture]=lighting.NormalTexture.id ? lighting.NormalTexture:whiteView_;bindings.samplers[SMP_normal_sampler]=lighting.NormalSampler.id ? lighting.NormalSampler:whiteSampler_;
-    bindings.views[VIEW_shadow_texture]=lighting.Shadow && lighting.Shadow->Texture.id ? lighting.Shadow->Texture:whiteView_;bindings.samplers[SMP_shadow_sampler]=lighting.Shadow && lighting.Shadow->Sampler.id ? lighting.Shadow->Sampler:nearestSampler_;
-    bindings.views[VIEW_metallic_roughness_texture]=lighting.MetallicRoughnessTexture.id ? lighting.MetallicRoughnessTexture:whiteView_;bindings.samplers[SMP_metallic_roughness_sampler]=lighting.MetallicRoughnessSampler.id ? lighting.MetallicRoughnessSampler:whiteSampler_;
+    bindings.views[VIEW_base_texture] = texture.id ? texture : fallback_->View;
+    bindings.samplers[SMP_base_sampler] = sampler.id ? sampler : fallback_->Linear;
+    bindings.views[VIEW_normal_texture]=lighting.NormalTexture.id ? lighting.NormalTexture:fallback_->View;bindings.samplers[SMP_normal_sampler]=lighting.NormalSampler.id ? lighting.NormalSampler:fallback_->Linear;
+    bindings.views[VIEW_shadow_texture]=lighting.Shadow && lighting.Shadow->Texture.id ? lighting.Shadow->Texture:fallback_->View;bindings.samplers[SMP_shadow_sampler]=lighting.Shadow && lighting.Shadow->Sampler.id ? lighting.Shadow->Sampler:fallback_->Nearest;
+    bindings.views[VIEW_metallic_roughness_texture]=lighting.MetallicRoughnessTexture.id ? lighting.MetallicRoughnessTexture:fallback_->View;bindings.samplers[SMP_metallic_roughness_sampler]=lighting.MetallicRoughnessSampler.id ? lighting.MetallicRoughnessSampler:fallback_->Linear;
     const auto* atlas=lighting.Shadow ? lighting.Shadow->Local:nullptr;
     if (extendedLighting_) {
-        bindings.views[VIEW_local_shadow_texture]=atlas ? atlas->Texture:whiteView_;bindings.samplers[SMP_local_shadow_sampler]=atlas ? atlas->Sampler:nearestSampler_;
-        bindings.views[VIEW_ltc_matrix_texture]=lighting.LtcMatrix.id ? lighting.LtcMatrix:whiteView_;bindings.samplers[SMP_ltc_matrix_sampler]=lighting.LtcSampler.id ? lighting.LtcSampler:whiteSampler_;
-        bindings.views[VIEW_ltc_amplitude_texture]=lighting.LtcAmplitude.id ? lighting.LtcAmplitude:whiteView_;bindings.samplers[SMP_ltc_amplitude_sampler]=lighting.LtcSampler.id ? lighting.LtcSampler:whiteSampler_;
+        bindings.views[VIEW_local_shadow_texture]=atlas ? atlas->Texture:fallback_->View;bindings.samplers[SMP_local_shadow_sampler]=atlas ? atlas->Sampler:fallback_->Nearest;
+        bindings.views[VIEW_ltc_matrix_texture]=lighting.LtcMatrix.id ? lighting.LtcMatrix:fallback_->View;bindings.samplers[SMP_ltc_matrix_sampler]=lighting.LtcSampler.id ? lighting.LtcSampler:fallback_->Linear;
+        bindings.views[VIEW_ltc_amplitude_texture]=lighting.LtcAmplitude.id ? lighting.LtcAmplitude:fallback_->View;bindings.samplers[SMP_ltc_amplitude_sampler]=lighting.LtcSampler.id ? lighting.LtcSampler:fallback_->Linear;
     }
 #if defined(__EMSCRIPTEN__)
     if (morphCount_) {bindings.vertex_buffers[0]=WebMorph(lighting);}
@@ -235,7 +333,10 @@ void MeshRenderer::Draw(const Mat4& model, const Mat4& viewProjection, const Dir
     const bool wire=lighting.Debug.View == DebugView::Wireframe;
     if (wire) {bindings.index_buffer=edges_;}
     const bool instanced=lighting.InstanceCount>0;if (instanced) {bindings.vertex_buffers[1]=lighting.Instances;}
-    sg_apply_pipeline(instanced ? instancePipelines_[lighting.Mirrored ? 1:0]:wire ? wirePipelines_[model.LinearDeterminant() < 0 ? 1:0]:(material.DoubleSided ? doubleSidedPipelines_:pipelines_)[model.LinearDeterminant() < 0 ? 1 : 0]);
+    const auto winding = model.LinearDeterminant() < 0 ? 1 : 0;
+    const auto& normalPipelines = material.DoubleSided ? doubleSidedPipelines_ : pipelines_;
+    const auto& drawPipelines = wire ? wirePipelines_ : blended ? blendPipelines_[material.DoubleSided] : normalPipelines;
+    ApplyMeshPipeline(instanced ? instancePipelines_[lighting.Mirrored] : drawPipelines[winding],activePipeline);
     sg_apply_bindings(bindings);
     sg_apply_uniforms(UB_mesh_params, SG_RANGE(uniforms));
     static_assert(offsetof(material_params_t,rect_meta)==sizeof(basic_material_params_t));
@@ -259,20 +360,69 @@ void MeshRenderer::ApplyMorph(std::span<const float> weights) const {
 }
 #endif
 void MeshRenderer::PrepareDoubleSided() {
-    for (int i=0;i<2;++i) {
-        if (!doubleSidedPipelines_[i].id) {auto desc=sg_query_pipeline_desc(pipelines_[i]);desc.cull_mode=SG_CULLMODE_NONE;doubleSidedPipelines_[i]=sg_make_pipeline(desc);}
-        if (sg_query_pipeline_state(doubleSidedPipelines_[i])!=SG_RESOURCESTATE_VALID) {throw std::runtime_error("Cannot prepare double-sided material pipeline.");}
-        if (shadowShader_.id && !doubleSidedShadowPipelines_[i].id) {auto desc=sg_query_pipeline_desc(shadowPipelines_[i]);desc.cull_mode=SG_CULLMODE_NONE;doubleSidedShadowPipelines_[i]=sg_make_pipeline(desc);}
-        if (shadowShader_.id && sg_query_pipeline_state(doubleSidedShadowPipelines_[i])!=SG_RESOURCESTATE_VALID) {throw std::runtime_error("Cannot prepare double-sided shadow pipeline.");}
+    for (int i = 0; i < 2; ++i) {
+        if (!doubleSidedPipelines_[i].id) {
+            auto d = sg_query_pipeline_desc(pipelines_[i]);
+            d.cull_mode = SG_CULLMODE_NONE;
+            doubleSidedPipelines_[i] = UsePipeline(d, "double-sided mesh pipeline");
+        }
+        if (shadowShader_.id && !doubleSidedShadowPipelines_[i].id) {
+            auto d = sg_query_pipeline_desc(shadowPipelines_[i]);
+            d.cull_mode = SG_CULLMODE_NONE;
+            doubleSidedShadowPipelines_[i] = UsePipeline(d, "double-sided shadow pipeline");
+        }
     }
 }
+
+void MeshRenderer::PrepareAlphaBlend(bool doubleSided) {
+    for (int i = 0; i < 2; ++i) {
+        auto& pipeline = blendPipelines_[doubleSided][i];
+        if (pipeline.id) { continue; }
+        auto desc = sg_query_pipeline_desc(pipelines_[i]);
+        if (doubleSided) { desc.cull_mode = SG_CULLMODE_NONE; }
+        desc.depth.write_enabled = false;
+        auto& blend = desc.colors[0].blend;
+        blend.enabled = true;
+        blend.src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA;
+        blend.dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        blend.src_factor_alpha = SG_BLENDFACTOR_ONE;
+        blend.dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        desc.label = "mesh-alpha-blend";
+        pipeline = UsePipeline(desc, "mesh alpha blend pipeline");
+    }
+}
+
 void MeshRenderer::PrepareInstances() {
-    if (morphCount_) {throw std::logic_error("Morph meshes use independent draws.");}
-    if (instanceShader_.id) {return;}instanceShader_=sg_make_shader(extendedLighting_ ? lit_mesh_instances_shader_desc(sg_query_backend()):mesh_instances_shader_desc(sg_query_backend()));
-    for (int i=0;i<2;++i) {auto p=sg_query_pipeline_desc(doubleSided_ ? doubleSidedPipelines_[i]:pipelines_[i]);p.shader=instanceShader_;p.layout.buffers[1].stride=sizeof(Mat4);p.layout.buffers[1].step_func=SG_VERTEXSTEP_PER_INSTANCE;
-        for (int c=0;c<4;++c) {auto& a=p.layout.attrs[ATTR_mesh_instances_instance0+c];a.buffer_index=1;a.format=SG_VERTEXFORMAT_FLOAT4;a.offset=c*16;}p.label="static-instancing-pipeline";instancePipelines_[i]=sg_make_pipeline(p);}
-    if (sg_query_shader_state(instanceShader_) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(instancePipelines_[0]) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(instancePipelines_[1]) != SG_RESOURCESTATE_VALID) {for (auto& p:instancePipelines_) {if (p.id) {sg_destroy_pipeline(p);}p={};}if (instanceShader_.id) {sg_destroy_shader(instanceShader_);}instanceShader_={};throw std::runtime_error("Cannot create static instancing shader/pipelines.");}
-    if (shadowShader_.id) {shadowInstanceShader_=sg_make_shader(shadow_instances_shader_desc(sg_query_backend()));for (int i=0;i<2;++i) {auto p=sg_query_pipeline_desc(doubleSided_ ? doubleSidedShadowPipelines_[i]:shadowPipelines_[i]);p.shader=shadowInstanceShader_;p.layout.buffers[1].stride=sizeof(Mat4);p.layout.buffers[1].step_func=SG_VERTEXSTEP_PER_INSTANCE;for (int c=0;c<4;++c) {auto& a=p.layout.attrs[ATTR_shadow_instances_instance0+c];a.buffer_index=1;a.format=SG_VERTEXFORMAT_FLOAT4;a.offset=c*16;}shadowInstancePipelines_[i]=sg_make_pipeline(p);}if (sg_query_shader_state(shadowInstanceShader_) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(shadowInstancePipelines_[0]) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(shadowInstancePipelines_[1]) != SG_RESOURCESTATE_VALID) {throw std::runtime_error("Cannot create shadow instance pipelines.");}}
+    if (morphCount_) { throw std::logic_error("Morph meshes use independent draws."); }
+    const auto prepare = [&](sg_shader& shader, const sg_shader_desc* desc,
+                             sg_pipeline (&output)[2], const sg_pipeline (&base)[2],
+                             int firstAttribute, const char* name) {
+        if (!shader.id) { shader = UseShader(desc, name); }
+        for (int i = 0; i < 2; ++i) {
+            if (output[i].id) { continue; }
+            auto d = sg_query_pipeline_desc(base[i]);
+            d.shader = shader;
+            d.layout.buffers[1].stride = sizeof(Mat4);
+            d.layout.buffers[1].step_func = SG_VERTEXSTEP_PER_INSTANCE;
+            for (int column = 0; column < 4; ++column) {
+                auto& attr = d.layout.attrs[firstAttribute + column];
+                attr.buffer_index = 1;
+                attr.format = SG_VERTEXFORMAT_FLOAT4;
+                attr.offset = column * 16;
+            }
+            d.label = name;
+            output[i] = UsePipeline(d, name);
+        }
+    };
+    const auto backend = sg_query_backend();
+    prepare(instanceShader_, extendedLighting_ ? lit_mesh_instances_shader_desc(backend) : mesh_instances_shader_desc(backend),
+        instancePipelines_, doubleSided_ ? doubleSidedPipelines_ : pipelines_,
+        ATTR_mesh_instances_instance0, "static instancing");
+    if (shadowShader_.id) {
+        prepare(shadowInstanceShader_, shadow_instances_shader_desc(backend),
+            shadowInstancePipelines_, doubleSided_ ? doubleSidedShadowPipelines_ : shadowPipelines_,
+            ATTR_shadow_instances_instance0, "shadow instancing");
+    }
 }
 
 void MeshRenderer::PrepareWireframe(const MeshData& mesh) {
@@ -281,28 +431,48 @@ void MeshRenderer::PrepareWireframe(const MeshData& mesh) {
     std::vector<std::uint32_t> edges;edges.reserve(mesh.Indices.size()*2);
     for (std::size_t i=0;i<mesh.Indices.size();i+=3) {const auto a=vertexRemap_.at(mesh.Indices[i]),b=vertexRemap_.at(mesh.Indices[i+1]),c=vertexRemap_.at(mesh.Indices[i+2]);edges.insert(edges.end(),{a,b,b,c,c,a});}
     sg_buffer_desc b{};b.usage.index_buffer=true;b.data={edges.data(),edges.size()*sizeof(std::uint32_t)};b.label="debug-wireframe-indices";
-    sg_buffer buffer=sg_make_buffer(b);sg_pipeline pipelines[2]{};
-    for (int i=0;i<2;++i) {auto d=sg_query_pipeline_desc(pipelines_[i]);d.primitive_type=SG_PRIMITIVETYPE_LINES;d.index_type=SG_INDEXTYPE_UINT32;d.cull_mode=SG_CULLMODE_NONE;d.label="debug-wireframe-pipeline";pipelines[i]=sg_make_pipeline(d);}
-    if (sg_query_buffer_state(buffer) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(pipelines[0]) != SG_RESOURCESTATE_VALID || sg_query_pipeline_state(pipelines[1]) != SG_RESOURCESTATE_VALID) {for (auto p:pipelines) {if (p.id) {sg_destroy_pipeline(p);}}if (buffer.id) {sg_destroy_buffer(buffer);}throw std::runtime_error("Cannot create debug wireframe resources.");}
-    edges_=buffer;wirePipelines_[0]=pipelines[0];wirePipelines_[1]=pipelines[1];edgeIndexCount_=static_cast<int>(edges.size());
+    for (int i = 0; i < 2; ++i) {
+        if (wirePipelines_[i].id) { continue; }
+        auto d = sg_query_pipeline_desc(pipelines_[i]);
+        d.primitive_type = SG_PRIMITIVETYPE_LINES;
+        d.index_type = SG_INDEXTYPE_UINT32;
+        d.cull_mode = SG_CULLMODE_NONE;
+        d.label = "debug-wireframe-pipeline";
+        wirePipelines_[i] = UsePipeline(d, "wireframe pipeline");
+    }
+    const auto buffer = sg_make_buffer(b);
+    try {
+        RequireGpuResource(sg_query_buffer_state(buffer), buffer.id, BufferPool, "wireframe indices");
+    } catch (...) {
+        if (buffer.id) { sg_destroy_buffer(buffer); }
+        throw;
+    }
+    edges_ = buffer;
+    edgeIndexCount_ = static_cast<int>(edges.size());
 }
 void MeshRenderer::Inspect(std::vector<DebugResource>& r) const {
     InspectBuffer(r,morphBuffer_,"Morph deltas");
-    InspectBuffer(r,vertices_,"Mesh vertices");InspectBuffer(r,indices_,"Mesh triangle indices");InspectBuffer(r,edges_,"Wireframe edge indices");InspectImage(r,whiteImage_,"Fallback white");
+    InspectBuffer(r,vertices_,"Mesh vertices");InspectBuffer(r,indices_,"Mesh triangle indices");InspectBuffer(r,edges_,"Wireframe edge indices");if (fallback_) {InspectImage(r,fallback_->Image,"Fallback white");}
     for (auto b:lodBuffers_) {InspectBuffer(r,b,"LOD indices");}InspectShader(r,instanceShader_,"mesh_instances");for (auto p:instancePipelines_) {InspectPipeline(r,p,"Static instancing");}
     InspectShader(r,shadowInstanceShader_,"shadow_instances");for (auto p:shadowInstancePipelines_) {InspectPipeline(r,p,"Shadow instancing");}
     InspectShader(r,shader_,skinned_ ? "skin":"mesh");InspectShader(r,shadowShader_,skinned_ ? "shadow_skin":"shadow_mesh");
     for (auto p:doubleSidedPipelines_) {InspectPipeline(r,p,"Double-sided mesh pipeline");}for (auto p:doubleSidedShadowPipelines_) {InspectPipeline(r,p,"Double-sided shadow pipeline");}for (auto p:pipelines_) {InspectPipeline(r,p,"Mesh winding pipeline");}for (auto p:wirePipelines_) {InspectPipeline(r,p,"Wireframe winding pipeline");}for (auto p:shadowPipelines_) {InspectPipeline(r,p,"Shadow winding pipeline");}
+    for (const auto& winding : blendPipelines_) { for (auto p : winding) { InspectPipeline(r, p, "Mesh alpha blend pipeline"); } }
 }
 
-void MeshRenderer::DrawShadow(const Mat4& model,const Mat4& lightViewProjection,const MaterialAsset& material,sg_view texture,sg_sampler sampler,std::span<const Mat4> palette,const MeshLighting& instances,ShaderVec4 radial) const {
+void MeshRenderer::DrawShadow(const Mat4& model,const Mat4& lightViewProjection,const MaterialAsset& material,sg_view texture,sg_sampler sampler,std::span<const Mat4> palette,const MeshLighting& instances,ShaderVec4 radial,sg_pipeline& activePipeline) const {
     if (!shadowShader_.id) {throw std::logic_error("Shadow pipeline was not prepared.");}
-    sg_bindings b{};b.vertex_buffers[0]=vertices_;b.index_buffer=indices_;b.views[VIEW_mask_texture]=texture.id ? texture:whiteView_;b.samplers[SMP_mask_sampler]=sampler.id ? sampler:whiteSampler_;
+    sg_bindings b{};b.vertex_buffers[0]=vertices_;b.index_buffer=indices_;b.views[VIEW_mask_texture]=texture.id ? texture:fallback_->View;b.samplers[SMP_mask_sampler]=sampler.id ? sampler:fallback_->Linear;
     shadow_params_t params{};params.light_mvp=lightViewProjection*model;params.shadow_world=model;shadow_material_t mask{};mask.shadow_mask={material.AlphaCutoff,material.BaseColor[3],0,0};mask.shadow_origin_range=radial;
 #if !defined(__EMSCRIPTEN__)
     if (morphCount_) {b.views[VIEW_morph_data]=morphView_;}
 #endif
-    const bool instanced=instances.InstanceCount>0;if (instanced) {b.vertex_buffers[1]=instances.Instances;}sg_apply_pipeline(instanced ? shadowInstancePipelines_[instances.Mirrored ? 1:0]:(material.DoubleSided ? doubleSidedShadowPipelines_:shadowPipelines_)[model.LinearDeterminant() < 0 ? 1:0]);sg_apply_bindings(b);sg_apply_uniforms(UB_shadow_params,SG_RANGE(params));sg_apply_uniforms(UB_shadow_material,SG_RANGE(mask));
+    const bool instanced=instances.InstanceCount>0;
+    if (instanced) {b.vertex_buffers[1]=instances.Instances;}
+    const auto pipeline = instanced ? shadowInstancePipelines_[instances.Mirrored] :
+        (material.DoubleSided ? doubleSidedShadowPipelines_:shadowPipelines_)[model.LinearDeterminant() < 0 ? 1:0];
+    ApplyMeshPipeline(pipeline,activePipeline);
+    sg_apply_bindings(b);sg_apply_uniforms(UB_shadow_params,SG_RANGE(params));sg_apply_uniforms(UB_shadow_material,SG_RANGE(mask));
 #if !defined(__EMSCRIPTEN__)
     if (morphCount_) {ApplyMorph(instances.MorphWeights);}
 #endif
@@ -316,36 +486,29 @@ void MeshRenderer::Shutdown() noexcept {
         for (const auto& [key,stream]:webStreams_) {(void)key;if (stream.Buffer.id) {sg_destroy_buffer(stream.Buffer);}}
 #endif
         if (morphView_.id) {sg_destroy_view(morphView_);}if (morphBuffer_.id) {sg_destroy_buffer(morphBuffer_);}
-        for (auto b:lodBuffers_) {if (b.id) {sg_destroy_buffer(b);}}for (auto p:instancePipelines_) {if (p.id) {sg_destroy_pipeline(p);}}if (instanceShader_.id) {sg_destroy_shader(instanceShader_);}
-        for (auto p:shadowInstancePipelines_) {if (p.id) {sg_destroy_pipeline(p);}}if (shadowInstanceShader_.id) {sg_destroy_shader(shadowInstanceShader_);}
-        if (edges_.id) {sg_destroy_buffer(edges_);}for (auto p:wirePipelines_) {if (p.id) {sg_destroy_pipeline(p);}}
-        if (whiteSampler_.id) { sg_destroy_sampler(whiteSampler_); }
-        if (nearestSampler_.id) {sg_destroy_sampler(nearestSampler_);}
-        for (auto p:doubleSidedPipelines_) {if (p.id) {sg_destroy_pipeline(p);}}for (auto p:doubleSidedShadowPipelines_) {if (p.id) {sg_destroy_pipeline(p);}}
-        for (const auto pipeline:shadowPipelines_) {if (pipeline.id) {sg_destroy_pipeline(pipeline);}}
-        if (shadowShader_.id) {sg_destroy_shader(shadowShader_);}
-        if (whiteView_.id) { sg_destroy_view(whiteView_); }
-        if (whiteImage_.id) { sg_destroy_image(whiteImage_); }
-        for (auto pipeline : pipelines_) { if (pipeline.id) { sg_destroy_pipeline(pipeline); } }
-        if (shader_.id) { sg_destroy_shader(shader_); }
+        for (auto b:lodBuffers_) { if (b.id) { sg_destroy_buffer(b); } }
+        if (edges_.id) { sg_destroy_buffer(edges_); }
         if (indices_.id) { sg_destroy_buffer(indices_); }
         if (vertices_.id) { sg_destroy_buffer(vertices_); }
     }
+    pipelineRefs_.clear();
+    shaderRefs_.clear();
+    fallback_.reset();
+    cache_.reset();
     pipelines_[0] = pipelines_[1] = {};
-    shadowPipelines_[0]=shadowPipelines_[1]={};shadowShader_={};nearestSampler_={};
-    whiteImage_ = {};
-    whiteView_ = {};
+    shadowPipelines_[0] = shadowPipelines_[1] = {};
+    shadowShader_ = {};
     morphView_={};morphBuffer_={};morphCount_=morphVertices_=0;
 #if defined(__EMSCRIPTEN__)
     webStreams_.clear();webRemap_.clear();webSource_=nullptr;
 #endif
-    whiteSampler_ = {};
     shader_ = {};
     indices_ = {};
     vertices_ = {};
     indexCount_ = 0;
     edges_={};wirePipelines_[0]=wirePipelines_[1]={};edgeIndexCount_=0;
     doubleSidedPipelines_[0]=doubleSidedPipelines_[1]={};doubleSidedShadowPipelines_[0]=doubleSidedShadowPipelines_[1]={};
+    for (auto& winding : blendPipelines_) { winding[0] = winding[1] = {}; }
     lodBuffers_.clear();lodCounts_.clear();instanceShader_={};instancePipelines_[0]=instancePipelines_[1]={};
     shadowInstanceShader_={};shadowInstancePipelines_[0]=shadowInstancePipelines_[1]={};
 }

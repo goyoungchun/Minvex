@@ -63,6 +63,8 @@ cmake --build quickstart-build
 
 앱 코드에서 실제 렌더 프레임 수와 제출 통계는 `Viewer::GetTelemetry()`로 확인합니다. [Viewer 실행 검사](docs/API.md#viewer-실행-검사)
 
+Minvex 1.2.1의 C++ SDK는 `ViewerOptions::GpuPools`로 Standalone Viewer의 GPU 슬롯을 설정하고, 활성 렌더 세션에서 이미터와 UI 갱신을 진단할 수 있습니다. [GPU 풀 설정](docs/API.md#standalone-viewer-gpu-풀)
+
 #### GLB 정비 매뉴얼 실행
 
 Windows의 설치된 Quick Start 디렉터리에서 전체 예제 프리셋을 구성하고 정비 매뉴얼을 실행합니다. **이전**, **다음** 버튼으로 분해·조립 순서를 살펴보고 **모델 교체** 버튼으로 GLB를 바꿉니다. 모델 영역은 드래그로 회전하고 휠로 확대·축소합니다. 안내 패널에서 휠을 돌리면 부품 목록이 스크롤됩니다.
@@ -93,7 +95,7 @@ Editor의 **Window → Terrain**에서 평면 생성, 산악 프리셋, 브러�
 - **Hierarchy**에서 빈 자식 객체를 만들거나, 가져온 에셋을 객체 위로 드래그해 자식으로 배치합니다. **Inspector → Model**에서 기존 객체의 모델을 교체하거나 분리할 수 있습니다.
 - **Viewport → Surface Measure**에서 두 점을 클릭하면 모델 표면의 월드 좌표와 두 점 사이의 직선 거리·수평 거리·높이 차이가 표시됩니다. `F`는 선택 객체, `Shift+F`는 전체 장면을 화면에 맞춥니다.
 - **Window → Box Physics**에서 선택 객체를 상자 콜라이더로 추가한 뒤 받침을 검사하거나 중력과 회전을 미리 봅니다. **Apply transforms**를 누르면 장면에 반영되며, Undo 한 번으로 되돌릴 수 있습니다. 이 패널은 상자 물리 옵션을 켠 빌드에서 제공됩니다.
-- **Terrain → Edit grid sample**에서 행과 열을 지정해 한 지점의 표고를 편집합니다. **Inspector → Materials**에서는 알파 마스크와 컷오프를 설정합니다.
+- **Terrain → Edit grid sample**에서 행과 열을 지정해 한 지점의 표고를 편집합니다. **Inspector → Materials**에서는 불투명·알파 마스크·알파 블렌딩을 설정합니다.
 - **UI Designer → + Number**로 숫자 입력 필드를 추가하고 초기값·허용 범위·단위를 설정합니다. **Interact with UI in viewport**를 켜면 화면에서 직접 값을 입력해 확인할 수 있습니다.
 
 ### 기존 CMake 앱에 추가

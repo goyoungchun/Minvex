@@ -54,14 +54,14 @@ QualityCapabilities QueryQualityCapabilities() {
 #endif
     return caps;
 }
-std::uint64_t SceneGeometrySignature(const Scene& scene) {
+std::uint64_t SceneGeometrySignature(std::span<const RenderItem> items) {
     std::uint64_t hash=14695981039346656037ull;
     const auto integer=[&](std::uint64_t value){for (int i=0;i<8;++i) {hash^=(value>>(i*8))&255;hash*=1099511628211ull;}};
     const auto scalar=[&](float value){integer(std::bit_cast<std::uint32_t>(value));};
     const auto vector=[&](Vec3 value){scalar(value.X);scalar(value.Y);scalar(value.Z);};
-    for (const auto& item:scene.CollectRenderItems()) {
+    for (const auto& item:items) {
         integer(item.Object);integer(reinterpret_cast<std::uintptr_t>(item.Model.get()));
-        if (item.MaterialOverrides) {integer(item.MaterialOverrides->size());for (std::size_t index=0;index<item.Model->Materials.size();++index) {const auto found=item.MaterialOverrides->find(index);if (found == item.MaterialOverrides->end()) {continue;}integer(index);const auto& m=found->second;for (auto value:m.BaseColor) {scalar(value);}scalar(m.AlphaCutoff);scalar(m.NormalScale);scalar(m.MetallicFactor);scalar(m.RoughnessFactor);integer(static_cast<unsigned>(m.Shading));integer(m.Unlit);integer(m.DoubleSided);for (auto texture:{m.BaseColorTexture,m.NormalTexture,m.MetallicRoughnessTexture}) {integer(texture.has_value());integer(texture.value_or(0));}}}
+        if (item.MaterialOverrides) {integer(item.MaterialOverrides->size());for (std::size_t index=0;index<item.Model->Materials.size();++index) {const auto found=item.MaterialOverrides->find(index);if (found == item.MaterialOverrides->end()) {continue;}integer(index);const auto& m=found->second;for (auto value:m.BaseColor) {scalar(value);}scalar(m.AlphaCutoff);scalar(m.NormalScale);scalar(m.MetallicFactor);scalar(m.RoughnessFactor);integer(static_cast<unsigned>(m.Shading));integer(m.Unlit);integer(m.DoubleSided);integer(m.AlphaBlend);for (auto texture:{m.BaseColorTexture,m.NormalTexture,m.MetallicRoughnessTexture}) {integer(texture.has_value());integer(texture.value_or(0));}}}
         for (auto value:item.WorldTransform.Elements) {scalar(value);}
         if (item.Pose) { for (const auto& matrix : item.Pose->Global) { for (auto value : matrix.Elements) { scalar(value); } } }
         if (item.Animation) {
@@ -75,13 +75,18 @@ std::uint64_t SceneGeometrySignature(const Scene& scene) {
             for (const auto& joint:item.Animation->Overrides().Joints) {integer(joint.Joint);vector(joint.Local.Position);vector(joint.Local.Scale);const auto& q=joint.Local.Rotation;scalar(q.X);scalar(q.Y);scalar(q.Z);scalar(q.W);}
         }
     } return hash;
-}std::uint64_t SceneRenderSignature(const Scene& scene) {
-    std::uint64_t hash=SceneGeometrySignature(scene);
+}
+std::uint64_t SceneRenderSignature(const Scene& scene, std::uint64_t geometry) {
+    std::uint64_t hash=geometry;
     const auto integer=[&](std::uint64_t value){for(int i=0;i<8;++i){hash^=(value>>(i*8))&255;hash*=1099511628211ull;}};
     const auto scalar=[&](float value){integer(std::bit_cast<std::uint32_t>(value));};
     const auto vector=[&](Vec3 v){scalar(v.X);scalar(v.Y);scalar(v.Z);};
     const auto shadow=[&](const LocalShadowSettings& v){integer(v.Enabled);integer(static_cast<unsigned>(v.Filter));scalar(v.NearPlane);scalar(v.DepthBias);scalar(v.SlopeBias);};
     integer(scene.ParticleRenderSignature());
+    const auto& panorama = scene.GetEnvironmentPanorama();
+    integer(reinterpret_cast<std::uintptr_t>(panorama.Image.get()));
+    scalar(panorama.RotationRadians);
+    scalar(panorama.Intensity);
     const auto& c=scene.MainCamera;vector(c.Position);vector(c.Target);vector(c.Up);scalar(c.VerticalFovRadians);scalar(c.NearPlane);scalar(c.FarPlane);
     integer(static_cast<unsigned>(c.Projection));scalar(c.OrthographicHeight);
     const auto& l=scene.Sun;vector(l.Direction);vector(l.Color);scalar(l.Intensity);scalar(l.Ambient);
@@ -93,8 +98,8 @@ std::uint64_t SceneGeometrySignature(const Scene& scene) {
     return hash;
 }
 
-bool SceneHasActiveAnimation(const Scene& scene) {
-    for (const auto& item : scene.CollectRenderItems()) {
+bool SceneHasActiveAnimation(const Scene& scene, std::span<const RenderItem> items) {
+    for (const auto& item : items) {
         auto driver = item.Object;
         while (scene.GetObject(driver).LeaderPose) { driver = scene.GetObject(driver).LeaderPose; }
         const auto& player = scene.GetObject(driver).Animation;

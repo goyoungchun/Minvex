@@ -7,7 +7,8 @@
 
 namespace lv {
 
-// Writes v13, v14 for terrain, v15 for basic effects or v16 for advanced particle modules. Reads v1..16.
+// Writes v13, v14 for terrain, v15 for basic effects, v16 for advanced particle modules,
+// or v17 for user keys, metadata or alpha blend overrides. Reads v1..17.
 // External model references, embedded terrain, library, hierarchy, TRS, camera, lights, animation/pose.
 // Runtime ObjectId/AssetId values are remapped when opening an archive.
 struct SceneArchive {

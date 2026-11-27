@@ -20,7 +20,10 @@ public:
     void Present(bool hasDepth = true) const; // In a native single-sample presentation pass.
     void Invalidate() noexcept {dirty_=true;}
     bool Due(double now) const;
+    double SecondsUntilDue(double now) const;
+    void ResetPacing() noexcept {scheduler_.Invalidate();}
     bool Applying() const noexcept {return applying_;}
+    void RecordPoolExhaustion(unsigned item) noexcept;
     void Clear() noexcept;
     int Width() const noexcept {return state_.RenderWidth;}
     int Height() const noexcept {return state_.RenderHeight;}
@@ -40,6 +43,7 @@ public:
 private:
     struct Targets;
     struct Presenter;
+    struct Panorama;
     struct ShadowTargets;
     struct DebugPreview;
     std::unique_ptr<Targets> targets_;
@@ -48,7 +52,13 @@ private:
     std::uint64_t uiRevision_=0;
     float uiScale_=1;
     std::unique_ptr<Presenter> presenter_;
+    std::unique_ptr<Panorama> panorama_;
+    std::shared_ptr<MeshResourceCache> meshResources_;
     std::unique_ptr<SceneRenderer> renderer_;
+    std::vector<ParticleEmitterDebugInfo> lastParticleDiagnostics_;
+    UiFrameDebugInfo lastUiDiagnostics_;
+    bool lastPanoramaDrawn_ = false;
+    char applyingPoolError_[128]{};
     std::unique_ptr<ShadowTargets> shadow_;
     std::unique_ptr<LocalShadowAtlas> localShadow_;
     std::unique_ptr<GraphicsTelemetry> telemetry_;

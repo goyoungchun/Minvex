@@ -1,6 +1,7 @@
 #include "UiRenderer.h"
 #include "ui.glsl.h"
 #include "platform/FrameProfiling.h"
+#include <chrono>
 #include <stdexcept>
 #include <cstring>
 namespace lv::detail {
@@ -11,10 +12,23 @@ UiRenderer::UiRenderer() {
 }
 void UiRenderer::ClearImages() noexcept {sg_destroy_view(overlayView_);sg_destroy_view(outputView_);sg_destroy_view(attachment_);sg_destroy_image(overlay_);sg_destroy_image(output_);sg_destroy_buffer(upload_);overlayView_=outputView_=attachment_={};overlay_=output_={};upload_={};padded_={};}
 UiRenderer::~UiRenderer() {ClearImages();sg_destroy_sampler(sampler_);sg_destroy_pipeline(pipeline_);sg_destroy_shader(shader_);}
-void UiRenderer::Composite(const UiCanvas& canvas,sg_view scene,int width,int height,float scale) {
+UiFrameDebugInfo UiRenderer::Composite(const UiCanvas& canvas,sg_view scene,int width,int height,float scale) {
+    using Clock = std::chrono::steady_clock;
+    using Milliseconds = std::chrono::duration<double, std::milli>;
+    UiFrameDebugInfo diagnostics;
+    diagnostics.Composited = true;
+    diagnostics.CanvasRevision = canvas.Revision();
     const bool resize=width_!=width||height_!=height;
-    if (resize||revision_!=canvas.Revision()||scale_!=scale) {
-        auto raster=[&] {ProfileScope profileRaster(FramePhase::UiRaster);return canvas.Rasterize(width,height,scale);}();if (!raster) {throw UiRasterError(raster.Error());}
+    const bool compatible=!resize&&canvas_==&canvas&&scale_==scale;
+    if (!compatible||revision_!=diagnostics.CanvasRevision) {
+        const auto rasterStart = Clock::now();
+        auto raster=[&] {
+            ProfileScope profileRaster(FramePhase::UiRaster);
+            return canvas.RasterizeRegion(width,height,scale,compatible ? std::optional{revision_}:std::nullopt);
+        }();
+        if (!raster) {throw UiRasterError(raster.Error());}
+        const auto uploadStart = Clock::now();
+        diagnostics.RasterCpuMs = Milliseconds(uploadStart - rasterStart).count();
         ProfileScope profileUpload(FramePhase::UiUpload);
         if (resize) {
             sg_image output{},overlay{};sg_view attachment{},outputView{},overlayView{};sg_buffer upload{};
@@ -28,14 +42,43 @@ void UiRenderer::Composite(const UiCanvas& canvas,sg_view scene,int width,int he
             }catch (...) {sg_destroy_view(overlayView);sg_destroy_view(outputView);sg_destroy_view(attachment);sg_destroy_image(overlay);sg_destroy_image(output);sg_destroy_buffer(upload);throw;}
             ClearImages();output_=output;overlay_=overlay;attachment_=attachment;outputView_=outputView;overlayView_=overlayView;upload_=upload;width_=width;height_=height;rowPitch_=rowPitch;
         }
-        const auto& pixels=raster.Value();const void* source=pixels.data();std::size_t bytes=pixels.size();
-        if (rowPitch_!=width*4) {padded_.resize(static_cast<std::size_t>(rowPitch_)*height);for (int y=0;y<height;++y) {std::memcpy(padded_.data()+static_cast<std::size_t>(y)*rowPitch_,pixels.data()+static_cast<std::size_t>(y)*width*4,static_cast<std::size_t>(width)*4);}source=padded_.data();bytes=padded_.size();}
-        sg_write_buffer_desc write{};write.src.data={source,bytes};write.dst.buffer=upload_;sg_write_buffer_transient(write);
-        sg_copy_buffer_to_image_desc copy{};copy.src.buffer=upload_;copy.src.bytes_per_row=rowPitch_;copy.src.bytes_per_slice=rowPitch_*height;copy.dst.image=overlay_;copy.size={width,height,1};sg_copy_buffer_to_image(copy);
-        if (sg_query_image_state(output_)!=SG_RESOURCESTATE_VALID||sg_query_image_state(overlay_)!=SG_RESOURCESTATE_VALID||sg_query_view_state(attachment_)!=SG_RESOURCESTATE_VALID||sg_query_view_state(outputView_)!=SG_RESOURCESTATE_VALID||sg_query_view_state(overlayView_)!=SG_RESOURCESTATE_VALID) {throw std::runtime_error("Cannot create UI overlay textures.");}
-        revision_=canvas.Revision();scale_=scale;
+        const auto& region=raster.Value();
+        if (!region.Pixels.empty()) {
+            const int rowBytes=region.Width*4;
+            const int pitch=sg_query_row_pitch(SG_PIXELFORMAT_RGBA8,region.Width,256);
+            const auto bytes=static_cast<std::size_t>(pitch)*region.Height;
+            const void* source=region.Pixels.data();
+            if (pitch!=rowBytes) {
+                padded_.resize(bytes);
+                for (int y=0;y<region.Height;++y) {
+                    std::memcpy(padded_.data()+static_cast<std::size_t>(y)*pitch,
+                                region.Pixels.data()+static_cast<std::size_t>(y)*rowBytes,rowBytes);
+                }
+                source=padded_.data();
+            }
+            sg_write_buffer_desc write{};
+            write.src.data={source,bytes};
+            write.dst.buffer=upload_;
+            sg_write_buffer_transient(write);
+            sg_copy_buffer_to_image_desc copy{};
+            copy.src.buffer=upload_;
+            copy.src.bytes_per_row=pitch;
+            copy.src.bytes_per_slice=pitch*region.Height;
+            copy.dst.image=overlay_;
+            copy.dst.x=region.X;
+            copy.dst.y=region.Y;
+            copy.size={region.Width,region.Height,1};
+            sg_copy_buffer_to_image(copy);
+            diagnostics.BitmapUpdated = true;
+            diagnostics.UploadedBytes = bytes;
+            diagnostics.UploadCpuMs = Milliseconds(Clock::now() - uploadStart).count();
+        }
+        canvas_=&canvas;
+        revision_=diagnostics.CanvasRevision;
+        scale_=scale;
     }
     ProfileScope profileDraw(FramePhase::UiDraw);
     sg_pass pass{};pass.attachments.colors[0]=attachment_;pass.action.colors[0].load_action=SG_LOADACTION_DONTCARE;sg_begin_pass(pass);sg_bindings b{};b.views[VIEW_ui_scene]=scene;b.views[VIEW_ui_overlay]=overlayView_;b.samplers[SMP_ui_sampler]=sampler_;sg_apply_pipeline(pipeline_);sg_apply_bindings(b);sg_draw(0,3,1);sg_end_pass();
+    return diagnostics;
 }
 }

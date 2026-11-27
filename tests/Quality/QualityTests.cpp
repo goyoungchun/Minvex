@@ -93,6 +93,9 @@ void CullingAndPacing() {
     Rejects([&]{(void)lv::IntersectsFrustum({{1,0,0},{0,0,0}},lv::Mat4::Identity(),vp);},"invalid bounds rejected");
     lv::RenderScheduler scheduler;Check(scheduler.Due(1,30) && scheduler.NeedsRender(lv::OnDemandMode::Auto,10,false),"first static frame renders");scheduler.Submitted(1,10);
     Check(!scheduler.Due(1.01,30) && scheduler.Due(1+1.0/30,30),"target frame pacing uses elapsed time");
+    const auto wait=scheduler.SecondsUntilDue(1.01,30);
+    Check(wait>.022 && wait<.024 && scheduler.Due(1.01+wait+1e-8,30),
+        "deadline wait uses the same grid as eligibility");
     Check(!scheduler.NeedsRender(lv::OnDemandMode::On,10,false) && scheduler.NeedsRender(lv::OnDemandMode::Auto,11,false),"static content skips while dirty content wakes");
     Check(scheduler.NeedsRender(lv::OnDemandMode::Auto,10,true) && scheduler.NeedsRender(lv::OnDemandMode::Off,10,false),"animation and continuous policy keep rendering");
     Check(scheduler.Due(1,0) && scheduler.Due(.5,60),"unlimited FPS and clock reset are supported");scheduler.Invalidate();Check(scheduler.NeedsRender(lv::OnDemandMode::On,10,false),"explicit invalidation wakes static rendering");
@@ -109,6 +112,16 @@ void CullingAndPacing() {
             }
         }
         Check(rendered == fps * 4, "jittered VSync preserves target cadence without skipped deadlines");
+    }
+    for (int refresh : {30,60,120}) {
+        lv::RenderScheduler paced;
+        paced.Submitted(1,0);
+        int rendered=0;
+        for (int tick=1;tick<=refresh*8;++tick) {
+            const double display=1+static_cast<double>(tick)/refresh;
+            if (paced.Due(display,30)) {++rendered;paced.Submitted(display,0);}
+        }
+        Check(rendered==240,"native 30, 60 and 120 Hz display timestamps sustain 30 scene frames per second");
     }
     lv::RenderScheduler fast; fast.Submitted(0, 1); int rendered = 0;
     for (int tick = 1; tick <= 4000; ++tick) {

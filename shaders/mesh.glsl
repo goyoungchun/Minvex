@@ -289,7 +289,8 @@ void main() {
     // Receiver-plane correction avoids classifying a tilted receiver as its own blocker.
     vec2 shadow_plane=abs(determinant)>.0000000001 ? vec2(sx.z*uy.y-sy.z*ux.y,ux.x*sy.z-uy.x*sx.z)/determinant:vec2(0);
     if (options.x >= 0.0 && albedo.a < options.x) {discard;}
-    if (debug_options.x > .5 && debug_options.x < 1.5) {frag_color=vec4(albedo.rgb,1);return;}
+    float alpha = normal_options.z > .5 ? clamp(albedo.a, 0.0, 1.0) : 1.0;
+    if (debug_options.x > .5 && debug_options.x < 1.5) {frag_color=vec4(albedo.rgb,alpha);return;}
     if (debug_options.x > 1.5 && debug_options.x < 2.5) {frag_color=vec4(1);return;}
     if (debug_options.x > 2.5 && debug_options.x < 3.5) {frag_color=vec4(geometric*.5+.5,1);return;}
     if (debug_options.x > 3.5 && debug_options.x < 4.5) {frag_color=vec4(fract(uv),0,1);return;}
@@ -328,7 +329,7 @@ void main() {
             if (local_cones[i].y>.5) {float cone=dot(-direction,local_directions[i].xyz);attenuation*=clamp((cone-local_directions[i].w)/max(local_cones[i].x-local_directions[i].w,.00001),0.0,1.0);}
             result+=direct_brdf(albedo.rgb,metallic,roughness,n,v,direction)*local_colors[i].rgb*local_colors[i].w*attenuation;
         }}
-        frag_color=vec4(clamp(result,vec3(0),vec3(65000)),1);return;
+        frag_color=vec4(clamp(result,vec3(0),vec3(65000)),alpha);return;
     }
     float diffuse=max(dot(n,light_direction.xyz),0.0);
     vec3 illumination=ambient_color.rgb+light_color.rgb*diffuse*light_direction.w*shadow.x;
@@ -340,7 +341,7 @@ void main() {
         illumination+=local_colors[i].rgb*local_colors[i].w*max(dot(n,direction),0.0)*attenuation;
     }}
     if (options.y > .5) {illumination=vec3(1.0);}
-    frag_color=vec4(clamp(albedo.rgb*illumination,vec3(0),vec3(65000)),1.0);
+    frag_color=vec4(clamp(albedo.rgb*illumination,vec3(0),vec3(65000)),alpha);
 }
 @end
 @fs mesh_lighting_fs
@@ -589,7 +590,8 @@ void main() {
     // Receiver-plane correction avoids classifying a tilted receiver as its own blocker.
     vec2 shadow_plane=abs(determinant)>.0000000001 ? vec2(sx.z*uy.y-sy.z*ux.y,ux.x*sy.z-uy.x*sx.z)/determinant:vec2(0);
     if (options.x >= 0.0 && albedo.a < options.x) {discard;}
-    if (debug_options.x > .5 && debug_options.x < 1.5) {frag_color=vec4(albedo.rgb,1);return;}
+    float alpha = normal_options.z > .5 ? clamp(albedo.a, 0.0, 1.0) : 1.0;
+    if (debug_options.x > .5 && debug_options.x < 1.5) {frag_color=vec4(albedo.rgb,alpha);return;}
     if (debug_options.x > 1.5 && debug_options.x < 2.5) {frag_color=vec4(1);return;}
     if (debug_options.x > 2.5 && debug_options.x < 3.5) {frag_color=vec4(geometric*.5+.5,1);return;}
     if (debug_options.x > 3.5 && debug_options.x < 4.5) {frag_color=vec4(fract(uv),0,1);return;}
@@ -629,7 +631,7 @@ void main() {
             result+=direct_brdf(albedo.rgb,metallic,roughness,n,v,direction)*local_colors[i].rgb*local_colors[i].w*attenuation*local_visibility(i,n,direction,distance);
         }}
         result+=rectangle_lighting(albedo.rgb,metallic,roughness,n,v,true);
-        frag_color=vec4(clamp(result,vec3(0),vec3(65000)),1);return;
+        frag_color=vec4(clamp(result,vec3(0),vec3(65000)),alpha);return;
     }
     float diffuse=max(dot(n,light_direction.xyz),0.0);
     vec3 illumination=ambient_color.rgb+light_color.rgb*diffuse*light_direction.w*shadow.x;
@@ -642,7 +644,7 @@ void main() {
     }}
     if (options.y > .5) {illumination=vec3(1.0);}
     else if (options.w>.5) {illumination+=rectangle_lighting(vec3(1),0.0,1.0,n,n,false);}
-    frag_color=vec4(clamp(albedo.rgb*illumination,vec3(0),vec3(65000)),1.0);
+    frag_color=vec4(clamp(albedo.rgb*illumination,vec3(0),vec3(65000)),alpha);
 }
 @end
 @program mesh mesh_vs mesh_fs

@@ -119,6 +119,7 @@ struct UiInput {
 };
 // Retained, viewport-space overlay; construct/use/destroy on one owner thread.
 // No global font installation, callbacks, graphics handles or Scene ownership.
+namespace detail { class UiRenderer; }
 class UiCanvas final {
 public:
     UiCanvas();
@@ -161,6 +162,15 @@ public:
     // width/height 1..4096, scale .25..4; unsupported OS returns UnsupportedFeature.
     Result<std::vector<std::uint8_t>> Rasterize(int width,int height,float scale=1) const;
 private:
+    friend class detail::UiRenderer;
+    struct RasterRegion {
+        int X=0,Y=0,Width=0,Height=0;
+        std::vector<std::uint8_t> Pixels;
+    };
+    // The renderer can apply a partial upload when its bitmap matches the CPU
+    // cache revision. Other consumers get the complete, independent bitmap.
+    Result<RasterRegion> RasterizeRegion(int width,int height,float scale,
+        std::optional<std::uint64_t> uploadedRevision) const;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

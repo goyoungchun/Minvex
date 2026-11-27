@@ -1,5 +1,6 @@
 #include "TestHarness.h"
 #include "GraphicsTestTarget.h"
+#include <algorithm>
 #include <cstring>
 #include <numeric>
 #include <iomanip>
@@ -25,6 +26,93 @@ auto Floor(float half=3){lv::MeshData m;for(auto p:std::array<std::array<float,3
 std::uint64_t Energy(const std::vector<std::uint8_t>& p){std::uint64_t n=0;for(std::size_t i=0;i<p.size();i+=4){n+=p[i]+p[i+1]+p[i+2];}return n;}
 std::size_t Changed(const auto& a,const auto& b){std::size_t n=0;for(std::size_t i=0;i<a.size();i+=4){n+=std::abs(int(a[i])-int(b[i]))+std::abs(int(a[i+1])-int(b[i+1]))+std::abs(int(a[i+2])-int(b[i+2]))>20;}return n;}
 #include "LightingCoverage.h"
+void PanoramaAndTransparentMeshes() {
+    Host h(96,64);
+    constexpr auto center = 4 * (32 * 96 + 48);
+    auto sky = std::make_shared<lv::ImageAsset>();
+    sky->Width = 64;
+    sky->Height = 32;
+    for (int y = 0; y < sky->Height; ++y) {
+        for (int x = 0; x < sky->Width; ++x) {
+            const bool red = x >= 24 && x < 40;
+            sky->Rgba.insert(sky->Rgba.end(), {static_cast<std::uint8_t>(red ? 128 : 0), 0,
+                static_cast<std::uint8_t>(red ? 0 : 255), 255});
+        }
+    }
+    h.Quality.Overrides.OnDemand = lv::OnDemandMode::On;
+    h.Renderer.SetQuality(h.Quality, h.Scene).Value();
+    h.Scene.SetEnvironmentPanorama({sky});
+    Check(h.Render(false).SceneRendered, "setting the panorama invalidates an on-demand frame");
+    const auto original = h.Pixels();
+    Check(std::abs(int(original[center]) - 55) <= 4 && original[center+2] < 5,
+        "the panorama center decodes sRGB into the linear host target");
+    const auto telemetry = h.Renderer.GetTelemetry().Value();
+    const auto estimate = lv::EstimateQualityResources(h.Quality, telemetry.Quality.Capabilities, h.Scene, h.W, h.H).Value();
+    Check(estimate.Cost.TextureBytes == telemetry.Resident.TextureBytes && telemetry.Resident.TextureBytes == sky->Rgba.size(),
+        "panorama residency matches the texture estimate");
+    auto& camera = h.Scene.MainCamera;
+    camera.Position = {100, 200, 300};
+    camera.Target = {100, 200, 299};
+    camera.Projection = lv::CameraProjection::Perspective;
+    camera.FarPlane = 5;
+    h.Render(false);
+    Check(h.Pixels() == original, "camera translation, clipping and projection mode do not move the sky");
+    camera.Target = {100, 200, 301};
+    h.Render(false);
+    Check(h.Pixels()[center+2] > 240, "camera rotation turns toward a different part of the panorama");
+    h.Scene.SetEnvironmentPanorama({sky, 3.14159265359f, .5f});
+    Check(h.Render(false).SceneRendered && std::abs(int(h.Pixels()[center]) - 28) <= 4,
+        "sky rotation and linear intensity update an on-demand frame");
+    auto high = h.Quality;
+    high.Overrides.PostProcessing = true;
+    high.Overrides.MsaaSamples = 4;
+    high.AllowFallback = true;
+    h.Renderer.SetQuality(high, h.Scene).Value();
+    h.Render();
+    Check(h.Pixels()[center] > 20, "the panorama survives HDR and MSAA changes");
+    h.Scene.SetEnvironmentPanorama({});
+    h.Render();
+    Check(h.Pixels()[center] == 0, "clearing the sky restores the frame clear color");
+
+    camera = {};
+    camera.Position = {0,0,6};
+    camera.Projection = lv::CameraProjection::Orthographic;
+    camera.OrthographicHeight = 4;
+    h.Quality.Overrides.Instancing = true;
+    h.Renderer.SetQuality(h.Quality, h.Scene).Value();
+    const auto panel = [](std::array<float,4> color, bool transparent) {
+        auto model = Floor();
+        auto& material = model->Materials.front();
+        material.Unlit = true;
+        material.AlphaBlend = transparent;
+        material.BaseColor = color;
+        return model;
+    };
+    lv::Transform placement;
+    placement.Position.Z = 1;
+    const auto nearPanel = h.Scene.AddModel(panel({1,0,0,.5f}, true), placement);
+    h.Scene.AddModel(panel({0,1,0,.5f}, true));
+    h.Render();
+    const auto mixed = h.Pixels();
+    Check(std::abs(int(mixed[center]) - 128) <= 4 && std::abs(int(mixed[center+1]) - 64) <= 4 &&
+          mixed[center+2] < 5 && h.ShadowCalls() == 0,
+        "alpha blended geometry sorts by depth and skips the shadow pass");
+    placement.Position.Z = .5f;
+    h.Scene.AddModel(panel({0,0,1,1}, false), placement);
+    h.Render();
+    const auto occluded = h.Pixels();
+    Check(std::abs(int(occluded[center]) - 128) <= 4 && occluded[center+1] < 5 &&
+          std::abs(int(occluded[center+2]) - 128) <= 4 && h.ShadowCalls() == 1,
+        "opaque depth occludes a far blended panel and leaves the nearer panel visible");
+    h.Renderer.SetQuality(high, h.Scene).Value();
+    h.Render();
+    const auto highPixels = h.Pixels();
+    Check(highPixels[center] > 75 && highPixels[center+2] > 75, "alpha blended meshes survive a quality change");
+    h.Renderer.SetQuality(h.Quality, h.Scene).Value();
+    h.Scene.AddModel(h.Scene.GetObject(nearPanel).Model, placement);
+    h.Render();
+    Check(h.Renderer.GetTelemetry().Value().Optimization.InstancedObjects == 0, "shared transparent models retain individual draws");
+}
 void CasterVariants(Host& h) {
     for(auto id:h.Scene.ObjectIds()){if(h.Scene.Contains(id)){h.Scene.RemoveObject(id);}}
     h.Scene.RectLights.clear();h.Scene.SpotLights.clear();h.Scene.Ambient.Intensity=0;
@@ -66,6 +154,17 @@ int RunLightingPixels(int argc,char** argv){try{if(argc==2&&std::string_view(arg
     const auto afterFailure=h.Renderer.GetQuality().Value();h.Render();
     Check(afterFailure.Requested==validQuality.Requested&&afterFailure.Effective==validQuality.Effective&&h.Resource("Local shadow atlas").Id==atlas.Id&&h.Pixels()==shadow,"invalid lighting leaves active quality, shadow allocation and pixels intact");
     h.Scene.PointLights[0].Color={.3f,1,.3f};h.Render();Check(h.ShadowCalls()==0&&Changed(shadow,h.Pixels())>100,"changing light color updates lighting without rebuilding shadows");h.Scene.MainCamera.Position.X=.2f;h.Render();Check(h.ShadowCalls()==0,"camera movement does not rebuild shadow maps");h.Scene.MainCamera.Position.X=0;
+    const auto sunDirection = h.Scene.Sun.Direction;
+    h.Scene.Sun.Direction = {-1,-1,-1};
+    h.Render();
+    const auto directional = h.Renderer.GetRenderDebugInfo().Value();
+    const auto sunPass = std::ranges::find(directional.Passes, "Sun shadow", &lv::DebugPass::Name);
+    const auto localPass = std::ranges::find(directional.Passes, "Local shadows", &lv::DebugPass::Name);
+    Check(sunPass != directional.Passes.end() && sunPass->DrawCalls > 0 &&
+          localPass != directional.Passes.end() && localPass->DrawCalls == 0,
+          "changing the Sun direction rebuilds its projection without redrawing local shadows");
+    h.Scene.Sun.Direction = sunDirection;
+    h.Render();
     t.Position.X=.5f;h.Scene.SetTransform(cube,t);h.Render();Check(h.ShadowCalls()>0&&h.Resource("Local shadow atlas").Id==atlas.Id,"moving a caster refreshes existing shadow resources");
     h.Quality.Overrides.Anisotropy=2;h.Renderer.SetQuality(h.Quality,h.Scene).Value();h.Render();Check(h.ShadowCalls()>0&&h.Resource("Local shadow atlas").Id==atlas.Id,"alpha sampling quality changes refresh shadow contents while preserving atlas allocation");
     const auto originalPoint=h.Scene.PointLights[0];auto secondPoint=originalPoint;secondPoint.Position={1,1,3};h.Scene.PointLights.push_back(secondPoint);h.Render();h.Render();Check(h.ShadowCalls()==0,"two unchanged local shadow maps stay cached");h.Scene.PointLights[0].Position.X-=.1f;h.Render();const auto partial=h.ShadowCalls();h.Scene.PointLights[0].Position.X-=.1f;h.Scene.PointLights[1].Position.X+=.1f;h.Render();Check(partial>0&&h.ShadowCalls()>partial,"moving one light updates fewer atlas tiles than moving both");h.Scene.PointLights={originalPoint};
@@ -74,6 +173,6 @@ int RunLightingPixels(int argc,char** argv){try{if(argc==2&&std::string_view(arg
     h.Scene.RectLights[0].Width=.2f;h.Render();Check(Energy(h.Pixels())<Energy(area),"rectangle dimensions affect integrated energy");h.Scene.RectLights[0]=rect;h.Quality.Overrides.Pbr=true;auto material=h.Scene.GetMaterial(floor,0);material.Shading=lv::ShadingModel::Pbr;material.MetallicFactor=.8f;material.RoughnessFactor=.15f;h.Scene.SetMaterial(floor,0,material);h.Renderer.SetQuality(h.Quality,h.Scene).Value();h.Render();const auto glossy=h.Pixels();Check(Energy(glossy)>100000,"LTC GGX specular and diffuse paths render in PBR");material.RoughnessFactor=.8f;h.Scene.SetMaterial(floor,0,material);h.Render();Check(Changed(glossy,h.Pixels())>100,"LTC GGX lookup responds to material roughness");Check(h.Resource("Rect LTC matrix").Bytes==64*64*8,"rectangle lookup textures use binary16 coefficients");
     h.Quality.Overrides.OnDemand=lv::OnDemandMode::On;h.Renderer.SetQuality(h.Quality,h.Scene).Value();h.Render(false);Check(!h.Render(false).SceneRendered,"unchanged lighting keeps the On-Demand image");h.Scene.Ambient.Intensity=.1f;Check(h.Render(false).SceneRendered,"ambient edits invalidate On-Demand");h.Scene.RectLights[0].Position.X+=.5f;Check(h.Render(false).SceneRendered,"rectangle edits invalidate On-Demand");h.Scene.PointLights={point};h.Render(false);h.Scene.PointLights[0].Shadow.Enabled=true;Check(h.Render(false).SceneRendered,"local shadow enable invalidates On-Demand");
     CasterVariants(h);}
-    PointFaceBoundaries();PcssAndHdr();
+    PointFaceBoundaries();PcssAndHdr();PanoramaAndTransparentMeshes();
 }catch(const std::exception& e){Check(false,e.what());}return Finish();}
 int main(int argc,char** argv){return GraphicsScope([&]{return RunLightingPixels(argc,argv);});}

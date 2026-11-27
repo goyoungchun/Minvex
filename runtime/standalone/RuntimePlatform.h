@@ -7,6 +7,9 @@
 namespace lv::detail {
 bool StandaloneMainThread() noexcept;
 bool StandaloneApplicationAvailable() noexcept;
+#if defined(__APPLE__)
+double StandaloneDisplayDeadline(int targetFps) noexcept; // Zero when the display link is inactive.
+#endif
 #if defined(MINVEX_FRAME_PROFILING)
 // 1: Metal display link; 0: occluded-window fallback timer; -1: unavailable.
 int StandalonePresentationState() noexcept;

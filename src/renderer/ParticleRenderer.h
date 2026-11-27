@@ -24,6 +24,7 @@ public:
     std::size_t BufferBytes() const noexcept;
     std::size_t TextureBytes() const noexcept;
     void Inspect(std::vector<DebugResource>& resources) const;
+    std::span<const ParticleEmitterDebugInfo> Diagnostics() const noexcept { return diagnostics_; }
 
 private:
     struct Instance {
@@ -82,6 +83,8 @@ private:
     Mat4 view_;
     std::vector<Run> runs_;
     std::vector<ParticleSprite> sprites_;
+    std::vector<Scene::ParticleRenderTag> tags_;
+    std::vector<ParticleEmitterDebugInfo> diagnostics_;
     std::vector<Instance> instances_;
     std::vector<AlphaOrder> sortedAlpha_;
 #if !defined(__EMSCRIPTEN__)

@@ -132,7 +132,11 @@ void Run() {
     lv::Transform right; right.Position.X = 0.7f;
     const auto first = scene.AddModel(triangle, left);
     const auto second = scene.AddModel(triangle, right);
+    sg_enable_stats();
     auto pixels = target.Render(renderer, scene);
+    const auto initialStats = sg_query_stats().prev_frame;
+    Check(initialStats.num_draw == 2 && initialStats.num_apply_pipeline == 1,
+        "consecutive mesh draws reuse the same bound pipeline");
     Check(Lit(pixels,42,64) && Lit(pixels,86,64) && !Lit(pixels,64,64), "GPU pixels contain two separately positioned instances");
     Check(renderer.GetStats().ResidentModels == 1 && renderer.GetStats().ResidentPrimitives == 1, "two rendered instances share one GPU mesh");
     scene.SetVisible(first, false);
@@ -146,6 +150,10 @@ void Run() {
     lv::Transform parent; parent.Position.Y = 0.6f;
     scene.SetTransform(group, parent); scene.SetParent(first, group);
     pixels = target.Render(renderer, scene);
+    const auto mirroredStats = sg_query_stats().prev_frame;
+    Check(mirroredStats.num_draw == 2 && mirroredStats.num_apply_pipeline == 2,
+        "opposite winding still rebinds the correct pipeline");
+    sg_disable_stats();
     Check(Lit(pixels,42,45) && !Lit(pixels,42,64), "parent transform moves child pixels in the render target");
     scene.SetParent(first, lv::NoObject); scene.MainCamera.Position.Z = 4;
     pixels = target.Render(renderer, scene);

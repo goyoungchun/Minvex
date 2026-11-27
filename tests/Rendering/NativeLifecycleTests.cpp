@@ -11,10 +11,16 @@ void CheckResourcePoolRecovery(GraphicsTestTarget& target, const lv::ModelAsset&
     lv::EmbeddedRenderer renderer;
     lv::EmbeddedOptions options;
     options.Quality = lv::MakeQualityProfile(lv::QualityPreset::Low);
+    options.Quality.Overrides.TargetFps = 0;
     renderer.Initialize(target.Context(), options).Value();
     lv::Scene scene;
     std::vector<lv::ObjectId> objects;
-    for (int i = 0; i < 96; ++i) {
+    for (int i = 0; i < 48; ++i) {
+        objects.push_back(scene.AddModel(std::make_shared<lv::ModelAsset>(cube)));
+    }
+    Check(renderer.Render(scene, target.Target()).Value().SceneRendered,
+        "more than 32 distinct models share shaders and pipelines with the default pools");
+    for (int i = 0; i < 48; ++i) {
         objects.push_back(scene.AddModel(std::make_shared<lv::ModelAsset>(cube)));
     }
     const auto failed = renderer.Render(scene, target.Target());
@@ -23,7 +29,7 @@ void CheckResourcePoolRecovery(GraphicsTestTarget& target, const lv::ModelAsset&
         const auto& error = failed.Error();
         Check(error.Code == lv::ErrorCode::InsufficientResource &&
             error.Message.find("Lifecycle") != std::string::npos &&
-            error.Message.find("pool exhausted") != std::string::npos &&
+            error.Message.find("buffer pool exhausted") != std::string::npos &&
             error.Message.find("slots occupied") != std::string::npos,
             "pool exhaustion reports its resource name and slots occupied for the failed mesh");
     }

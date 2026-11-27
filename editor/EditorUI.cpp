@@ -443,9 +443,13 @@ void EditorUI::Inspector() {
                         bool materialChanged=false;int shading=material.Unlit ? 1:static_cast<int>(material.Shading);
                         if (ImGui::Combo("Shading",&shading,"Basic\0Unlit\0PBR\0")) {material.Shading=static_cast<ShadingModel>(shading);material.Unlit=shading == 1;materialChanged=true;}
                         materialChanged=ImGui::ColorEdit4("Base color",material.BaseColor.data()) || materialChanged;
-                        bool alphaMask = material.AlphaCutoff >= 0;
-                        if (ImGui::Checkbox("Alpha mask",&alphaMask)) { material.AlphaCutoff = alphaMask ? 0.5f : -1.0f; materialChanged = true; }
-                        if (alphaMask) { materialChanged = ImGui::SliderFloat("Alpha cutoff",&material.AlphaCutoff,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp) || materialChanged; }
+                        int alphaMode = material.AlphaBlend ? 2 : material.AlphaCutoff >= 0 ? 1 : 0;
+                        if (ImGui::Combo("Alpha mode",&alphaMode,"Opaque\0Mask\0Blend\0")) {
+                            material.AlphaBlend = alphaMode == 2;
+                            material.AlphaCutoff = alphaMode == 1 ? 0.5f : -1.0f;
+                            materialChanged = true;
+                        }
+                        if (alphaMode == 1) { materialChanged = ImGui::SliderFloat("Alpha cutoff",&material.AlphaCutoff,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp) || materialChanged; }
                         materialChanged=ImGui::SliderFloat("Metallic",&material.MetallicFactor,0,1) || materialChanged;materialChanged=ImGui::SliderFloat("Roughness",&material.RoughnessFactor,0,1) || materialChanged;
                         materialChanged=ImGui::SliderFloat("Normal scale",&material.NormalScale,-16,16) || materialChanged;materialChanged=ImGui::Checkbox("Double sided",&material.DoubleSided) || materialChanged;
                         const auto texture=[&](const char* name,std::optional<std::size_t>& slot) {const auto preview=slot ? std::to_string(*slot):"<none>";bool edit=false;if (ImGui::BeginCombo(name,preview.c_str())) {if (ImGui::Selectable("<none>",!slot)) {slot.reset();edit=true;}for (std::size_t i=0;i<object.Model->Textures.size();++i) {const auto image=object.Model->Textures[i].ImageIndex;if (image>=object.Model->Images.size() || object.Model->Images[image].Rgba.empty()) {continue;}const auto text=std::to_string(i);if (ImGui::Selectable(text.c_str(),slot == i)) {slot=i;edit=true;}}ImGui::EndCombo();}return edit;};

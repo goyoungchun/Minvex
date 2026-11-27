@@ -323,8 +323,8 @@ void ImportMaterials(Context& context, const cgltf_data& data) {
         material.DoubleSided = source.double_sided != 0;
         material.Unlit = source.unlit != 0;
         material.Shading=material.Unlit ? ShadingModel::Unlit:ShadingModel::Pbr;
-        if (source.alpha_mode == cgltf_alpha_mode_blend) { Unsupported("Alpha BLEND materials require a later transparency pass."); }
         material.AlphaCutoff = source.alpha_mode == cgltf_alpha_mode_mask ? source.alpha_cutoff : -1.0f;
+        material.AlphaBlend = source.alpha_mode == cgltf_alpha_mode_blend;
         if (!std::isfinite(material.AlphaCutoff) || material.AlphaCutoff > 1 ||
             (source.alpha_mode == cgltf_alpha_mode_mask && material.AlphaCutoff < 0)) { Invalid("Invalid alpha cutoff."); }
         if (source.has_pbr_metallic_roughness) {

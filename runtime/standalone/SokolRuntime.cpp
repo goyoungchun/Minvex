@@ -35,23 +35,36 @@ public:
     }
     void Wait(std::chrono::milliseconds delay) noexcept {
 #if defined(_WIN32)
-        // Sleep(1) can wait a full coarse Windows timer tick, producing
-        // alternating 31/47 ms frames at a 30 FPS cap. A private high-resolution
-        // timer avoids changing the process/system periodic timer resolution.
-        if (!attempted_) {
-            attempted_ = true;
-            timer_ = CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_MODIFY_STATE | SYNCHRONIZE);
-        }
-        if (timer_) {
-            LARGE_INTEGER due{};due.QuadPart = -delay.count() * 10000;
-            if (SetWaitableTimer(timer_,&due,0,nullptr,nullptr,FALSE) && WaitForSingleObject(timer_,INFINITE) == WAIT_OBJECT_0) { return; }
+        if (Arm(static_cast<double>(delay.count()) / 1000) && WaitForSingleObject(timer_,INFINITE) == WAIT_OBJECT_0) {
+            return;
         }
 #endif
         // Older Windows versions and other platforms retain their native wait.
         std::this_thread::sleep_for(delay);
     }
+#if defined(_WIN32)
+    // Return to the native message pump immediately on input or resize.
+    bool WaitForDeadline(double seconds) noexcept {
+        if (Arm(seconds)) {
+            const auto wait=MsgWaitForMultipleObjectsEx(1,&timer_,INFINITE,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
+            if (wait!=WAIT_FAILED) {return wait==WAIT_OBJECT_0;}
+        }
+        return MsgWaitForMultipleObjectsEx(0,nullptr,static_cast<DWORD>(std::ceil(seconds*1000)),
+            QS_ALLINPUT,MWMO_INPUTAVAILABLE)==WAIT_TIMEOUT;
+    }
+#endif
 private:
 #if defined(_WIN32)
+    bool Arm(double seconds) noexcept {
+        if (!attempted_) {
+            attempted_=true;
+            // A private high-resolution timer keeps the system timer period unchanged.
+            timer_=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_MODIFY_STATE | SYNCHRONIZE);
+        }
+        LARGE_INTEGER due{};
+        due.QuadPart=-static_cast<LONGLONG>(std::ceil(seconds*10'000'000));
+        return timer_&&SetWaitableTimer(timer_,&due,0,nullptr,nullptr,FALSE);
+    }
     HANDLE timer_ = nullptr;
     bool attempted_ = false;
 #endif
@@ -64,6 +77,9 @@ struct Runtime {
     RenderSurface Surface;
     FrameWait Wait;
     double LastUpdate = 0;
+#if defined(__APPLE__)
+    bool DisplayClock = false;
+#endif
     std::uint64_t Frames = 0;
     bool Initialized = false, Failed = false, InPass = false;
     ErrorCode Code = ErrorCode::GraphicsInitialization;
@@ -100,7 +116,11 @@ struct Runtime {
 void Log(const char* tag, std::uint32_t level, std::uint32_t item, const char* message,
          std::uint32_t line, const char* file, void* user) noexcept {
     auto& runtime = *static_cast<Runtime*>(user);
-    if (runtime.Surface.Applying() && level <= 1) {slog_func(tag,level,item,message,line,file,nullptr);return;}
+    if (runtime.Surface.Applying() && level <= 1) {
+        if (std::strcmp(tag, "sg") == 0) { runtime.Surface.RecordPoolExhaustion(item); }
+        slog_func(tag,level,item,message,line,file,nullptr);
+        return;
+    }
     if (level <= 1) {
         char description[2048];
         if (std::strcmp(tag, "sg") == 0 && DescribeFullPool(description, sizeof(description), item)) {
@@ -120,6 +140,13 @@ void Initialize(void* user) noexcept {
     auto& runtime = *static_cast<Runtime*>(user);
     try {
         sg_desc graphics{};
+        const auto& pools = runtime.State.Options.GpuPools;
+        graphics.buffer_pool_size = pools.Buffers;
+        graphics.image_pool_size = pools.Images;
+        graphics.sampler_pool_size = pools.Samplers;
+        graphics.shader_pool_size = pools.Shaders;
+        graphics.pipeline_pool_size = pools.Pipelines;
+        graphics.view_pool_size = pools.Views;
         graphics.environment = sglue_environment();
         graphics.logger.func = Log; graphics.logger.user_data = &runtime;
         sg_setup(graphics);
@@ -162,7 +189,7 @@ void SkipSceneFrame(Runtime& runtime, std::chrono::milliseconds delay) {
     // Sokol calls DXGI Present even when the frame callback returns early.
     // A discard swapchain needs a new copy of the cached image in each buffer.
     if (runtime.Surface.Texture().id) { Present(runtime); }
-    if (runtime.State.Options.VSync) { return; }
+    if (runtime.State.Options.VSync || delay.count()==0) { return; }
 #endif
     // Metal already gets paced by the display link or obscured-window timer.
 #if !defined(__APPLE__)
@@ -190,10 +217,37 @@ void Frame(void* user) noexcept {
         runtime.State.HasViewportSize = true;
         runtime.State.UiLogicalWidth=width/dpi;runtime.State.UiLogicalHeight=height/dpi;
         (void)runtime.Surface.Resize(runtime.State.World,width,height);runtime.State.Quality=runtime.Surface.Quality();
-        const auto now=RenderClockSeconds();
+        auto now=RenderClockSeconds();
         if (runtime.State.HotReload) {(void)runtime.Facade.PollHotReload(now);}
         runtime.Surface.SetUi(&runtime.State.Ui,dpi);
-        if (!runtime.Surface.Due(now)) {SkipSceneFrame(runtime,std::chrono::milliseconds(1));return;}
+#if defined(_WIN32)
+        if (!runtime.State.Options.VSync) {
+            // Wait inside the next native tick so a steady cap does not blit
+            // and present the cached swapchain for every timer wakeup.
+            auto remaining=runtime.Surface.SecondsUntilDue(now);
+            while (remaining>0 && !runtime.Stop()) {
+                if (!runtime.Wait.WaitForDeadline(std::min(remaining,.008))) {
+                    SkipSceneFrame(runtime,std::chrono::milliseconds(0));
+                    return;
+                }
+                now=RenderClockSeconds();
+                remaining=runtime.Surface.SecondsUntilDue(now);
+            }
+            if (runtime.Stop()) {sapp_quit();return;}
+        }
+#endif
+        double cadence=now;
+#if defined(__APPLE__)
+        const auto& quality=runtime.Surface.Quality().Effective;
+        const double display=StandaloneDisplayDeadline(quality ? quality->TargetFps:0);
+        const bool usingDisplayClock=display>0;
+        if (usingDisplayClock!=runtime.DisplayClock) {
+            runtime.Surface.ResetPacing();
+            runtime.DisplayClock=usingDisplayClock;
+        }
+        if (usingDisplayClock) {cadence=display;}
+#endif
+        if (!runtime.Surface.Due(cadence)) {SkipSceneFrame(runtime,std::chrono::milliseconds(1));return;}
         const auto elapsed=now-runtime.LastUpdate;runtime.LastUpdate=now;
         const ViewerFrameInfo info{runtime.Frames,std::isfinite(elapsed) ? std::clamp(elapsed,0.0,0.25) : 0.0,width,height};
         if (runtime.Options.AdvanceAnimations) { runtime.State.World.UpdateAnimations(info.DeltaTimeSeconds); }
@@ -206,7 +260,7 @@ void Frame(void* user) noexcept {
         if (runtime.Options.AdvanceParticles && runtime.State.World.HasParticleEffects()) {
             runtime.State.World.UpdateParticles(info.DeltaTimeSeconds);
         }
-        const bool submitted=runtime.Surface.Render(runtime.State.World,now,runtime.Options.FrameLimit != 0 || bool(runtime.Options.OnFrame),runtime.State.Options.ClearColor);
+        const bool submitted=runtime.Surface.Render(runtime.State.World,cadence,runtime.Options.FrameLimit != 0 || bool(runtime.Options.OnFrame),runtime.State.Options.ClearColor);
         if (!submitted) {SkipSceneFrame(runtime,std::chrono::milliseconds(8));return;}
         Present(runtime);
         ++runtime.Frames;
